@@ -1,0 +1,6 @@
+{
+  "name": "Gaon Ka Swad",
+  "description": "Authentic Indian cloud kitchen platform featuring multi-outlet kitchen management, PIN code delivery zones, menu catalog, cart, and owner dashboard.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
