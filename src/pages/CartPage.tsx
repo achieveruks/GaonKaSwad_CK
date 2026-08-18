@@ -40,6 +40,10 @@ export const CartPage: React.FC = () => {
     minimumOrderValue,
     isMinimumOrderMet,
     amountNeededForMinOrder,
+    freeDeliveryThreshold,
+    isFreeDeliveryUnlocked,
+    amountNeededForFreeDelivery,
+    freeDeliveryProgress,
   } = useCart();
 
   const { goToShop, goToCheckout } = useNavigation();
@@ -47,10 +51,6 @@ export const CartPage: React.FC = () => {
 
   const [couponCode, setCouponCode] = useState('');
   const [couponError, setCouponError] = useState('');
-
-  const freeDeliveryThreshold = 499;
-  const amountNeededForFreeDelivery = Math.max(0, freeDeliveryThreshold - subtotal);
-  const deliveryProgressPercent = Math.min(100, (subtotal / freeDeliveryThreshold) * 100);
 
   const handleApplyCoupon = (e: React.FormEvent) => {
     e.preventDefault();
@@ -176,7 +176,7 @@ export const CartPage: React.FC = () => {
         <div className="flex items-center justify-between text-xs mb-1.5">
           <span className="flex items-center gap-1.5 font-bold text-stone-800">
             <Truck className="w-3.5 h-3.5 text-amber-700" />
-            {amountNeededForFreeDelivery === 0 ? (
+            {isFreeDeliveryUnlocked || amountNeededForFreeDelivery === 0 ? (
               <span className="text-emerald-700 font-bold flex items-center gap-1">
                 <Check className="w-3 h-3 text-emerald-600" /> Free Express Doorstep Delivery Unlocked!
               </span>
@@ -186,12 +186,12 @@ export const CartPage: React.FC = () => {
               </span>
             )}
           </span>
-          <span className="text-[10px] text-stone-500 font-semibold">₹499 Minimum for Free Delivery</span>
+          <span className="text-[10px] text-stone-500 font-semibold">₹{freeDeliveryThreshold} Minimum for Free Delivery</span>
         </div>
         <div className="w-full h-1.5 bg-stone-200 rounded-full overflow-hidden">
           <div
             className="h-full bg-amber-700 transition-all duration-500 rounded-full"
-            style={{ width: `${deliveryProgressPercent}%` }}
+            style={{ width: `${freeDeliveryProgress}%` }}
           />
         </div>
       </div>

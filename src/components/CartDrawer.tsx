@@ -38,16 +38,16 @@ export const CartDrawer: React.FC = () => {
     minimumOrderValue,
     isMinimumOrderMet,
     amountNeededForMinOrder,
+    freeDeliveryThreshold,
+    isFreeDeliveryUnlocked,
+    amountNeededForFreeDelivery,
+    freeDeliveryProgress,
   } = useCart();
 
   const { goToCheckout, goToShop, goToCart } = useNavigation();
   const { selectedLocation, setIsLocationModalOpen } = useLocation();
   const [couponInput, setCouponInput] = useState('');
   const [couponError, setCouponError] = useState('');
-
-  const freeDeliveryThreshold = 499;
-  const amountNeededForFreeDelivery = Math.max(0, freeDeliveryThreshold - subtotal);
-  const deliveryProgressPercent = Math.min(100, (subtotal / freeDeliveryThreshold) * 100);
 
   const handleApplyCoupon = (e: React.FormEvent) => {
     e.preventDefault();
@@ -161,7 +161,7 @@ export const CartDrawer: React.FC = () => {
                     <div className="flex items-center justify-between text-xs mb-1">
                       <span className="flex items-center gap-1.5 font-medium text-stone-700">
                         <Truck className="w-3.5 h-3.5 text-amber-700" />
-                        {amountNeededForFreeDelivery === 0 ? (
+                        {isFreeDeliveryUnlocked || amountNeededForFreeDelivery === 0 ? (
                           <span className="text-emerald-700 font-semibold flex items-center gap-1">
                             <Check className="w-3 h-3 text-emerald-600" /> Free Delivery Unlocked!
                           </span>
@@ -171,12 +171,12 @@ export const CartDrawer: React.FC = () => {
                           </span>
                         )}
                       </span>
-                      <span className="text-[10px] text-stone-400 font-medium">₹499 Goal</span>
+                      <span className="text-[10px] text-stone-400 font-medium">₹{freeDeliveryThreshold} Goal</span>
                     </div>
                     <div className="w-full h-1.5 bg-stone-100 rounded-full overflow-hidden">
                       <div
                         className="h-full bg-amber-700 transition-all duration-300 rounded-full"
-                        style={{ width: `${deliveryProgressPercent}%` }}
+                        style={{ width: `${freeDeliveryProgress}%` }}
                       />
                     </div>
                   </div>

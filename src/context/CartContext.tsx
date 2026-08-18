@@ -2,7 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useMemo } from '
 import { Product, CartItem, ProductVariant, ProductAddon, Coupon } from '../types';
 import { COUPONS } from '../data/products';
 import { useLocation } from './LocationContext';
-import { isProductAvailableAtOutlet } from '../lib/locationService';
+import { isProductAvailableAtOutlet, isProductInStockAtOutlet } from '../lib/locationService';
 
 interface ToastMessage {
   id: string;
@@ -49,6 +49,11 @@ interface CartContextType {
   minimumOrderValue: number;
   isMinimumOrderMet: boolean;
   minimumOrderShortfall: number;
+  amountNeededForMinOrder: number;
+  freeDeliveryThreshold: number;
+  isFreeDeliveryUnlocked: boolean;
+  amountNeededForFreeDelivery: number;
+  freeDeliveryProgress: number;
 }
 
 const CartContext = createContext<CartContextType | undefined>(undefined);
@@ -57,7 +62,7 @@ const CART_STORAGE_KEY = 'gaonkaswad_cart_v1';
 const COUPON_STORAGE_KEY = 'gaonkaswad_coupon_v1';
 
 export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { selectedLocation, currentZone, setIsLocationModalOpen } = useLocation();
+  const { selectedLocation, currentZone, currentOutlet, setIsLocationModalOpen } = useLocation();
 
   const [cart, setCart] = useState<CartItem[]>(() => {
     try {
@@ -140,11 +145,12 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return false;
     }
 
-    // 2. Check product inStock status
-    if (product.inStock === false) {
+    // 2. Check product inStock status (outlet-specific or global)
+    const isInStockHere = isProductInStockAtOutlet(product, selectedLocation.outletId);
+    if (product.inStock === false || !isInStockHere) {
       showToast(
         'Out of Stock',
-        `${product.name} is currently sold out. Please check back shortly!`,
+        `${product.name} is currently out of stock at ${selectedLocation.outletName}. Please check back shortly!`,
         'error',
         product.image
       );
@@ -254,17 +260,25 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }
 
-  // Delivery fee from selected location's zone (or fallback)
+  // Free delivery threshold from current Outlet (defaults to 499)
+  const freeDeliveryThreshold = currentOutlet?.freeDeliveryThreshold ?? (selectedLocation?.freeDeliveryThreshold ?? 499);
+  const isFreeDeliveryUnlocked = subtotal > 0 && freeDeliveryThreshold > 0 && subtotal >= freeDeliveryThreshold;
+  const amountNeededForFreeDelivery = Math.max(0, freeDeliveryThreshold - subtotal);
+  const freeDeliveryProgress = freeDeliveryThreshold > 0 ? Math.min(100, Math.round((subtotal / freeDeliveryThreshold) * 100)) : 100;
+
+  // Delivery fee from selected location's zone (or fallback) - WAIVED (₹0) when free delivery threshold is reached!
   const zoneDeliveryFee = currentZone?.deliveryFee ?? (selectedLocation?.deliveryFee ?? 40);
-  const deliveryFee = subtotal === 0 ? 0 : zoneDeliveryFee;
+  const deliveryFee = (subtotal === 0 || isFreeDeliveryUnlocked) ? 0 : zoneDeliveryFee;
 
-  // Minimum order value from zone
-  const minimumOrderValue = currentZone?.minimumOrderValue ?? (selectedLocation?.minimumOrderValue ?? 0);
+  // Minimum order value from Outlet's Order & Delivery Rules (not delivery zone)
+  const outletMinOrder = currentOutlet?.minimumOrderValue ?? (selectedLocation?.minimumOrderValue ?? 200);
+  const minimumOrderValue = subtotal === 0 ? 0 : outletMinOrder;
   const isMinimumOrderMet = minimumOrderValue === 0 || subtotal >= minimumOrderValue;
-  const minimumOrderShortfall = Math.max(0, minimumOrderValue - subtotal);
+  const minimumOrderShortfall = Math.max(0, outletMinOrder - subtotal);
 
-  // Packaging fee: ₹29 for insulated eco-friendly packaging
-  const packagingFee = subtotal === 0 ? 0 : 29;
+  // Dynamic Packaging Fee from selected Kitchen Outlet's settings
+  const dynamicPackagingFee = currentOutlet?.packagingFee ?? (selectedLocation?.packagingFee ?? 25);
+  const packagingFee = subtotal === 0 ? 0 : dynamicPackagingFee;
 
   // 5% Restaurant GST
   const gst = subtotal === 0 ? 0 : Math.round((subtotal - discount) * 0.05);
@@ -324,9 +338,14 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
         showToast,
         removeToast,
         currentOutletId,
-        minimumOrderValue,
+        minimumOrderValue: outletMinOrder,
         isMinimumOrderMet,
         minimumOrderShortfall,
+        amountNeededForMinOrder: minimumOrderShortfall,
+        freeDeliveryThreshold,
+        isFreeDeliveryUnlocked,
+        amountNeededForFreeDelivery,
+        freeDeliveryProgress,
       }}
     >
       {children}

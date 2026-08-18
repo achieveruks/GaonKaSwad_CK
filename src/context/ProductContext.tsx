@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
-import { Product, Category } from '../types';
+import { Product, Category, ProductOutletConfig } from '../types';
 import { CATEGORIES as INITIAL_CATEGORIES } from '../data/products';
 import {
   getProducts,
@@ -9,10 +9,17 @@ import {
   deleteProduct as apiDeleteProduct,
   toggleProductActive as apiToggleActive,
   toggleProductStock as apiToggleStock,
+  updateOutletProductConfig as apiUpdateOutletProductConfig,
+  batchUpdateOutletProducts as apiBatchUpdateOutletProducts,
 } from '../lib/products';
 import { useAuth } from './AuthContext';
 import { useLocation } from './LocationContext';
-import { isProductAvailableAtOutlet } from '../lib/locationService';
+import {
+  isProductServedAtOutlet,
+  isProductInStockAtOutlet,
+  isProductFeaturedAtOutlet,
+  isProductBestsellerAtOutlet,
+} from '../lib/locationService';
 
 interface ProductContextType {
   products: Product[];
@@ -30,6 +37,8 @@ interface ProductContextType {
   getProductBySlug: (slug: string) => Product | undefined;
   getProductById: (id: string | number) => Product | undefined;
   isAvailableInCurrentOutlet: (productId: string | number) => boolean;
+  isServedInCurrentOutlet: (product: Product) => boolean;
+  isInStockInCurrentOutlet: (product: Product) => boolean;
   
   // Owner Actions
   addProduct: (productData: Partial<Product>) => Promise<Product>;
@@ -37,6 +46,21 @@ interface ProductContextType {
   removeProduct: (id: string | number) => Promise<boolean>;
   toggleActive: (id: string | number) => Promise<Product>;
   toggleStock: (id: string | number) => Promise<Product>;
+  updateOutletProduct: (
+    outletId: string,
+    productId: string | number,
+    config: { inStock?: boolean; isFeatured?: boolean; isBestseller?: boolean; isAssigned?: boolean }
+  ) => Promise<Product>;
+  batchUpdateOutletProducts: (
+    outletId: string,
+    updates: {
+      productId: string | number;
+      isAssigned?: boolean;
+      inStock?: boolean;
+      isFeatured?: boolean;
+      isBestseller?: boolean;
+    }[]
+  ) => Promise<Product[]>;
 }
 
 const ProductContext = createContext<ProductContextType | undefined>(undefined);
@@ -72,25 +96,26 @@ export const ProductProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return products.filter((p) => p.active !== false);
   }, [products]);
 
-  // Products filtered for the currently selected outlet
+  // Products available/served in currently selected outlet
   const outletProducts = useMemo(() => {
-    if (!selectedLocation?.outletId) {
+    const activeOutletId = selectedLocation?.outletId;
+    if (!activeOutletId) {
       return activeProducts;
     }
-    return activeProducts.filter((p) =>
-      isProductAvailableAtOutlet(p, selectedLocation.outletId)
-    );
+    return activeProducts.filter((p) => isProductServedAtOutlet(p, activeOutletId));
   }, [activeProducts, selectedLocation?.outletId]);
 
-  // Featured items (for selected outlet)
+  // Featured items (evaluated per selected outlet)
   const featuredProducts = useMemo(() => {
-    return outletProducts.filter((p) => p.featured);
-  }, [outletProducts]);
+    const activeOutletId = selectedLocation?.outletId;
+    return outletProducts.filter((p) => isProductFeaturedAtOutlet(p, activeOutletId));
+  }, [outletProducts, selectedLocation?.outletId]);
 
-  // Bestsellers (for selected outlet)
+  // Bestsellers (evaluated per selected outlet)
   const bestsellerProducts = useMemo(() => {
-    return outletProducts.filter((p) => p.bestseller);
-  }, [outletProducts]);
+    const activeOutletId = selectedLocation?.outletId;
+    return outletProducts.filter((p) => isProductBestsellerAtOutlet(p, activeOutletId));
+  }, [outletProducts, selectedLocation?.outletId]);
 
   // New arrivals (for selected outlet)
   const newArrivals = useMemo(() => {
@@ -115,12 +140,30 @@ export const ProductProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   const isAvailableInCurrentOutlet = useCallback(
     (productId: string | number): boolean => {
-      if (!selectedLocation?.outletId) return true;
+      const activeOutletId = selectedLocation?.outletId;
+      if (!activeOutletId) return true;
       const product = products.find((p) => String(p.id) === String(productId));
       if (!product) return false;
-      return isProductAvailableAtOutlet(product, selectedLocation.outletId);
+      return isProductServedAtOutlet(product, activeOutletId);
     },
     [products, selectedLocation?.outletId]
+  );
+
+  const isServedInCurrentOutlet = useCallback(
+    (product: Product): boolean => {
+      const activeOutletId = selectedLocation?.outletId;
+      if (!activeOutletId) return true;
+      return isProductServedAtOutlet(product, activeOutletId);
+    },
+    [selectedLocation?.outletId]
+  );
+
+  const isInStockInCurrentOutlet = useCallback(
+    (product: Product): boolean => {
+      const activeOutletId = selectedLocation?.outletId;
+      return isProductInStockAtOutlet(product, activeOutletId);
+    },
+    [selectedLocation?.outletId]
   );
 
   const getProductBySlug = useCallback(
@@ -183,6 +226,35 @@ export const ProductProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return updated;
   };
 
+  const updateOutletProduct = async (
+    outletId: string,
+    productId: string | number,
+    config: { inStock?: boolean; isFeatured?: boolean; isBestseller?: boolean; isAssigned?: boolean }
+  ): Promise<Product> => {
+    if (!token) throw new Error('Authentication required');
+    const updated = await apiUpdateOutletProductConfig(outletId, productId, config, token);
+    setProducts((prev) =>
+      prev.map((p) => (String(p.id) === String(productId) ? updated : p))
+    );
+    return updated;
+  };
+
+  const batchUpdateOutletProducts = async (
+    outletId: string,
+    updates: {
+      productId: string | number;
+      isAssigned?: boolean;
+      inStock?: boolean;
+      isFeatured?: boolean;
+      isBestseller?: boolean;
+    }[]
+  ): Promise<Product[]> => {
+    if (!token) throw new Error('Authentication required');
+    const updatedList = await apiBatchUpdateOutletProducts(outletId, updates, token);
+    setProducts(updatedList);
+    return updatedList;
+  };
+
   return (
     <ProductContext.Provider
       value={{
@@ -201,11 +273,15 @@ export const ProductProvider: React.FC<{ children: React.ReactNode }> = ({ child
         getProductBySlug,
         getProductById,
         isAvailableInCurrentOutlet,
+        isServedInCurrentOutlet,
+        isInStockInCurrentOutlet,
         addProduct,
         editProduct,
         removeProduct,
         toggleActive,
         toggleStock,
+        updateOutletProduct,
+        batchUpdateOutletProducts,
       }}
     >
       {children}

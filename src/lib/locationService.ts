@@ -158,19 +158,90 @@ export function getOutletForPinCode(
 }
 
 /**
- * 8. getProductsForOutlet - filters products by outlet assignment
+ * 8. getProductOutletConfig - retrieves specific outlet configuration for a product
  */
-export function getProductsForOutlet(products: Product[], outletId: string): Product[] {
-  if (!outletId) return products;
-  return products.filter((p) => {
-    // If product has no outletIds array, consider available across all outlets
-    if (!p.outletIds || !Array.isArray(p.outletIds) || p.outletIds.length === 0) return true;
-    return p.outletIds.includes(outletId);
-  });
+export function getProductOutletConfig(product: Product, outletId?: string) {
+  if (!outletId) return undefined;
+  if (product.outlets && Array.isArray(product.outlets)) {
+    return product.outlets.find((o) => o.outletId === outletId);
+  }
+  return undefined;
 }
 
 /**
- * 9. isProductAvailableAtOutlet - checks if a single product is available at an outlet
+ * 9. isProductServedAtOutlet - checks if product is served at all in this outlet
+ */
+export function isProductServedAtOutlet(product: Product, outletId?: string): boolean {
+  if (!outletId) return true;
+  if (product.outlets && Array.isArray(product.outlets) && product.outlets.length > 0) {
+    return product.outlets.some((o) => o.outletId === outletId);
+  }
+  if (product.outletIds && Array.isArray(product.outletIds) && product.outletIds.length > 0) {
+    return product.outletIds.includes(outletId);
+  }
+  return true;
+}
+
+/**
+ * 10. isProductInStockAtOutlet - checks if product is in stock at the outlet
+ */
+export function isProductInStockAtOutlet(product: Product, outletId?: string): boolean {
+  if (product.inStock === false) return false;
+  if (!outletId) return true;
+  if (product.outlets && Array.isArray(product.outlets)) {
+    const config = product.outlets.find((o) => o.outletId === outletId);
+    if (config) {
+      return config.inStock !== false;
+    }
+  }
+  // Fallback to legacy inStock
+  return true;
+}
+
+/**
+ * 11. isProductFeaturedAtOutlet - checks if product is marked as featured in this outlet
+ */
+export function isProductFeaturedAtOutlet(product: Product, outletId?: string): boolean {
+  if (!outletId) {
+    return (
+      product.featured === true ||
+      (product.outlets && product.outlets.some((o) => o.isFeatured))
+    );
+  }
+  if (product.outlets && Array.isArray(product.outlets)) {
+    const config = product.outlets.find((o) => o.outletId === outletId);
+    if (config) return !!config.isFeatured;
+  }
+  return !!product.featured;
+}
+
+/**
+ * 12. isProductBestsellerAtOutlet - checks if product is marked as bestseller in this outlet
+ */
+export function isProductBestsellerAtOutlet(product: Product, outletId?: string): boolean {
+  if (!outletId) {
+    return (
+      product.bestseller === true ||
+      (product.outlets && product.outlets.some((o) => o.isBestseller))
+    );
+  }
+  if (product.outlets && Array.isArray(product.outlets)) {
+    const config = product.outlets.find((o) => o.outletId === outletId);
+    if (config) return !!config.isBestseller;
+  }
+  return !!product.bestseller;
+}
+
+/**
+ * 13. getProductsForOutlet - filters products by outlet assignment
+ */
+export function getProductsForOutlet(products: Product[], outletId: string): Product[] {
+  if (!outletId) return products;
+  return products.filter((p) => isProductServedAtOutlet(p, outletId));
+}
+
+/**
+ * 14. isProductAvailableAtOutlet - checks if a single product is served at an outlet
  */
 export function isProductAvailableAtOutlet(
   productOrId: Product | string | number,
@@ -187,10 +258,7 @@ export function isProductAvailableAtOutlet(
   }
 
   if (!product) return true;
-  if (!product.outletIds || !Array.isArray(product.outletIds) || product.outletIds.length === 0) {
-    return true;
-  }
-  return product.outletIds.includes(outletId);
+  return isProductServedAtOutlet(product, outletId);
 }
 
 /**

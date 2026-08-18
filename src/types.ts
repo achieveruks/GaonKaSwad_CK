@@ -11,6 +11,8 @@ export interface Outlet {
   isActive: boolean;
   minimumOrderValue?: number;
   freeDeliveryThreshold?: number;
+  packagingFee?: number;
+  avgCookingTime?: string;
   deliveryFee?: number;
   estimatedDeliveryTime?: string;
   operatingHours?: string;
@@ -41,6 +43,8 @@ export interface UserLocationState {
   address?: string;
   deliveryFee: number;
   minimumOrderValue?: number;
+  freeDeliveryThreshold?: number;
+  packagingFee?: number;
 }
 
 export interface ProductVariant {
@@ -69,6 +73,13 @@ export interface Review {
   verified: boolean;
 }
 
+export interface ProductOutletConfig {
+  outletId: string;
+  inStock: boolean;
+  isFeatured?: boolean;
+  isBestseller?: boolean;
+}
+
 export interface Product {
   id: number | string;
   name: string;
@@ -95,13 +106,14 @@ export interface Product {
   prepTimeMinutes?: number;
   serves?: string;
   calories?: number;
-  featured: boolean;
-  bestseller: boolean;
+  featured?: boolean; // Legacy/fallback compatibility
+  bestseller?: boolean; // Legacy/fallback compatibility
   newArrival?: boolean;
   chefSpecial?: boolean;
   active?: boolean;
-  inStock?: boolean;
-  outletIds?: string[];
+  inStock?: boolean; // Legacy/fallback compatibility
+  outletIds?: string[]; // Legacy/quick lookup compatibility
+  outlets: ProductOutletConfig[]; // Source of truth for per-outlet stock, featured, and bestseller
   variants?: ProductVariant[];
   addons?: ProductAddon[];
   ingredients?: string[];

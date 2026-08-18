@@ -48,6 +48,17 @@ export const CATEGORIES: Category[] = [
   }
 ];
 
+const ALL_OUTLET_IDS = ['blr-hsr', 'blr-whitefield', 'blr-indiranagar', 'bbsr-patia', 'bbsr-khandagiri'];
+
+const createOutletConfigs = (isFeatured = false, isBestseller = false, inStock = true) => {
+  return ALL_OUTLET_IDS.map((outletId) => ({
+    outletId,
+    inStock,
+    isFeatured,
+    isBestseller,
+  }));
+};
+
 export const PRODUCTS: Product[] = [
   {
     id: 1,
@@ -73,10 +84,9 @@ export const PRODUCTS: Product[] = [
     prepTimeMinutes: 25,
     serves: '1-2 persons',
     calories: 680,
-    featured: true,
-    bestseller: true,
     newArrival: false,
     chefSpecial: true,
+    outlets: createOutletConfigs(true, true, true),
     variants: [
       { id: 'v1-regular', name: 'Regular (Serves 1-2)', price: 499, originalPrice: 599, serves: '1-2 Persons', weight: '650g' },
       { id: 'v1-jumbo', name: 'Handi Feast (Serves 3-4)', price: 949, originalPrice: 1149, serves: '3-4 Persons', weight: '1300g' }
@@ -117,10 +127,9 @@ export const PRODUCTS: Product[] = [
     prepTimeMinutes: 20,
     serves: '1-2 persons',
     calories: 540,
-    featured: true,
-    bestseller: false,
     newArrival: false,
     chefSpecial: false,
+    outlets: createOutletConfigs(true, false, true),
     variants: [
       { id: 'v2-regular', name: 'Regular (Serves 1-2)', price: 389, originalPrice: 449, serves: '1-2 Persons', weight: '600g' },
       { id: 'v2-jumbo', name: 'Jumbo Handi (Serves 3-4)', price: 749, originalPrice: 849, serves: '3-4 Persons', weight: '1200g' }
@@ -158,10 +167,9 @@ export const PRODUCTS: Product[] = [
     prepTimeMinutes: 20,
     serves: '2 persons',
     calories: 610,
-    featured: true,
-    bestseller: true,
     newArrival: false,
     chefSpecial: true,
+    outlets: createOutletConfigs(true, true, true),
     variants: [
       { id: 'v3-half', name: 'Regular Portion (500ml)', price: 449, originalPrice: 529, serves: '2 Persons', weight: '500ml' },
       { id: 'v3-full', name: 'Family Feast (900ml)', price: 799, originalPrice: 949, serves: '3-4 Persons', weight: '900ml' }
@@ -199,10 +207,9 @@ export const PRODUCTS: Product[] = [
     prepTimeMinutes: 15,
     serves: '2 persons',
     calories: 490,
-    featured: true,
-    bestseller: true,
     newArrival: false,
     chefSpecial: false,
+    outlets: createOutletConfigs(true, true, true),
     variants: [
       { id: 'v4-reg', name: 'Regular Portion (500ml)', price: 349, originalPrice: 399, serves: '2 Persons', weight: '500ml' },
       { id: 'v4-large', name: 'Family Size (900ml)', price: 629, originalPrice: 699, serves: '3-4 Persons', weight: '900ml' }
@@ -240,10 +247,9 @@ export const PRODUCTS: Product[] = [
     prepTimeMinutes: 25,
     serves: '2 persons',
     calories: 640,
-    featured: false,
-    bestseller: false,
     newArrival: true,
     chefSpecial: true,
+    outlets: createOutletConfigs(false, false, true),
     variants: [
       { id: 'v5-reg', name: 'Regular Portion (500ml)', price: 529, originalPrice: 629, serves: '2 Persons', weight: '500ml' }
     ],
@@ -279,10 +285,9 @@ export const PRODUCTS: Product[] = [
     prepTimeMinutes: 18,
     serves: '2 persons',
     calories: 420,
-    featured: true,
-    bestseller: false,
     newArrival: false,
     chefSpecial: false,
+    outlets: createOutletConfigs(true, false, true),
     variants: [
       { id: 'v6-6pcs', name: 'Standard (6 Pieces)', price: 329, originalPrice: 379, serves: '2 Persons', weight: '350g' },
       { id: 'v6-10pcs', name: 'Party Platter (10 Pieces)', price: 499, originalPrice: 579, serves: '3-4 Persons', weight: '600g' }
@@ -319,10 +324,9 @@ export const PRODUCTS: Product[] = [
     prepTimeMinutes: 22,
     serves: '2-3 persons',
     calories: 580,
-    featured: false,
-    bestseller: true,
     newArrival: false,
     chefSpecial: false,
+    outlets: createOutletConfigs(false, true, true),
     variants: [
       { id: 'v7-half', name: 'Half Bird (4 pcs)', price: 379, originalPrice: 429, serves: '2 Persons', weight: '450g' },
       { id: 'v7-full', name: 'Full Bird (8 pcs)', price: 669, originalPrice: 759, serves: '4 Persons', weight: '900g' }
@@ -358,10 +362,9 @@ export const PRODUCTS: Product[] = [
     prepTimeMinutes: 20,
     serves: '2 persons',
     calories: 520,
-    featured: true,
-    bestseller: false,
     newArrival: true,
     chefSpecial: true,
+    outlets: createOutletConfigs(true, false, true),
     variants: [
       { id: 'v8-4pcs', name: 'Plate of 4 Kebabs + 2 Parathas', price: 469, originalPrice: 539, serves: '2 Persons', weight: '400g' }
     ],
@@ -392,10 +395,9 @@ export const PRODUCTS: Product[] = [
     prepTimeMinutes: 18,
     serves: '2 persons',
     calories: 460,
-    featured: false,
-    bestseller: true,
     newArrival: false,
     chefSpecial: false,
+    outlets: createOutletConfigs(false, true, true),
     variants: [
       { id: 'v9-500ml', name: 'Regular Portion (500ml)', price: 369, originalPrice: 419, serves: '2 Persons', weight: '500ml' }
     ],
@@ -431,10 +433,9 @@ export const PRODUCTS: Product[] = [
     prepTimeMinutes: 20,
     serves: '1-2 persons',
     calories: 620,
-    featured: true,
-    bestseller: true,
     newArrival: false,
     chefSpecial: false,
+    outlets: createOutletConfigs(true, true, true),
     variants: [
       { id: 'v10-reg', name: 'Regular (Serves 1-2)', price: 419, originalPrice: 489, serves: '1-2 Persons', weight: '650g' },
       { id: 'v10-jumbo', name: 'Family Handi (Serves 3-4)', price: 799, originalPrice: 919, serves: '3-4 Persons', weight: '1300g' }
@@ -470,10 +471,9 @@ export const PRODUCTS: Product[] = [
     prepTimeMinutes: 10,
     serves: '2-3 persons',
     calories: 380,
-    featured: false,
-    bestseller: true,
     newArrival: false,
     chefSpecial: false,
+    outlets: createOutletConfigs(false, true, true),
     ingredients: ['Refined Wheat Flour', 'Cultured Milk', 'Roasted Garlic', 'Fresh Coriander', 'Desi Butter', 'Sea Salt'],
     allergens: ['Gluten (Wheat)', 'Dairy (Milk, Butter)'],
     reviewsList: [
@@ -501,10 +501,9 @@ export const PRODUCTS: Product[] = [
     prepTimeMinutes: 10,
     serves: '2 persons',
     calories: 320,
-    featured: false,
-    bestseller: false,
     newArrival: false,
     chefSpecial: false,
+    outlets: createOutletConfigs(false, false, true),
     ingredients: ['Whole Wheat Atta', 'Gram Flour (Besan)', 'Ajwain', 'Kasuri Methi', 'Desi Ghee'],
     allergens: ['Gluten (Wheat)', 'Dairy (Ghee)'],
     reviewsList: [
@@ -532,10 +531,9 @@ export const PRODUCTS: Product[] = [
     prepTimeMinutes: 5,
     serves: '2 persons',
     calories: 390,
-    featured: true,
-    bestseller: true,
     newArrival: false,
     chefSpecial: true,
+    outlets: createOutletConfigs(true, true, true),
     variants: [
       { id: 'v13-4pcs', name: 'Box of 4 Pieces', price: 189, originalPrice: 229, serves: '2 Persons', weight: '200g' },
       { id: 'v13-8pcs', name: 'Family Box (8 Pieces)', price: 349, originalPrice: 429, serves: '4 Persons', weight: '400g' }
@@ -567,10 +565,9 @@ export const PRODUCTS: Product[] = [
     prepTimeMinutes: 5,
     serves: '2 persons',
     calories: 310,
-    featured: false,
-    bestseller: false,
     newArrival: true,
     chefSpecial: false,
+    outlets: createOutletConfigs(false, false, true),
     ingredients: ['Slow Reduced Milk', 'Kashmiri Saffron', 'Pistachios', 'Almonds', 'Cardamom'],
     allergens: ['Dairy (Milk)', 'Tree Nuts (Almonds, Pistachios)'],
     reviewsList: [
@@ -598,10 +595,9 @@ export const PRODUCTS: Product[] = [
     prepTimeMinutes: 5,
     serves: '2 persons',
     calories: 280,
-    featured: false,
-    bestseller: false,
     newArrival: true,
     chefSpecial: false,
+    outlets: createOutletConfigs(false, false, true),
     ingredients: ['Farm Fresh Yogurt', 'Whole Milk', 'Saffron', 'Rose Petals', 'Melon Seeds', 'Pistachios', 'Cardamom'],
     allergens: ['Dairy (Yogurt, Milk)', 'Tree Nuts'],
     reviewsList: [
@@ -630,10 +626,9 @@ export const PRODUCTS: Product[] = [
     prepTimeMinutes: 25,
     serves: '2 persons',
     calories: 660,
-    featured: true,
-    bestseller: false,
     newArrival: true,
     chefSpecial: true,
+    outlets: createOutletConfigs(true, false, true),
     variants: [
       { id: 'v16-reg', name: 'Handi Portion (500g)', price: 549, originalPrice: 649, serves: '2 Persons', weight: '500g' }
     ],

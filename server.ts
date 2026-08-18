@@ -318,6 +318,37 @@ async function startServer() {
     }
   });
 
+  // 15c. Outlets: Update Single Product Config for Outlet (Protected)
+  app.patch('/api/outlets/:id/products/:productId', requireOwnerAuth, (req: AuthenticatedRequest, res) => {
+    try {
+      const { id: outletId, productId } = req.params;
+      const updated = productStorage.updateOutletProductConfig(outletId, productId, req.body);
+      if (!updated) {
+        return res.status(404).json({ success: false, error: 'Product or Outlet not found' });
+      }
+      return res.json({ success: true, product: updated });
+    } catch (err: any) {
+      console.error('Update outlet product error:', err);
+      return res.status(400).json({ success: false, error: err.message || 'Failed to update product for outlet' });
+    }
+  });
+
+  // 15d. Outlets: Batch Update Products for Outlet (Protected)
+  app.put('/api/outlets/:id/products', requireOwnerAuth, (req: AuthenticatedRequest, res) => {
+    try {
+      const { id: outletId } = req.params;
+      const { updates } = req.body;
+      if (!Array.isArray(updates)) {
+        return res.status(400).json({ success: false, error: 'updates array is required' });
+      }
+      const products = productStorage.batchUpdateOutletProducts(outletId, updates);
+      return res.json({ success: true, products });
+    } catch (err: any) {
+      console.error('Batch update outlet products error:', err);
+      return res.status(400).json({ success: false, error: err.message || 'Failed to batch update outlet products' });
+    }
+  });
+
   // =====================
   // DELIVERY ZONES ENDPOINTS
   // =====================

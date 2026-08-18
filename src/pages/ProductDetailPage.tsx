@@ -3,7 +3,11 @@ import { useNavigation } from '../context/NavigationContext';
 import { useCart } from '../context/CartContext';
 import { useProducts } from '../context/ProductContext';
 import { useLocation } from '../context/LocationContext';
-import { isProductAvailableAtOutlet } from '../lib/locationService';
+import {
+  isProductAvailableAtOutlet,
+  isProductServedAtOutlet,
+  isProductInStockAtOutlet,
+} from '../lib/locationService';
 import { ProductGallery } from '../components/ProductGallery';
 import { QuantitySelector } from '../components/QuantitySelector';
 import { ProductCard } from '../components/ProductCard';
@@ -87,7 +91,10 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
     );
   }
 
-  const isItemInStock = product.inStock !== false;
+  const currentOutletId = selectedLocation?.outletId;
+  const isAvailableAtOutlet = isProductServedAtOutlet(product, currentOutletId);
+  const isInStockHere = isProductInStockAtOutlet(product, currentOutletId);
+  const isItemInStock = isInStockHere && product.inStock !== false;
 
   // Calculate pricing
   const basePrice = selectedVariant ? selectedVariant.price : product.price;
@@ -112,10 +119,6 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
       }
     });
   };
-
-  const isAvailableAtOutlet = selectedLocation?.outletId
-    ? isProductAvailableAtOutlet(product, selectedLocation.outletId)
-    : true;
 
   const handleAddToCart = () => {
     if (!selectedLocation) {
@@ -336,18 +339,30 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
             </button>
           </div>
 
-          {!isAvailableAtOutlet && selectedLocation && (
-            <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-start gap-2.5 text-xs text-amber-900">
-              <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+          {!isAvailableAtOutlet && selectedLocation ? (
+            <div className="p-3 bg-stone-100 border border-stone-300 rounded-xl flex items-start gap-2.5 text-xs text-stone-800">
+              <AlertTriangle className="w-4 h-4 text-stone-600 shrink-0 mt-0.5" />
               <div>
-                <strong className="block font-bold text-amber-950">Not Available at Selected Outlet</strong>
+                <strong className="block font-bold text-stone-900">Not Available at Selected Outlet</strong>
                 <span>
                   This delicacy is exclusive to specific kitchens and is currently not prepared at{' '}
                   <strong>{selectedLocation.outletName}</strong>.
                 </span>
               </div>
             </div>
-          )}
+          ) : !isItemInStock ? (
+            <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-2.5 text-xs text-rose-900">
+              <AlertTriangle className="w-4 h-4 text-rose-700 shrink-0 mt-0.5" />
+              <div>
+                <strong className="block font-bold text-rose-950">Currently Out of Stock</strong>
+                <span>
+                  This delicacy is freshly prepared and is currently sold out
+                  {selectedLocation?.outletName ? ` at ${selectedLocation.outletName}` : ''}.
+                  Please select another delicacy or check back shortly.
+                </span>
+              </div>
+            </div>
+          ) : null}
 
           {/* Pricing Box */}
           <div className="bg-gray-50 border border-gray-200 rounded-xl p-3.5 flex items-baseline justify-between">
@@ -373,12 +388,16 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
             </div>
 
             <div className="text-right">
-              {isItemInStock ? (
+              {!isAvailableAtOutlet && selectedLocation ? (
+                <span className="text-xs font-semibold text-stone-700 bg-stone-200/80 px-2 py-0.5 rounded-md border border-stone-300 inline-block">
+                  Not at Outlet
+                </span>
+              ) : isItemInStock ? (
                 <span className="text-xs font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200 inline-block">
                   In Stock
                 </span>
               ) : (
-                <span className="text-xs font-semibold text-amber-800 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200 inline-block">
+                <span className="text-xs font-semibold text-rose-800 bg-rose-50 px-2 py-0.5 rounded-md border border-rose-200 inline-block">
                   Out of Stock
                 </span>
               )}
@@ -515,19 +534,19 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
                 type="button"
                 id="product-add-to-cart-btn"
                 onClick={handleAddToCart}
-                disabled={!isItemInStock || (!isAvailableAtOutlet && !!selectedLocation)}
-                className={`py-2.5 px-5 text-white rounded-xl font-bold text-xs sm:text-sm shadow-xs transition-all flex items-center justify-center gap-1.5 ${
-                  isItemInStock && (isAvailableAtOutlet || !selectedLocation)
-                    ? 'bg-amber-800 hover:bg-amber-900 active:bg-stone-950 cursor-pointer'
-                    : 'bg-stone-300 text-stone-500 cursor-not-allowed opacity-75'
+                disabled={!isItemInStock || !isAvailableAtOutlet}
+                className={`py-2.5 px-5 rounded-xl font-bold text-xs sm:text-sm shadow-xs transition-all flex items-center justify-center gap-1.5 ${
+                  isItemInStock && isAvailableAtOutlet
+                    ? 'bg-amber-800 hover:bg-amber-900 active:bg-stone-950 text-white cursor-pointer'
+                    : 'bg-stone-200 text-stone-400 border border-stone-300 cursor-not-allowed shadow-none'
                 }`}
               >
                 <ShoppingBag className="w-4 h-4" />
                 <span>
-                  {!isItemInStock
-                    ? 'Currently Out of Stock'
-                    : !isAvailableAtOutlet && selectedLocation
+                  {!isAvailableAtOutlet && selectedLocation
                     ? 'Unavailable at Outlet'
+                    : !isItemInStock
+                    ? 'Currently Out of Stock'
                     : `Add to Cart (₹${currentTotalPrice})`}
                 </span>
               </button>
@@ -535,25 +554,25 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
               <button
                 type="button"
                 onClick={handleBuyNow}
-                disabled={!isItemInStock || (!isAvailableAtOutlet && !!selectedLocation)}
-                className={`py-2.5 px-5 text-white rounded-xl font-bold text-xs sm:text-sm shadow-xs transition-all flex items-center justify-center gap-1.5 ${
-                  isItemInStock && (isAvailableAtOutlet || !selectedLocation)
-                    ? 'bg-stone-900 hover:bg-black active:bg-stone-950 cursor-pointer'
-                    : 'bg-stone-200 text-stone-400 cursor-not-allowed'
+                disabled={!isItemInStock || !isAvailableAtOutlet}
+                className={`py-2.5 px-5 rounded-xl font-bold text-xs sm:text-sm shadow-xs transition-all flex items-center justify-center gap-1.5 ${
+                  isItemInStock && isAvailableAtOutlet
+                    ? 'bg-stone-900 hover:bg-black active:bg-stone-950 text-white cursor-pointer'
+                    : 'bg-stone-200 text-stone-400 border border-stone-300 cursor-not-allowed shadow-none'
                 }`}
               >
                 <Zap
                   className={`w-4 h-4 ${
-                    isItemInStock && (isAvailableAtOutlet || !selectedLocation)
+                    isItemInStock && isAvailableAtOutlet
                       ? 'text-amber-400 fill-amber-400'
                       : 'text-stone-400'
                   }`}
                 />
                 <span>
-                  {!isItemInStock
-                    ? 'Out of Stock'
-                    : !isAvailableAtOutlet && selectedLocation
+                  {!isAvailableAtOutlet && selectedLocation
                     ? 'Unavailable'
+                    : !isItemInStock
+                    ? 'Out of Stock'
                     : 'Express Buy Now'}
                 </span>
               </button>

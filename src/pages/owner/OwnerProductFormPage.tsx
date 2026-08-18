@@ -2,8 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { OwnerLayout } from './OwnerLayout';
 import { useProducts } from '../../context/ProductContext';
 import { useNavigation } from '../../context/NavigationContext';
+import { useAuth } from '../../context/AuthContext';
 import { CATEGORIES } from '../../data/products';
-import { Product } from '../../types';
+import { Product, Outlet, ProductOutletConfig } from '../../types';
+import { getOutlets } from '../../lib/locationService';
 import { getCulinaryHighlights, CATEGORY_CULINARY_DEFAULTS, normalizeCategorySlug } from '../../utils/culinaryHighlights';
 import {
   ArrowLeft,
@@ -18,6 +20,10 @@ import {
   FlameKindling,
   Info,
   Layers,
+  Store,
+  MapPin,
+  PackageCheck,
+  PackageX,
 } from 'lucide-react';
 
 interface OwnerProductFormPageProps {
@@ -40,6 +46,11 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
 }) => {
   const { allProducts, addProduct, editProduct } = useProducts();
   const { goToOwnerProducts } = useNavigation();
+  const { token } = useAuth();
+
+  // Outlets List
+  const [availableOutlets, setAvailableOutlets] = useState<Outlet[]>([]);
+  const [loadingOutlets, setLoadingOutlets] = useState(true);
 
   // Form State
   const [name, setName] = useState('');
@@ -48,7 +59,7 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
   const [category, setCategory] = useState(CATEGORIES[0]?.slug || 'dum-biryanis');
   const [shortDescription, setShortDescription] = useState('');
   const [description, setDescription] = useState('');
-  // Option B: Custom Culinary Story & Highlights State
+  // Custom Culinary Story & Highlights State
   const [story, setStory] = useState('');
   const [culinaryTitle, setCulinaryTitle] = useState('');
   const [cookingMethodTitle, setCookingMethodTitle] = useState('');
@@ -65,17 +76,35 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
   const [prepTimeMinutes, setPrepTimeMinutes] = useState<number>(30);
   const [serves, setServes] = useState('Serves 1-2');
   const [calories, setCalories] = useState<string>('');
-  const [featured, setFeatured] = useState(false);
-  const [bestseller, setBestseller] = useState(false);
   const [newArrival, setNewArrival] = useState(true);
   const [chefSpecial, setChefSpecial] = useState(false);
   const [active, setActive] = useState(true);
-  const [inStock, setInStock] = useState(true);
   const [ingredientsText, setIngredientsText] = useState('Pure Cow Ghee, Heirloom Spices, Saffron, Fresh Ingredients');
+
+  // Outlet assignment state: Record<outletId, { isAssigned: boolean; inStock: boolean; isFeatured: boolean; isBestseller: boolean }>
+  const [outletConfigs, setOutletConfigs] = useState<
+    Record<string, { isAssigned: boolean; inStock: boolean; isFeatured: boolean; isBestseller: boolean }>
+  >({});
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  // Fetch Outlets
+  useEffect(() => {
+    const fetchAllOutlets = async () => {
+      setLoadingOutlets(true);
+      try {
+        const list = await getOutlets(true, token || undefined);
+        setAvailableOutlets(list);
+      } catch (err) {
+        console.error('Failed to load outlets:', err);
+      } finally {
+        setLoadingOutlets(false);
+      }
+    };
+    fetchAllOutlets();
+  }, [token]);
 
   // Auto-generate slug when creating a new product
   const handleNameChange = (val: string) => {
@@ -89,8 +118,10 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
     }
   };
 
-  // Populate data in edit mode
+  // Populate data in edit mode or set default outlet selections in new mode
   useEffect(() => {
+    if (availableOutlets.length === 0) return;
+
     if (mode === 'edit' && productId) {
       const found = allProducts.find((p) => String(p.id) === String(productId));
       if (found) {
@@ -118,22 +149,98 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
         setPrepTimeMinutes(found.prepTimeMinutes || 30);
         setServes(found.serves || 'Serves 1-2');
         setCalories(found.calories ? String(found.calories) : '');
-        setFeatured(!!found.featured);
-        setBestseller(!!found.bestseller);
         setNewArrival(!!found.newArrival);
         setChefSpecial(!!found.chefSpecial);
         setActive(found.active !== false);
-        setInStock(found.inStock !== false);
         setIngredientsText(
           Array.isArray(found.ingredients)
             ? found.ingredients.join(', ')
             : 'Pure Cow Ghee, Heirloom Spices, Fresh Ingredients'
         );
+
+        // Map outlet configs
+        const configs: Record<string, { isAssigned: boolean; inStock: boolean; isFeatured: boolean; isBestseller: boolean }> = {};
+        availableOutlets.forEach((o) => {
+          if (Array.isArray(found.outlets)) {
+            const oc = found.outlets.find((item) => item.outletId === o.id);
+            configs[o.id] = {
+              isAssigned: !!oc,
+              inStock: oc ? oc.inStock !== false : true,
+              isFeatured: oc ? !!oc.isFeatured : false,
+              isBestseller: oc ? !!oc.isBestseller : false,
+            };
+          } else if (Array.isArray(found.outletIds)) {
+            const isAssigned = found.outletIds.includes(o.id);
+            configs[o.id] = {
+              isAssigned,
+              inStock: found.inStock !== false,
+              isFeatured: !!found.featured,
+              isBestseller: !!found.bestseller,
+            };
+          } else {
+            // Default assigned
+            configs[o.id] = {
+              isAssigned: true,
+              inStock: found.inStock !== false,
+              isFeatured: !!found.featured,
+              isBestseller: !!found.bestseller,
+            };
+          }
+        });
+        setOutletConfigs(configs);
       } else {
         setErrorMessage('Product not found in current inventory.');
       }
+    } else if (mode === 'new') {
+      // In new mode, default select all active outlets as in stock
+      setOutletConfigs((prev) => {
+        if (Object.keys(prev).length > 0) return prev;
+        const initial: Record<string, { isAssigned: boolean; inStock: boolean; isFeatured: boolean; isBestseller: boolean }> = {};
+        availableOutlets.forEach((o) => {
+          initial[o.id] = {
+            isAssigned: o.isActive !== false,
+            inStock: true,
+            isFeatured: false,
+            isBestseller: false,
+          };
+        });
+        return initial;
+      });
     }
-  }, [mode, productId, allProducts]);
+  }, [mode, productId, allProducts, availableOutlets]);
+
+  const toggleOutletAssignment = (outletId: string) => {
+    setOutletConfigs((prev) => ({
+      ...prev,
+      [outletId]: {
+        ...(prev[outletId] || { inStock: true, isFeatured: false, isBestseller: false }),
+        isAssigned: !prev[outletId]?.isAssigned,
+      },
+    }));
+  };
+
+  const updateOutletField = (outletId: string, field: 'inStock' | 'isFeatured' | 'isBestseller', val: boolean) => {
+    setOutletConfigs((prev) => ({
+      ...prev,
+      [outletId]: {
+        ...(prev[outletId] || { isAssigned: true, inStock: true, isFeatured: false, isBestseller: false }),
+        [field]: val,
+      },
+    }));
+  };
+
+  const selectAllOutlets = (assigned: boolean) => {
+    setOutletConfigs((prev) => {
+      const next = { ...prev };
+      availableOutlets.forEach((o) => {
+        next[o.id] = {
+          ...(next[o.id] || { inStock: true, isFeatured: false, isBestseller: false }),
+          isAssigned: assigned,
+        };
+      });
+      return next;
+    });
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -172,6 +279,23 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
       .map((i) => i.trim())
       .filter(Boolean);
 
+    // Build outlets array
+    const assignedOutletsList: ProductOutletConfig[] = availableOutlets
+      .filter((o) => outletConfigs[o.id]?.isAssigned)
+      .map((o) => ({
+        outletId: o.id,
+        inStock: outletConfigs[o.id]?.inStock !== false,
+        isFeatured: !!outletConfigs[o.id]?.isFeatured,
+        isBestseller: !!outletConfigs[o.id]?.isBestseller,
+      }));
+
+    if (assignedOutletsList.length === 0) {
+      setErrorMessage('Please assign this dish to at least one kitchen outlet.');
+      return;
+    }
+
+    const assignedOutletIds = assignedOutletsList.map((o) => o.outletId);
+
     const productPayload: Partial<Product> = {
       name: name.trim(),
       hindiName: hindiName.trim() || undefined,
@@ -195,12 +319,12 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
       prepTimeMinutes: Number(prepTimeMinutes) || 30,
       serves: serves.trim() || 'Serves 1-2',
       calories: calories ? parseInt(calories, 10) : undefined,
-      featured,
-      bestseller,
       newArrival,
       chefSpecial,
       active,
-      inStock,
+      inStock: assignedOutletsList.some((o) => o.inStock),
+      outlets: assignedOutletsList,
+      outletIds: assignedOutletIds,
       ingredients: ingredients.length > 0 ? ingredients : ['Pure Cow Ghee', 'Heirloom Spices'],
     };
 
@@ -232,8 +356,8 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
       title={mode === 'new' ? 'Add New Menu Item' : `Edit Item: ${name || 'Product'}`}
       subtitle={
         mode === 'new'
-          ? 'Fill in the dish details below to publish directly to the live customer menu.'
-          : 'Update pricing, descriptions, stock availability, or merchandising flags.'
+          ? 'Fill in the dish details below to assign to kitchen outlets and publish to the live menu.'
+          : 'Update pricing, descriptions, outlet stock availability, or merchandising flags.'
       }
       actions={
         <button
@@ -303,38 +427,38 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
                     type="text"
                     value={hindiName}
                     onChange={(e) => setHindiName(e.target.value)}
-                    placeholder="e.g. निज़ामी मटन बिरयानी"
+                    placeholder="e.g. निज़ामी दम मटन बिरयानी"
                     className="w-full px-3.5 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs text-gray-900 font-medium focus:outline-none focus:border-orange-500 focus:bg-white"
                   />
                 </div>
 
-                {/* Slug */}
+                {/* URL Slug */}
                 <div>
                   <label className="block text-xs font-bold text-gray-700 mb-1">
-                    URL Slug <span className="text-rose-500">*</span>
+                    URL Identifier (Slug) <span className="text-rose-500">*</span>
                   </label>
                   <input
                     type="text"
                     required
                     value={slug}
-                    onChange={(e) => setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
-                    placeholder="nizami-mutton-biryani"
+                    onChange={(e) => setSlug(e.target.value)}
+                    placeholder="nizami-royal-dum-mutton-biryani"
                     className="w-full px-3.5 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs text-gray-900 font-mono focus:outline-none focus:border-orange-500 focus:bg-white"
                   />
                 </div>
 
-                {/* Category */}
+                {/* Category Selector */}
                 <div>
                   <label className="block text-xs font-bold text-gray-700 mb-1">
-                    Category <span className="text-rose-500">*</span>
+                    Menu Category <span className="text-rose-500">*</span>
                   </label>
                   <select
                     value={category}
                     onChange={(e) => setCategory(e.target.value)}
-                    className="w-full px-3.5 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs text-gray-900 font-medium focus:outline-none focus:border-orange-500 focus:bg-white cursor-pointer"
+                    className="w-full px-3.5 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs text-gray-900 font-medium focus:outline-none focus:border-orange-500 focus:bg-white"
                   >
                     {CATEGORIES.map((cat) => (
-                      <option key={cat.slug} value={cat.slug}>
+                      <option key={cat.id} value={cat.slug || cat.id}>
                         {cat.name}
                       </option>
                     ))}
@@ -342,15 +466,15 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
                 </div>
 
                 {/* Short Description */}
-                <div className="sm:col-span-2">
+                <div>
                   <label className="block text-xs font-bold text-gray-700 mb-1">
-                    Short Tagline / Catchphrase
+                    One-line Teaser (Short Description)
                   </label>
                   <input
                     type="text"
                     value={shortDescription}
                     onChange={(e) => setShortDescription(e.target.value)}
-                    placeholder="e.g. Fragrant aged Daawat basmati layered with succulent tender goat meat"
+                    placeholder="Slow-cooked tender lamb with long-grain basmati and aged saffron."
                     className="w-full px-3.5 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs text-gray-900 font-medium focus:outline-none focus:border-orange-500 focus:bg-white"
                   />
                 </div>
@@ -358,150 +482,156 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
                 {/* Full Description */}
                 <div className="sm:col-span-2">
                   <label className="block text-xs font-bold text-gray-700 mb-1">
-                    Detailed Culinary Description <span className="text-rose-500">*</span>
+                    Full Description <span className="text-rose-500">*</span>
                   </label>
                   <textarea
-                    rows={4}
                     required
+                    rows={3}
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
-                    placeholder="Describe how the dish is cooked, authentic village techniques, hand-pounded spices, and flavor notes..."
+                    placeholder="Elaborate on the heritage, texture, slow cooking, and authentic Indian roots of this dish..."
                     className="w-full px-3.5 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs text-gray-900 font-medium focus:outline-none focus:border-orange-500 focus:bg-white"
                   />
                 </div>
               </div>
             </div>
 
-            {/* Section 2: Culinary Story & Cooking Method (Option B Custom Override) */}
+            {/* Section 2: Kitchen Outlets Assignment (Many-to-Many with stock/badges) */}
             <div className="bg-white rounded-2xl border border-gray-200 p-5 sm:p-6 shadow-2xs space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-gray-100 pb-3">
-                <div className="flex items-center gap-2">
-                  <Sparkles className="w-4 h-4 text-orange-600 shrink-0" />
-                  <h3 className="font-extrabold text-sm text-gray-900">
-                    Culinary Story & Cooking Highlights (Option B)
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="font-extrabold text-sm text-gray-900 flex items-center gap-2">
+                    <Store className="w-4 h-4 text-orange-600" />
+                    <span>Assigned Kitchen Outlets & Availability</span>
                   </h3>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    Tick the kitchen outlets that serve this dish. You can also configure individual outlet stock and featured ribbons.
+                  </p>
                 </div>
-                <span className="text-[11px] font-semibold text-orange-700 bg-orange-50 px-2.5 py-1 rounded-full border border-orange-200/60 w-fit">
-                  Optional • Category Defaults (Option A) apply if empty
-                </span>
+                <div className="flex items-center gap-2 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => selectAllOutlets(true)}
+                    className="text-orange-600 hover:text-orange-700 font-bold"
+                  >
+                    Select All
+                  </button>
+                  <span className="text-gray-300">|</span>
+                  <button
+                    type="button"
+                    onClick={() => selectAllOutlets(false)}
+                    className="text-gray-500 hover:text-gray-700 font-medium"
+                  >
+                    Clear All
+                  </button>
+                </div>
               </div>
 
-              {/* Notice & Rule summary */}
-              <div className="p-3.5 bg-amber-50/60 rounded-xl border border-amber-200/70 text-xs text-amber-950 space-y-1.5">
-                <div className="flex items-center gap-1.5 font-bold">
-                  <Info className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                  <span>How Culinary Story display works:</span>
+              {loadingOutlets ? (
+                <div className="p-4 text-center text-xs text-gray-500">Loading outlets...</div>
+              ) : availableOutlets.length === 0 ? (
+                <div className="p-4 bg-amber-50 rounded-xl text-xs text-amber-900">
+                  No kitchen outlets found. Please add outlets from the Outlets menu first.
                 </div>
-                <p className="text-[11px] text-amber-900 leading-relaxed">
-                  <strong>Option A (Default):</strong> If these fields are left empty, the storefront automatically displays authentic category-smart highlights (e.g. <em>Handi Dum Cooking & Saffron-Kewra</em> for Biryanis, <em>Slow Simmering & Desi Makhan</em> for Curries, <em>Live Charcoal Tandoor</em> for Starters).
-                </p>
-                <p className="text-[11px] text-amber-900 leading-relaxed">
-                  <strong>Option B (Custom):</strong> If you fill in your own custom culinary story or technique below, it will override the category default.
-                </p>
-              </div>
+              ) : (
+                <div className="space-y-3">
+                  {availableOutlets.map((outlet) => {
+                    const cfg = outletConfigs[outlet.id] || {
+                      isAssigned: false,
+                      inStock: true,
+                      isFeatured: false,
+                      isBestseller: false,
+                    };
 
-              {/* Category Default Preview Box */}
-              {(() => {
-                const normCat = normalizeCategorySlug(category);
-                const defaults = CATEGORY_CULINARY_DEFAULTS[normCat];
-                if (!defaults) return null;
-                return (
-                  <div className="p-3.5 bg-gray-50 rounded-xl border border-gray-200 text-xs text-gray-600 space-y-2">
-                    <div className="flex items-center justify-between text-[11px] font-bold text-gray-700">
-                      <span>Default for selected category ({normCat}):</span>
-                      <span className="text-gray-500 font-normal">{defaults.heading}</span>
-                    </div>
-                    <p className="text-[11px] text-gray-500 italic bg-white p-2.5 rounded-lg border border-gray-100">
-                      "{defaults.story}"
-                    </p>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
-                      <div className="bg-white p-2 rounded-lg border border-gray-100">
-                        <span className="font-bold text-gray-800">Box 1: </span>
-                        <span className="text-gray-600">{defaults.highlight1.title}</span>
+                    return (
+                      <div
+                        key={outlet.id}
+                        className={`p-3.5 rounded-xl border transition-all ${
+                          cfg.isAssigned
+                            ? 'border-orange-300 bg-orange-50/30'
+                            : 'border-gray-200 bg-gray-50/50 opacity-70'
+                        }`}
+                      >
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          {/* Checkbox & Outlet Name */}
+                          <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                            <input
+                              type="checkbox"
+                              checked={cfg.isAssigned}
+                              onChange={() => toggleOutletAssignment(outlet.id)}
+                              className="w-4 h-4 rounded text-orange-600 focus:ring-orange-500 border-gray-300"
+                            />
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="font-bold text-xs text-gray-900">
+                                  {outlet.name}
+                                </span>
+                                <span className="px-1.5 py-0.5 bg-gray-100 text-gray-700 text-[10px] font-semibold rounded">
+                                  {outlet.city}
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-gray-500 flex items-center gap-1">
+                                <MapPin className="w-3 h-3 text-gray-400" />
+                                <span>{outlet.address}</span>
+                              </p>
+                            </div>
+                          </label>
+
+                          {/* Per-Outlet Controls (Active when assigned) */}
+                          {cfg.isAssigned && (
+                            <div className="flex items-center gap-3 pt-2 sm:pt-0 border-t sm:border-t-0 border-gray-200/80">
+                              {/* Stock status toggle */}
+                              <button
+                                type="button"
+                                onClick={() => updateOutletField(outlet.id, 'inStock', !cfg.inStock)}
+                                className={`px-2.5 py-1 rounded-lg text-[10px] font-bold transition-colors flex items-center gap-1 cursor-pointer ${
+                                  cfg.inStock
+                                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                    : 'bg-amber-100 text-amber-900 border border-amber-300'
+                                }`}
+                              >
+                                {cfg.inStock ? (
+                                  <>
+                                    <PackageCheck className="w-3 h-3 text-emerald-700" />
+                                    <span>In Stock</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <PackageX className="w-3 h-3 text-amber-700" />
+                                    <span>Out of Stock</span>
+                                  </>
+                                )}
+                              </button>
+
+                              {/* Featured checkbox */}
+                              <label className="flex items-center gap-1 text-[11px] font-semibold text-gray-700 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={cfg.isFeatured}
+                                  onChange={(e) => updateOutletField(outlet.id, 'isFeatured', e.target.checked)}
+                                  className="w-3.5 h-3.5 rounded text-purple-600 focus:ring-purple-500 border-gray-300"
+                                />
+                                <span className="text-purple-900">Featured</span>
+                              </label>
+
+                              {/* Bestseller checkbox */}
+                              <label className="flex items-center gap-1 text-[11px] font-semibold text-gray-700 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={cfg.isBestseller}
+                                  onChange={(e) => updateOutletField(outlet.id, 'isBestseller', e.target.checked)}
+                                  className="w-3.5 h-3.5 rounded text-orange-600 focus:ring-orange-500 border-gray-300"
+                                />
+                                <span className="text-orange-900">Bestseller</span>
+                              </label>
+                            </div>
+                          )}
+                        </div>
                       </div>
-                      <div className="bg-white p-2 rounded-lg border border-gray-100">
-                        <span className="font-bold text-gray-800">Box 2: </span>
-                        <span className="text-gray-600">{defaults.highlight2.title}</span>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })()}
-
-              <div className="space-y-4 pt-1">
-                {/* Story / Chef's Note */}
-                <div>
-                  <label className="block text-xs font-bold text-gray-700 mb-1">
-                    Custom Culinary Story / Chef's Note (Optional)
-                  </label>
-                  <textarea
-                    rows={3}
-                    value={story}
-                    onChange={(e) => setStory(e.target.value)}
-                    placeholder="Enter custom heritage story or cooking ritual (overrides category default)..."
-                    className="w-full px-3.5 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs text-gray-900 font-medium focus:outline-none focus:border-orange-500 focus:bg-white"
-                  />
+                    );
+                  })}
                 </div>
-
-                {/* Custom Heading */}
-                <div>
-                  <label className="block text-xs font-bold text-gray-700 mb-1">
-                    Custom Story Heading (Optional)
-                  </label>
-                  <input
-                    type="text"
-                    value={culinaryTitle}
-                    onChange={(e) => setCulinaryTitle(e.target.value)}
-                    placeholder="e.g. 70-Year-Old Old Delhi Daryaganj Recipe"
-                    className="w-full px-3.5 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs text-gray-900 font-medium focus:outline-none focus:border-orange-500 focus:bg-white"
-                  />
-                </div>
-
-                {/* Custom Highlights Grid */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {/* Highlight 1 */}
-                  <div className="p-3 bg-gray-50 rounded-xl border border-gray-200 space-y-2">
-                    <label className="block text-xs font-bold text-gray-800">
-                      Custom Highlight Box 1 (Optional)
-                    </label>
-                    <input
-                      type="text"
-                      value={cookingMethodTitle}
-                      onChange={(e) => setCookingMethodTitle(e.target.value)}
-                      placeholder="Title: e.g. Sigdi Charcoal Cooking"
-                      className="w-full px-3 py-1.5 bg-white border border-gray-200 rounded-lg text-xs text-gray-900 font-medium focus:outline-none focus:border-orange-500"
-                    />
-                    <textarea
-                      rows={2}
-                      value={cookingMethodDesc}
-                      onChange={(e) => setCookingMethodDesc(e.target.value)}
-                      placeholder="Description: e.g. Slow simmered on copper sigdi embers..."
-                      className="w-full px-3 py-1.5 bg-white border border-gray-200 rounded-lg text-xs text-gray-900 font-medium focus:outline-none focus:border-orange-500"
-                    />
-                  </div>
-
-                  {/* Highlight 2 */}
-                  <div className="p-3 bg-gray-50 rounded-xl border border-gray-200 space-y-2">
-                    <label className="block text-xs font-bold text-gray-800">
-                      Custom Highlight Box 2 (Optional)
-                    </label>
-                    <input
-                      type="text"
-                      value={aromaTitle}
-                      onChange={(e) => setAromaTitle(e.target.value)}
-                      placeholder="Title: e.g. Kashmiri Mongra Saffron"
-                      className="w-full px-3 py-1.5 bg-white border border-gray-200 rounded-lg text-xs text-gray-900 font-medium focus:outline-none focus:border-orange-500"
-                    />
-                    <textarea
-                      rows={2}
-                      value={aromaDesc}
-                      onChange={(e) => setAromaDesc(e.target.value)}
-                      placeholder="Description: e.g. Steeped in warm milk for rich golden tint..."
-                      className="w-full px-3 py-1.5 bg-white border border-gray-200 rounded-lg text-xs text-gray-900 font-medium focus:outline-none focus:border-orange-500"
-                    />
-                  </div>
-                </div>
-              </div>
+              )}
             </div>
 
             {/* Section 3: Pricing & Portions */}
@@ -624,7 +754,7 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
 
           {/* Right Column: Image, Badges & Availability (4 cols) */}
           <div className="lg:col-span-4 space-y-6">
-            {/* Section 3: Product Image */}
+            {/* Section 4: Product Image */}
             <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-2xs space-y-4">
               <h3 className="font-extrabold text-sm text-gray-900 flex items-center gap-2">
                 <ImageIcon className="w-4 h-4 text-orange-600" />
@@ -687,10 +817,10 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
               </div>
             </div>
 
-            {/* Section 4: Visibility & Stock Status */}
+            {/* Section 5: Store Visibility & Dietary */}
             <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-2xs space-y-4">
               <h3 className="font-extrabold text-sm text-gray-900">
-                Inventory & Store Status
+                Storefront & Dietary
               </h3>
 
               <div className="space-y-3">
@@ -703,38 +833,13 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
                     className="mt-0.5 w-4 h-4 rounded text-orange-600 focus:ring-orange-500 border-gray-300"
                   />
                   <div>
-                    <span className="font-bold text-xs text-gray-900">Active (Visible in Store)</span>
+                    <span className="font-bold text-xs text-gray-900">Storefront Active (Visible)</span>
                     <p className="text-[11px] text-gray-500">
-                      When inactive, this dish is hidden from customer browsing and search.
+                      When inactive, this dish is completely hidden from customer menus across all outlets.
                     </p>
                   </div>
                 </label>
 
-                {/* In Stock / Out of Stock Switch */}
-                <label className="flex items-start gap-3 p-3 rounded-xl border border-gray-200 bg-gray-50/50 cursor-pointer hover:bg-gray-50">
-                  <input
-                    type="checkbox"
-                    checked={inStock}
-                    onChange={(e) => setInStock(e.target.checked)}
-                    className="mt-0.5 w-4 h-4 rounded text-orange-600 focus:ring-orange-500 border-gray-300"
-                  />
-                  <div>
-                    <span className="font-bold text-xs text-gray-900">In Stock (Available for Orders)</span>
-                    <p className="text-[11px] text-gray-500">
-                      If unchecked, displays "Out of Stock" and disables the Add to Cart button.
-                    </p>
-                  </div>
-                </label>
-              </div>
-            </div>
-
-            {/* Section 5: Merchandising Badges & Dietary */}
-            <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-2xs space-y-4">
-              <h3 className="font-extrabold text-sm text-gray-900">
-                Merchandising & Dietary
-              </h3>
-
-              <div className="space-y-2.5 text-xs text-gray-700">
                 {/* Veg / Non-Veg */}
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input
@@ -743,7 +848,7 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
                     onChange={(e) => setIsVeg(e.target.checked)}
                     className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-gray-300"
                   />
-                  <span className="font-semibold text-gray-900">100% Pure Vegetarian Dish</span>
+                  <span className="font-semibold text-xs text-gray-900">100% Pure Vegetarian Dish</span>
                 </label>
 
                 {/* Jain Friendly */}
@@ -754,29 +859,7 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
                     onChange={(e) => setIsJainFriendly(e.target.checked)}
                     className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-gray-300"
                   />
-                  <span className="font-semibold text-gray-900">Jain Friendly (No Onion/Garlic option)</span>
-                </label>
-
-                {/* Featured */}
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={featured}
-                    onChange={(e) => setFeatured(e.target.checked)}
-                    className="w-4 h-4 rounded text-purple-600 focus:ring-purple-500 border-gray-300"
-                  />
-                  <span className="font-semibold text-gray-900">Featured (Homepage Showcase)</span>
-                </label>
-
-                {/* Bestseller */}
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={bestseller}
-                    onChange={(e) => setBestseller(e.target.checked)}
-                    className="w-4 h-4 rounded text-orange-600 focus:ring-orange-500 border-gray-300"
-                  />
-                  <span className="font-semibold text-gray-900">Bestseller Ribbon</span>
+                  <span className="font-semibold text-xs text-gray-900">Jain Friendly (No Onion/Garlic option)</span>
                 </label>
 
                 {/* Chef Special */}
@@ -787,51 +870,37 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
                     onChange={(e) => setChefSpecial(e.target.checked)}
                     className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500 border-gray-300"
                   />
-                  <span className="font-semibold text-gray-900">Chef's Signature Recipe</span>
-                </label>
-
-                {/* New Arrival */}
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={newArrival}
-                    onChange={(e) => setNewArrival(e.target.checked)}
-                    className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 border-gray-300"
-                  />
-                  <span className="font-semibold text-gray-900">New Arrival Tag</span>
+                  <span className="font-semibold text-xs text-gray-900">Chef Special Dish</span>
                 </label>
               </div>
             </div>
+
+            {/* Save & Submit Button Card */}
+            <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-2xs space-y-3">
+              <button
+                type="submit"
+                disabled={isSubmitting}
+                className="w-full py-2.5 px-4 bg-orange-600 hover:bg-orange-700 active:bg-orange-800 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-xs transition-colors flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <Save className="w-4 h-4" />
+                <span>
+                  {isSubmitting
+                    ? 'Saving Item...'
+                    : mode === 'new'
+                    ? 'Publish Dish to Menu'
+                    : 'Save Changes'}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={goToOwnerProducts}
+                className="w-full py-2 px-4 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xs rounded-xl transition-colors text-center cursor-pointer"
+              >
+                Cancel
+              </button>
+            </div>
           </div>
-        </div>
-
-        {/* Submit Actions Bottom Bar */}
-        <div className="bg-white rounded-2xl border border-gray-200 p-4 sm:p-5 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <button
-            type="button"
-            onClick={goToOwnerProducts}
-            className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-semibold rounded-xl transition-colors cursor-pointer"
-          >
-            Cancel & Return
-          </button>
-
-          <button
-            type="submit"
-            disabled={isSubmitting}
-            className="flex items-center justify-center gap-2 px-6 py-2.5 bg-orange-600 hover:bg-orange-700 text-white text-xs font-bold rounded-xl shadow-xs transition-colors disabled:opacity-50 cursor-pointer"
-          >
-            {isSubmitting ? (
-              <>
-                <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                <span>Saving to Database...</span>
-              </>
-            ) : (
-              <>
-                <Save className="w-3.5 h-3.5" />
-                <span>{mode === 'new' ? 'Save & Publish Dish' : 'Update Dish Changes'}</span>
-              </>
-            )}
-          </button>
         </div>
       </form>
     </OwnerLayout>

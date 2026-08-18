@@ -19,8 +19,6 @@ import {
   Edit2,
   Eye,
   EyeOff,
-  PackageCheck,
-  PackageX,
   RefreshCw,
   Store,
   MapPin,
@@ -28,7 +26,7 @@ import {
 } from 'lucide-react';
 
 export const OwnerDashboardPage: React.FC = () => {
-  const { allProducts, toggleActive, toggleStock, refreshProducts } = useProducts();
+  const { allProducts, toggleActive, refreshProducts } = useProducts();
   const { token } = useAuth();
   const {
     goToOwnerProducts,
@@ -81,17 +79,6 @@ export const OwnerDashboardPage: React.FC = () => {
       await toggleActive(id);
     } catch (err) {
       console.error('Failed to toggle active status:', err);
-    } finally {
-      setActionLoadingId(null);
-    }
-  };
-
-  const handleToggleStock = async (id: string | number) => {
-    setActionLoadingId(id);
-    try {
-      await toggleStock(id);
-    } catch (err) {
-      console.error('Failed to toggle stock status:', err);
     } finally {
       setActionLoadingId(null);
     }
@@ -304,7 +291,7 @@ export const OwnerDashboardPage: React.FC = () => {
                 <th className="py-3 px-4">Dish</th>
                 <th className="py-3 px-3">Category</th>
                 <th className="py-3 px-3">Price</th>
-                <th className="py-3 px-3">Stock Status</th>
+                <th className="py-3 px-3">Served Outlets</th>
                 <th className="py-3 px-3">Store Visibility</th>
                 <th className="py-3 px-4 text-right">Action</th>
               </tr>
@@ -312,6 +299,12 @@ export const OwnerDashboardPage: React.FC = () => {
             <tbody className="divide-y divide-gray-100 text-xs">
               {recentProducts.map((product) => {
                 const isItemLoading = actionLoadingId === product.id;
+                const outletCount = product.outlets ? product.outlets.length : safeOutlets.length;
+                const assignedNames = (product.outlets || []).map((o) => {
+                  const match = safeOutlets.find((out) => out.id === o.outletId);
+                  return match ? match.city || match.name : o.outletId;
+                }).join(', ');
+
                 return (
                   <tr key={product.id} className="hover:bg-gray-50/70 transition-colors">
                     {/* Dish name & thumb */}
@@ -347,31 +340,14 @@ export const OwnerDashboardPage: React.FC = () => {
                       )}
                     </td>
 
-                    {/* In Stock toggle */}
+                    {/* Served Outlets (Count) */}
                     <td className="py-3 px-3">
-                      <button
-                        type="button"
-                        disabled={isItemLoading}
-                        onClick={() => handleToggleStock(product.id)}
-                        className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-bold transition-colors cursor-pointer ${
-                          product.inStock !== false
-                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
-                            : 'bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100'
-                        }`}
-                        title="Click to toggle Stock Status"
+                      <span
+                        title={assignedNames || `${outletCount} outlets`}
+                        className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-50 text-amber-900 border border-amber-200 text-xs font-semibold rounded-md"
                       >
-                        {product.inStock !== false ? (
-                          <>
-                            <PackageCheck className="w-3 h-3 text-emerald-600" />
-                            <span>In Stock</span>
-                          </>
-                        ) : (
-                          <>
-                            <PackageX className="w-3 h-3 text-amber-600" />
-                            <span>Out of Stock</span>
-                          </>
-                        )}
-                      </button>
+                        ({outletCount}) {outletCount === 1 ? 'outlet' : 'outlets'}
+                      </span>
                     </td>
 
                     {/* Active toggle */}
@@ -421,58 +397,61 @@ export const OwnerDashboardPage: React.FC = () => {
 
         {/* Mobile Cards View */}
         <div className="sm:hidden divide-y divide-gray-100">
-          {recentProducts.map((product) => (
-            <div key={product.id} className="p-4 space-y-3">
-              <div className="flex items-center gap-3">
-                <img
-                  src={product.image}
-                  alt={product.name}
-                  referrerPolicy="no-referrer"
-                  className="w-12 h-12 rounded-lg object-cover border border-gray-200 shrink-0"
-                />
-                <div className="flex-1 min-w-0">
-                  <p className="font-bold text-gray-900 text-xs truncate">{product.name}</p>
-                  <p className="text-[10px] text-gray-500 capitalize">{product.category}</p>
-                  <p className="text-xs font-bold text-gray-900 mt-0.5">₹{product.price}</p>
+          {recentProducts.map((product) => {
+            const outletCount = product.outlets ? product.outlets.length : safeOutlets.length;
+            const assignedNames = (product.outlets || []).map((o) => {
+              const match = safeOutlets.find((out) => out.id === o.outletId);
+              return match ? match.city || match.name : o.outletId;
+            }).join(', ');
+
+            return (
+              <div key={product.id} className="p-4 space-y-3">
+                <div className="flex items-center gap-3">
+                  <img
+                    src={product.image}
+                    alt={product.name}
+                    referrerPolicy="no-referrer"
+                    className="w-12 h-12 rounded-lg object-cover border border-gray-200 shrink-0"
+                  />
+                  <div className="flex-1 min-w-0">
+                    <p className="font-bold text-gray-900 text-xs truncate">{product.name}</p>
+                    <div className="flex items-center gap-1.5 mt-0.5">
+                      <span className="text-[10px] text-gray-500 capitalize">{product.category}</span>
+                      <span
+                        title={assignedNames || `${outletCount} outlets`}
+                        className="text-[10px] bg-amber-50 text-amber-900 border border-amber-200 px-1.5 py-0.2 rounded font-semibold"
+                      >
+                        ({outletCount}) {outletCount === 1 ? 'outlet' : 'outlets'}
+                      </span>
+                    </div>
+                    <p className="text-xs font-bold text-gray-900 mt-0.5">₹{product.price}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => goToOwnerEditProduct(product.id)}
+                    className="p-2 text-orange-600 hover:bg-orange-50 rounded-lg cursor-pointer"
+                  >
+                    <Edit2 className="w-4 h-4" />
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => goToOwnerEditProduct(product.id)}
-                  className="p-2 text-orange-600 hover:bg-orange-50 rounded-lg"
-                >
-                  <Edit2 className="w-4 h-4" />
-                </button>
-              </div>
 
-              <div className="flex items-center gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={() => handleToggleStock(product.id)}
-                  className={`flex-1 py-1.5 px-2 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1 border ${
-                    product.inStock !== false
-                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                      : 'bg-amber-50 text-amber-800 border-amber-200'
-                  }`}
-                >
-                  {product.inStock !== false ? <PackageCheck className="w-3 h-3" /> : <PackageX className="w-3 h-3" />}
-                  <span>{product.inStock !== false ? 'In Stock' : 'Out of Stock'}</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => handleToggleActive(product.id)}
-                  className={`flex-1 py-1.5 px-2 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1 border ${
-                    product.active !== false
-                      ? 'bg-blue-50 text-blue-700 border-blue-200'
-                      : 'bg-gray-100 text-gray-600 border-gray-200'
-                  }`}
-                >
-                  {product.active !== false ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
-                  <span>{product.active !== false ? 'Active' : 'Inactive'}</span>
-                </button>
+                <div className="pt-1">
+                  <button
+                    type="button"
+                    onClick={() => handleToggleActive(product.id)}
+                    className={`w-full py-1.5 px-2 rounded-lg text-[11px] font-bold flex items-center justify-center gap-1.5 border cursor-pointer ${
+                      product.active !== false
+                        ? 'bg-blue-50 text-blue-700 border-blue-200'
+                        : 'bg-gray-100 text-gray-600 border-gray-200'
+                    }`}
+                  >
+                    {product.active !== false ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+                    <span>{product.active !== false ? 'Active in Catalog' : 'Hidden / Inactive'}</span>
+                  </button>
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </OwnerLayout>

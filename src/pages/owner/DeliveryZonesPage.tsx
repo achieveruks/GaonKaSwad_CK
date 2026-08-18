@@ -55,7 +55,6 @@ export const DeliveryZonesPage: React.FC = () => {
   const [formName, setFormName] = useState('');
   const [formPinInput, setFormPinInput] = useState('');
   const [formPins, setFormPins] = useState<string[]>([]);
-  const [formMinOrder, setFormMinOrder] = useState<number>(200);
   const [formDeliveryFee, setFormDeliveryFee] = useState<number>(40);
   const [formEstTime, setFormEstTime] = useState<string>('30-40 mins');
   const [formIsActive, setFormIsActive] = useState<boolean>(true);
@@ -105,9 +104,8 @@ export const DeliveryZonesPage: React.FC = () => {
     setFormName('');
     setFormPinInput('');
     setFormPins([]);
-    setFormMinOrder(defaultOutlet?.minimumOrderValue ?? 200);
-    setFormDeliveryFee(defaultOutlet?.deliveryFee ?? 40);
-    setFormEstTime(defaultOutlet?.estimatedDeliveryTime || '30-40 mins');
+    setFormDeliveryFee(40);
+    setFormEstTime('30-40 mins');
     setFormIsActive(true);
     setIsModalOpen(true);
   };
@@ -119,7 +117,6 @@ export const DeliveryZonesPage: React.FC = () => {
     setFormName(zone.name || '');
     setFormPinInput('');
     setFormPins([...(zone.pinCodes || [])]);
-    setFormMinOrder(zone.minimumOrderValue ?? 200);
     setFormDeliveryFee(zone.deliveryFee ?? 40);
     setFormEstTime(zone.estimatedDeliveryTime || '30-40 mins');
     setFormIsActive(zone.isActive !== false);
@@ -204,7 +201,6 @@ export const DeliveryZonesPage: React.FC = () => {
       outletId: formOutletId,
       name: formName.trim(),
       pinCodes: formPins,
-      minimumOrderValue: formMinOrder,
       deliveryFee: formDeliveryFee,
       estimatedDeliveryTime: formEstTime,
       isActive: formIsActive,
@@ -547,25 +543,18 @@ export const DeliveryZonesPage: React.FC = () => {
                     </div>
 
                     {/* Zone Rules Metrics */}
-                    <div className="grid grid-cols-3 gap-2 bg-stone-50 rounded-xl p-2.5 border border-stone-200 text-[11px]">
+                    <div className="grid grid-cols-2 gap-2 bg-stone-50 rounded-xl p-2.5 border border-stone-200 text-[11px]">
                       <div>
-                        <span className="text-[9px] text-stone-400 block font-semibold">Min. Order</span>
+                        <span className="text-[9px] text-stone-400 block font-semibold">Delivery Fee</span>
                         <span className="font-bold text-stone-800">
-                          ₹{zone.minimumOrderValue ?? assignedOutlet?.minimumOrderValue ?? 200}
+                          ₹{zone.deliveryFee ?? 40}
                         </span>
                       </div>
 
                       <div>
-                        <span className="text-[9px] text-stone-400 block font-semibold">Fee</span>
-                        <span className="font-bold text-stone-800">
-                          ₹{zone.deliveryFee ?? assignedOutlet?.deliveryFee ?? 40}
-                        </span>
-                      </div>
-
-                      <div>
-                        <span className="text-[9px] text-stone-400 block font-semibold">Est. Time</span>
+                        <span className="text-[9px] text-stone-400 block font-semibold">Est. Delivery Time</span>
                         <span className="font-semibold text-stone-700 truncate block">
-                          {zone.estimatedDeliveryTime || assignedOutlet?.estimatedDeliveryTime || '30-40m'}
+                          {zone.estimatedDeliveryTime || '30-40m'}
                         </span>
                       </div>
                     </div>
@@ -827,27 +816,15 @@ export const DeliveryZonesPage: React.FC = () => {
                     3. Delivery Parameters for this Zone
                   </h3>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                       <label className="block text-xs font-semibold text-stone-700 mb-1">
-                        Min. Order (₹)
+                        Delivery Partner Fee (₹) *
                       </label>
                       <input
                         type="number"
                         min={0}
-                        value={formMinOrder}
-                        onChange={(e) => setFormMinOrder(Number(e.target.value))}
-                        className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-semibold text-stone-700 mb-1">
-                        Delivery Fee (₹)
-                      </label>
-                      <input
-                        type="number"
-                        min={0}
+                        required
                         value={formDeliveryFee}
                         onChange={(e) => setFormDeliveryFee(Number(e.target.value))}
                         className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700"
@@ -856,13 +833,14 @@ export const DeliveryZonesPage: React.FC = () => {
 
                     <div>
                       <label className="block text-xs font-semibold text-stone-700 mb-1">
-                        Est. Time
+                        Est. Delivery Duration *
                       </label>
                       <input
                         type="text"
+                        required
                         value={formEstTime}
                         onChange={(e) => setFormEstTime(e.target.value)}
-                        placeholder="30-40 mins"
+                        placeholder="e.g. 30-40 mins"
                         className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700"
                       />
                     </div>

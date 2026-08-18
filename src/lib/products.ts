@@ -161,6 +161,57 @@ export async function toggleProductStock(id: string | number, token: string): Pr
 }
 
 /**
+ * Update single product configuration for a specific outlet (Owner action)
+ */
+export async function updateOutletProductConfig(
+  outletId: string,
+  productId: string | number,
+  config: { inStock?: boolean; isFeatured?: boolean; isBestseller?: boolean; isAssigned?: boolean },
+  token: string
+): Promise<Product> {
+  const res = await fetch(`${API_BASE}/outlets/${outletId}/products/${productId}`, {
+    method: 'PATCH',
+    headers: getAuthHeaders(token),
+    body: JSON.stringify(config),
+  });
+
+  const data = await res.json();
+  if (!res.ok || !data.success) {
+    throw new Error(data.error || 'Failed to update product for outlet');
+  }
+
+  return data.product;
+}
+
+/**
+ * Batch update products configuration for an outlet (Owner action)
+ */
+export async function batchUpdateOutletProducts(
+  outletId: string,
+  updates: {
+    productId: string | number;
+    isAssigned?: boolean;
+    inStock?: boolean;
+    isFeatured?: boolean;
+    isBestseller?: boolean;
+  }[],
+  token: string
+): Promise<Product[]> {
+  const res = await fetch(`${API_BASE}/outlets/${outletId}/products`, {
+    method: 'PUT',
+    headers: getAuthHeaders(token),
+    body: JSON.stringify({ updates }),
+  });
+
+  const data = await res.json();
+  if (!res.ok || !data.success) {
+    throw new Error(data.error || 'Failed to update outlet products');
+  }
+
+  return data.products;
+}
+
+/**
  * Get dashboard metrics (Owner action)
  */
 export async function getDashboardStats(token: string): Promise<DashboardStats> {

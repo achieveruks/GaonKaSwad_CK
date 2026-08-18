@@ -165,7 +165,9 @@ export const LocationProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         stateName: outlet.state,
         address: outlet.address,
         deliveryFee: zone.deliveryFee,
-        minimumOrderValue: zone.minimumOrderValue,
+        minimumOrderValue: outlet.minimumOrderValue ?? 200,
+        freeDeliveryThreshold: outlet.freeDeliveryThreshold ?? 499,
+        packagingFee: outlet.packagingFee ?? 25,
       });
       setIsLocationModalOpen(false);
       setPendingLocation(null);
@@ -186,7 +188,9 @@ export const LocationProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         stateName: pendingLocation.outlet.state,
         address: pendingLocation.outlet.address,
         deliveryFee: pendingLocation.zone.deliveryFee,
-        minimumOrderValue: pendingLocation.zone.minimumOrderValue,
+        minimumOrderValue: pendingLocation.outlet.minimumOrderValue ?? 200,
+        freeDeliveryThreshold: pendingLocation.outlet.freeDeliveryThreshold ?? 499,
+        packagingFee: pendingLocation.outlet.packagingFee ?? 25,
       });
       setPendingLocation(null);
       setIsLocationModalOpen(false);

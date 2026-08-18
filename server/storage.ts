@@ -35,8 +35,12 @@ class AppStorage {
       if (fs.existsSync(OUTLETS_FILE)) {
         const raw = fs.readFileSync(OUTLETS_FILE, 'utf-8');
         const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) {
-          this.outlets = parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          this.outlets = parsed.map((o: any) => ({
+            ...o,
+            packagingFee: o.packagingFee !== undefined ? Number(o.packagingFee) : 25,
+            avgCookingTime: o.avgCookingTime || o.estimatedDeliveryTime || '25-35 mins',
+          }));
         } else {
           this.outlets = [...INITIAL_OUTLETS];
           this.saveOutlets();
@@ -63,32 +67,57 @@ class AppStorage {
 
       // 3. Initialize Products
       const activeOutletIds = this.outlets.map((o) => o.id);
+      const normalizeProductOutlets = (p: any): Product => {
+        let outlets: any[] = [];
+        if (Array.isArray(p.outlets)) {
+          outlets = p.outlets.map((o: any) =>
+            typeof o === 'string'
+              ? { outletId: o, inStock: p.inStock !== false, isFeatured: !!p.featured, isBestseller: !!p.bestseller }
+              : {
+                  outletId: o.outletId || o.id,
+                  inStock: o.inStock !== false,
+                  isFeatured: !!o.isFeatured,
+                  isBestseller: !!o.isBestseller,
+                }
+          );
+        } else if (Array.isArray(p.outletIds)) {
+          outlets = p.outletIds.map((oid: string) => ({
+            outletId: oid,
+            inStock: p.inStock !== false,
+            isFeatured: !!p.featured,
+            isBestseller: !!p.bestseller,
+          }));
+        } else {
+          outlets = activeOutletIds.map((oid) => ({
+            outletId: oid,
+            inStock: p.inStock !== false,
+            isFeatured: !!p.featured,
+            isBestseller: !!p.bestseller,
+          }));
+        }
+
+        const outletIds = outlets.map((o) => o.outletId);
+
+        return {
+          ...p,
+          active: p.active !== false,
+          inStock: p.inStock !== false,
+          outlets,
+          outletIds,
+        };
+      };
+
       if (fs.existsSync(PRODUCTS_FILE)) {
         const raw = fs.readFileSync(PRODUCTS_FILE, 'utf-8');
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          this.products = parsed.map((p) => ({
-            ...p,
-            active: p.active !== false,
-            inStock: p.inStock !== false,
-            outletIds: Array.isArray(p.outletIds) && p.outletIds.length > 0 ? p.outletIds : activeOutletIds,
-          }));
+          this.products = parsed.map(normalizeProductOutlets);
         } else {
-          this.products = INITIAL_PRODUCTS.map((p) => ({
-            ...p,
-            active: p.active !== false,
-            inStock: p.inStock !== false,
-            outletIds: activeOutletIds,
-          }));
+          this.products = INITIAL_PRODUCTS.map(normalizeProductOutlets);
           this.saveProducts();
         }
       } else {
-        this.products = INITIAL_PRODUCTS.map((p) => ({
-          ...p,
-          active: p.active !== false,
-          inStock: p.inStock !== false,
-          outletIds: activeOutletIds,
-        }));
+        this.products = INITIAL_PRODUCTS.map(normalizeProductOutlets);
         this.saveProducts();
       }
 
@@ -106,11 +135,18 @@ class AppStorage {
       console.warn('Storage init fallback:', err);
       this.outlets = [...INITIAL_OUTLETS];
       this.zones = [...INITIAL_DELIVERY_ZONES];
+      const activeIds = ALL_INITIAL_OUTLET_IDS;
       this.products = INITIAL_PRODUCTS.map((p) => ({
         ...p,
         active: p.active !== false,
         inStock: p.inStock !== false,
-        outletIds: ALL_INITIAL_OUTLET_IDS,
+        outlets: activeIds.map((oid) => ({
+          outletId: oid,
+          inStock: true,
+          isFeatured: !!p.featured,
+          isBestseller: !!p.bestseller,
+        })),
+        outletIds: activeIds,
       }));
       this.isInitialized = true;
     }
@@ -163,7 +199,15 @@ class AppStorage {
       list = list.filter((p) => p.active !== false);
     }
     if (outletId) {
-      list = list.filter((p) => p.outletIds && p.outletIds.includes(outletId));
+      list = list.filter((p) => {
+        if (p.outlets && Array.isArray(p.outlets) && p.outlets.length > 0) {
+          return p.outlets.some((o) => o.outletId === outletId);
+        }
+        if (p.outletIds && Array.isArray(p.outletIds) && p.outletIds.length > 0) {
+          return p.outletIds.includes(outletId);
+        }
+        return true;
+      });
     }
     return list;
   }
@@ -213,11 +257,38 @@ class AppStorage {
     }, 100);
     const newId = maxNumId + 1;
 
-    // Default outlet IDs to all active outlets if none provided
-    const defaultOutletIds = this.outlets.filter((o) => o.isActive).map((o) => o.id);
-    const assignedOutletIds = Array.isArray(data.outletIds) && data.outletIds.length > 0
-      ? data.outletIds
-      : defaultOutletIds;
+    // Process outlets configuration
+    const activeOutletIds = this.outlets.filter((o) => o.isActive).map((o) => o.id);
+    let outletsConfig: any[] = [];
+
+    if (Array.isArray(data.outlets) && data.outlets.length > 0) {
+      outletsConfig = data.outlets.map((o: any) =>
+        typeof o === 'string'
+          ? { outletId: o, inStock: true, isFeatured: false, isBestseller: false }
+          : {
+              outletId: o.outletId,
+              inStock: o.inStock !== false,
+              isFeatured: !!o.isFeatured,
+              isBestseller: !!o.isBestseller,
+            }
+      );
+    } else if (Array.isArray(data.outletIds) && data.outletIds.length > 0) {
+      outletsConfig = data.outletIds.map((oid) => ({
+        outletId: oid,
+        inStock: data.inStock !== false,
+        isFeatured: !!data.featured,
+        isBestseller: !!data.bestseller,
+      }));
+    } else {
+      outletsConfig = activeOutletIds.map((oid) => ({
+        outletId: oid,
+        inStock: true,
+        isFeatured: false,
+        isBestseller: false,
+      }));
+    }
+
+    const assignedOutletIds = outletsConfig.map((o) => o.outletId);
 
     const newProduct: Product = {
       id: newId,
@@ -251,6 +322,7 @@ class AppStorage {
       chefSpecial: !!data.chefSpecial,
       active: data.active !== false,
       inStock: data.inStock !== false,
+      outlets: outletsConfig,
       outletIds: assignedOutletIds,
       ingredients: Array.isArray(data.ingredients) && data.ingredients.length > 0
         ? data.ingredients
@@ -284,6 +356,28 @@ class AppStorage {
       }
     }
 
+    let updatedOutlets = existing.outlets ? [...existing.outlets] : [];
+    if (data.outlets !== undefined) {
+      updatedOutlets = data.outlets.map((o: any) =>
+        typeof o === 'string'
+          ? { outletId: o, inStock: true, isFeatured: false, isBestseller: false }
+          : {
+              outletId: o.outletId,
+              inStock: o.inStock !== false,
+              isFeatured: !!o.isFeatured,
+              isBestseller: !!o.isBestseller,
+            }
+      );
+    } else if (data.outletIds !== undefined) {
+      // Retain configurations for kept outletIds, add new defaults if added
+      updatedOutlets = data.outletIds.map((oid) => {
+        const prev = existing.outlets?.find((o) => o.outletId === oid);
+        return prev || { outletId: oid, inStock: true, isFeatured: false, isBestseller: false };
+      });
+    }
+
+    const updatedOutletIds = updatedOutlets.map((o) => o.outletId);
+
     const updated: Product = {
       ...existing,
       ...data,
@@ -297,7 +391,8 @@ class AppStorage {
       inStock: data.inStock !== undefined ? !!data.inStock : existing.inStock !== false,
       featured: data.featured !== undefined ? !!data.featured : existing.featured,
       bestseller: data.bestseller !== undefined ? !!data.bestseller : existing.bestseller,
-      outletIds: data.outletIds !== undefined ? data.outletIds : existing.outletIds || [],
+      outlets: updatedOutlets,
+      outletIds: updatedOutletIds,
       image: data.image !== undefined ? data.image.trim() : existing.image,
       description: data.description !== undefined ? data.description.trim() : existing.description,
       shortDescription: data.shortDescription !== undefined ? data.shortDescription.trim() : existing.shortDescription,
@@ -312,6 +407,76 @@ class AppStorage {
     this.products[index] = updated;
     this.saveProducts();
     return updated;
+  }
+
+  public updateOutletProductConfig(
+    outletId: string,
+    productId: string | number,
+    config: { inStock?: boolean; isFeatured?: boolean; isBestseller?: boolean; isAssigned?: boolean; assigned?: boolean }
+  ): Product | null {
+    this.init();
+    const idStr = String(productId);
+    const index = this.products.findIndex((p) => String(p.id) === idStr);
+    if (index === -1) return null;
+
+    const product = this.products[index];
+    let outlets = Array.isArray(product.outlets) ? [...product.outlets] : [];
+
+    const isAssigned = config.isAssigned !== undefined ? config.isAssigned : config.assigned;
+    if (isAssigned === false) {
+      outlets = outlets.filter((o) => o.outletId !== outletId);
+    } else {
+      const existingIdx = outlets.findIndex((o) => o.outletId === outletId);
+      if (existingIdx >= 0) {
+        outlets[existingIdx] = {
+          ...outlets[existingIdx],
+          inStock: config.inStock !== undefined ? config.inStock : outlets[existingIdx].inStock,
+          isFeatured: config.isFeatured !== undefined ? config.isFeatured : outlets[existingIdx].isFeatured,
+          isBestseller: config.isBestseller !== undefined ? config.isBestseller : outlets[existingIdx].isBestseller,
+        };
+      } else {
+        outlets.push({
+          outletId,
+          inStock: config.inStock !== undefined ? config.inStock : true,
+          isFeatured: !!config.isFeatured,
+          isBestseller: !!config.isBestseller,
+        });
+      }
+    }
+
+    const outletIds = outlets.map((o) => o.outletId);
+    this.products[index] = {
+      ...product,
+      outlets,
+      outletIds,
+    };
+
+    this.saveProducts();
+    return this.products[index];
+  }
+
+  public batchUpdateOutletProducts(
+    outletId: string,
+    updates: {
+      productId: string | number;
+      isAssigned?: boolean;
+      inStock?: boolean;
+      isFeatured?: boolean;
+      isBestseller?: boolean;
+    }[]
+  ): Product[] {
+    this.init();
+    updates.forEach((item) => {
+      this.updateOutletProductConfig(outletId, item.productId, {
+        isAssigned: item.isAssigned,
+        inStock: item.inStock,
+        isFeatured: item.isFeatured,
+        isBestseller: item.isBestseller,
+      });
+    });
+
+    this.saveProducts();
+    return this.getAllProducts(true);
   }
 
   public deleteProduct(id: string | number): boolean {
@@ -416,8 +581,8 @@ class AppStorage {
       email: data.email?.trim() || undefined,
       minimumOrderValue: data.minimumOrderValue !== undefined ? Math.max(0, Number(data.minimumOrderValue)) : 200,
       freeDeliveryThreshold: data.freeDeliveryThreshold !== undefined ? Math.max(0, Number(data.freeDeliveryThreshold)) : 499,
-      deliveryFee: data.deliveryFee !== undefined ? Math.max(0, Number(data.deliveryFee)) : 40,
-      estimatedDeliveryTime: data.estimatedDeliveryTime?.trim() || '30-40 mins',
+      packagingFee: data.packagingFee !== undefined ? Math.max(0, Number(data.packagingFee)) : 25,
+      avgCookingTime: data.avgCookingTime?.trim() || data.estimatedDeliveryTime?.trim() || '25-35 mins',
       operatingHours: data.operatingHours?.trim() || '11:00 AM - 11:30 PM',
       latitude: data.latitude ? Number(data.latitude) : undefined,
       longitude: data.longitude ? Number(data.longitude) : undefined,
@@ -435,7 +600,6 @@ class AppStorage {
         outletId: newOutlet.id,
         pinCodes: [],
         deliveryFee: 40,
-        minimumOrderValue: 199,
         isActive: true,
       };
       this.zones.push(newZone);
@@ -470,8 +634,8 @@ class AppStorage {
       email: data.email !== undefined ? data.email.trim() : existing.email,
       minimumOrderValue: data.minimumOrderValue !== undefined ? Math.max(0, Number(data.minimumOrderValue)) : existing.minimumOrderValue,
       freeDeliveryThreshold: data.freeDeliveryThreshold !== undefined ? Math.max(0, Number(data.freeDeliveryThreshold)) : existing.freeDeliveryThreshold,
-      deliveryFee: data.deliveryFee !== undefined ? Math.max(0, Number(data.deliveryFee)) : existing.deliveryFee,
-      estimatedDeliveryTime: data.estimatedDeliveryTime !== undefined ? data.estimatedDeliveryTime.trim() : existing.estimatedDeliveryTime,
+      packagingFee: data.packagingFee !== undefined ? Math.max(0, Number(data.packagingFee)) : (existing.packagingFee ?? 25),
+      avgCookingTime: data.avgCookingTime !== undefined ? data.avgCookingTime.trim() : (existing.avgCookingTime || existing.estimatedDeliveryTime || '25-35 mins'),
       operatingHours: data.operatingHours !== undefined ? data.operatingHours.trim() : existing.operatingHours,
       assignedProductIds: data.assignedProductIds !== undefined ? data.assignedProductIds : existing.assignedProductIds,
       latitude: data.latitude !== undefined ? (data.latitude ? Number(data.latitude) : undefined) : existing.latitude,
@@ -801,9 +965,26 @@ class AppStorage {
     this.init();
     const totalProducts = this.products.length;
     const activeProducts = this.products.filter((p) => p.active !== false).length;
-    const outOfStockProducts = this.products.filter((p) => p.inStock === false).length;
-    const featuredProducts = this.products.filter((p) => p.featured && p.active !== false).length;
-    const bestsellerProducts = this.products.filter((p) => p.bestseller && p.active !== false).length;
+    const outOfStockProducts = this.products.filter((p) => {
+      if (p.outlets && p.outlets.length > 0) {
+        return p.outlets.every((o) => o.inStock === false);
+      }
+      return p.inStock === false;
+    }).length;
+    const featuredProducts = this.products.filter((p) => {
+      if (p.active === false) return false;
+      if (p.outlets && p.outlets.length > 0) {
+        return p.outlets.some((o) => o.isFeatured);
+      }
+      return !!p.featured;
+    }).length;
+    const bestsellerProducts = this.products.filter((p) => {
+      if (p.active === false) return false;
+      if (p.outlets && p.outlets.length > 0) {
+        return p.outlets.some((o) => o.isBestseller);
+      }
+      return !!p.bestseller;
+    }).length;
 
     const totalOutlets = this.outlets.length;
     const activeOutlets = this.outlets.filter((o) => o.isActive).length;

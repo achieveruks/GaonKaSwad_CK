@@ -206,11 +206,16 @@ export const LocationModal: React.FC<LocationModalProps> = ({ isOpen, onClose })
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="font-medium text-stone-500">Delivery Fee:</span>
-                    <span className="text-stone-800 font-medium">₹{successInfo.zone.deliveryFee}</span>
+                    <span className="text-stone-800 font-medium">
+                      ₹{successInfo.zone.deliveryFee}
+                      <span className="text-[10px] text-emerald-700 ml-1 font-semibold">
+                        (Free above ₹{successInfo.outlet.freeDeliveryThreshold ?? 499})
+                      </span>
+                    </span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="font-medium text-stone-500">Min. Order Value:</span>
-                    <span className="text-stone-800 font-medium">₹{successInfo.zone.minimumOrderValue}</span>
+                    <span className="text-stone-800 font-medium">₹{successInfo.outlet.minimumOrderValue ?? 200}</span>
                   </div>
                 </div>
 

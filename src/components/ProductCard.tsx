@@ -3,7 +3,12 @@ import { Product } from '../types';
 import { useCart } from '../context/CartContext';
 import { useNavigation } from '../context/NavigationContext';
 import { useLocation } from '../context/LocationContext';
-import { isProductAvailableAtOutlet } from '../lib/locationService';
+import {
+  isProductServedAtOutlet,
+  isProductInStockAtOutlet,
+  isProductFeaturedAtOutlet,
+  isProductBestsellerAtOutlet,
+} from '../lib/locationService';
 import { Star, Clock, Flame, Plus } from 'lucide-react';
 import { motion } from 'motion/react';
 
@@ -17,10 +22,11 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, viewMode = 'g
   const { goToProduct } = useNavigation();
   const { selectedLocation, setIsLocationModalOpen } = useLocation();
 
-  // Check outlet availability
-  const isAvailableHere = selectedLocation?.outletId
-    ? isProductAvailableAtOutlet(product, selectedLocation.outletId)
-    : true;
+  const currentOutletId = selectedLocation?.outletId;
+  const isServedHere = isProductServedAtOutlet(product, currentOutletId);
+  const isInStockHere = isProductInStockAtOutlet(product, currentOutletId);
+  const isFeaturedHere = isProductFeaturedAtOutlet(product, currentOutletId);
+  const isBestsellerHere = isProductBestsellerAtOutlet(product, currentOutletId);
 
   // Check if item is already in cart (default variant)
   const cartItemsForProduct = cart.filter((item) => item.product.id === product.id);
@@ -32,7 +38,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, viewMode = 'g
       setIsLocationModalOpen(true);
       return;
     }
-    if (product.inStock === false || !isAvailableHere) return;
+    if (!isServedHere || !isInStockHere) return;
 
     if (product.variants && product.variants.length > 0) {
       goToProduct(product.slug);
@@ -73,7 +79,9 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, viewMode = 'g
           <img
             src={product.image}
             alt={product.name}
-            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300 ease-out"
+            className={`w-full h-full object-cover group-hover:scale-105 transition-transform duration-300 ease-out ${
+              !isServedHere || !isInStockHere ? 'grayscale-[40%] opacity-85' : ''
+            }`}
             referrerPolicy="no-referrer"
             loading="lazy"
           />
@@ -84,24 +92,28 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, viewMode = 'g
           {/* Dietary & Badge Top Row */}
           <div className="absolute top-2 left-2 right-2 flex items-center justify-between pointer-events-none">
             <div className="flex items-center gap-1.5 flex-wrap">
-              {/* Out of Stock or Special Badges */}
-              {product.inStock === false ? (
+              {/* Not Served, Out of Stock or Special Badges */}
+              {!isServedHere ? (
+                <span className="px-2 py-0.5 bg-stone-800/95 text-stone-300 font-bold text-[10px] uppercase tracking-wider rounded shadow-2xs border border-stone-600">
+                  NOT AT OUTLET
+                </span>
+              ) : !isInStockHere ? (
                 <span className="px-2 py-0.5 bg-stone-900/90 text-amber-300 font-bold text-[10px] uppercase tracking-wider rounded shadow-2xs border border-amber-400/40">
                   OUT OF STOCK
                 </span>
-              ) : !isAvailableHere ? (
-                <span className="px-2 py-0.5 bg-stone-800/90 text-amber-200 font-bold text-[10px] uppercase tracking-wider rounded shadow-2xs border border-amber-400/30">
-                  OUTLET EXCLUSIVE
-                </span>
-              ) : product.bestseller ? (
+              ) : isBestsellerHere ? (
                 <span className="px-2 py-0.5 bg-emerald-600 text-white font-bold text-[10px] uppercase tracking-wider rounded shadow-2xs">
                   BESTSELLER
+                </span>
+              ) : isFeaturedHere ? (
+                <span className="px-2 py-0.5 bg-amber-700 text-white font-bold text-[10px] uppercase tracking-wider rounded shadow-2xs">
+                  FEATURED
                 </span>
               ) : product.spiceLevel === 'Spicy' || product.spiceLevel === 'Extra Spicy' ? (
                 <span className="px-2 py-0.5 bg-rose-600 text-white font-bold text-[10px] uppercase tracking-wider rounded shadow-2xs">
                   SPICY
                 </span>
-              ) : product.chefSpecial && !product.bestseller ? (
+              ) : product.chefSpecial ? (
                 <span className="px-2 py-0.5 bg-stone-900 text-white font-bold text-[10px] uppercase tracking-wider rounded shadow-2xs">
                   CHEF SPECIAL
                 </span>
@@ -170,13 +182,13 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, viewMode = 'g
         </div>
 
         {/* Cart Actions */}
-        {product.inStock === false ? (
-          <span className="text-[10px] font-bold text-stone-600 bg-stone-100 border border-stone-200 px-2 py-1 rounded-md">
-            Out of Stock
-          </span>
-        ) : !isAvailableHere ? (
-          <span className="text-[10px] font-bold text-stone-500 bg-stone-50 border border-stone-200 px-2 py-1 rounded-md">
+        {!isServedHere ? (
+          <span className="text-[10px] font-bold text-stone-500 bg-stone-100 border border-stone-200 px-2 py-1 rounded-md">
             Not at Outlet
+          </span>
+        ) : !isInStockHere ? (
+          <span className="text-[10px] font-bold text-amber-900 bg-amber-50 border border-amber-200 px-2 py-1 rounded-md">
+            Out of Stock
           </span>
         ) : totalQuantityInCart > 0 ? (
           <div
