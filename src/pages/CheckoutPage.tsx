@@ -22,6 +22,7 @@ import {
   PhoneCall,
   Utensils,
   Store,
+  AlertCircle,
 } from 'lucide-react';
 import { motion } from 'motion/react';
 
@@ -45,26 +46,32 @@ export const CheckoutPage: React.FC = () => {
 
   // Form State
   const [formData, setFormData] = useState<CheckoutFormData>({
-    fullName: 'Rahul Sharma',
-    email: 'rahul.sharma@example.com',
-    phone: '9876543210',
-    address: 'Flat 402, Royal Palms, Hill Road',
-    landmark: 'Near Bandra Station West',
-    city: selectedLocation ? selectedLocation.outletName.split('-')[0].trim() : 'Bangalore',
-    state: 'Karnataka',
-    pincode: selectedLocation ? selectedLocation.pinCode : '560038',
+    fullName: '',
+    email: '',
+    phone: '',
+    address: '',
+    landmark: '',
+    city: selectedLocation?.cityName || '',
+    state: selectedLocation?.stateName || '',
+    pincode: selectedLocation ? selectedLocation.pinCode : '',
     deliverySlot: 'immediate',
     deliveryNotes: specialInstructions || '',
     paymentMethod: 'upi',
     includeCutlery,
   });
 
+  // Validation State
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [touched, setTouched] = useState<Record<string, boolean>>({});
+
   // Sync with selected location
   useEffect(() => {
     if (selectedLocation) {
       setFormData((prev) => ({
         ...prev,
-        pincode: selectedLocation.pinCode,
+        pincode: selectedLocation.pinCode || prev.pincode,
+        city: selectedLocation.cityName || prev.city,
+        state: selectedLocation.stateName || prev.state,
       }));
     }
   }, [selectedLocation]);
@@ -74,6 +81,70 @@ export const CheckoutPage: React.FC = () => {
   const [orderStage, setOrderStage] = useState<
     'Received' | 'Preparing in Kitchen' | 'Out for Delivery' | 'Delivered'
   >('Received');
+
+  // Form Validation Logic
+  const validateField = (name: string, value: string): string => {
+    const trimmed = (value || '').trim();
+
+    if (name === 'fullName') {
+      if (!trimmed) return 'Please enter your full name';
+      if (/^\d+$/.test(trimmed)) return 'Full name cannot be numbers only. Please enter a valid name';
+      if (!/[a-zA-Z]/.test(trimmed)) return 'Full name must contain letters (e.g. Rahul Sharma)';
+      if (!/^[a-zA-Z\s.'-]+$/.test(trimmed)) return 'Full name should only contain letters and standard spacing';
+      if (trimmed.replace(/[^a-zA-Z]/g, '').length < 2) return 'Please enter at least 2 letters for your name';
+      return '';
+    }
+
+    if (name === 'phone') {
+      if (!trimmed) return 'Please enter your 10-digit mobile number';
+      const cleanDigits = trimmed.replace(/\D/g, '');
+      if (cleanDigits.length !== 10) return 'Mobile number must be exactly 10 digits (e.g. 9876543210)';
+      if (!/^[6-9]\d{9}$/.test(cleanDigits)) return 'Please enter a valid 10-digit Indian mobile number';
+      return '';
+    }
+
+    if (name === 'email') {
+      if (!trimmed) return ''; // Email is optional
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(trimmed)) return 'Please enter a valid email address (e.g. name@example.com)';
+      return '';
+    }
+
+    if (name === 'address') {
+      if (!trimmed) return 'Please enter your complete delivery address';
+      if (trimmed.length < 5) return 'Please enter a detailed delivery address (minimum 5 characters)';
+      return '';
+    }
+
+    if (name === 'city') {
+      if (!trimmed) return 'Please enter your city';
+      return '';
+    }
+
+    if (name === 'state') {
+      if (!trimmed) return 'Please enter your state';
+      return '';
+    }
+
+    if (name === 'pincode') {
+      if (!trimmed) return 'Please enter your 6-digit PIN code';
+      if (!/^\d{6}$/.test(trimmed)) return 'Please enter a valid 6-digit PIN code';
+      return '';
+    }
+
+    return '';
+  };
+
+  const validateAll = (data: CheckoutFormData): Record<string, string> => {
+    const errs: Record<string, string> = {};
+    const fieldsToValidate = ['fullName', 'phone', 'email', 'address', 'city', 'state', 'pincode'];
+    
+    for (const f of fieldsToValidate) {
+      const err = validateField(f, (data as any)[f]);
+      if (err) errs[f] = err;
+    }
+    return errs;
+  };
 
   // Launch confetti on order success
   useEffect(() => {
@@ -99,16 +170,55 @@ export const CheckoutPage: React.FC = () => {
     e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>
   ) => {
     const { name, value, type } = e.target;
+    let nextValue: any = value;
     if (type === 'checkbox') {
-      const checked = (e.target as HTMLInputElement).checked;
-      setFormData((prev) => ({ ...prev, [name]: checked }));
-    } else {
-      setFormData((prev) => ({ ...prev, [name]: value }));
+      nextValue = (e.target as HTMLInputElement).checked;
+    } else if (name === 'phone') {
+      nextValue = value.replace(/\D/g, '').slice(0, 10);
+    } else if (name === 'pincode') {
+      nextValue = value.replace(/\D/g, '').slice(0, 6);
     }
+
+    const nextForm = { ...formData, [name]: nextValue };
+    setFormData(nextForm);
+
+    if (touched[name]) {
+      const err = validateField(name, nextValue);
+      setErrors((prev) => ({ ...prev, [name]: err }));
+    }
+  };
+
+  const handleBlur = (field: string) => {
+    setTouched((prev) => ({ ...prev, [field]: true }));
+    const err = validateField(field, (formData as any)[field]);
+    setErrors((prev) => ({ ...prev, [field]: err }));
   };
 
   const handleSubmitOrder = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    const validationErrors = validateAll(formData);
+    setErrors(validationErrors);
+    setTouched({
+      fullName: true,
+      phone: true,
+      email: true,
+      address: true,
+      city: true,
+      state: true,
+      pincode: true,
+    });
+
+    if (Object.keys(validationErrors).length > 0) {
+      const firstKey = Object.keys(validationErrors)[0];
+      const el = document.querySelector(`[name="${firstKey}"]`) as HTMLElement;
+      if (el) {
+        el.focus();
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+      return;
+    }
+
     if (cart.length === 0) return;
 
     setIsSubmitting(true);
@@ -450,7 +560,7 @@ export const CheckoutPage: React.FC = () => {
         )}
       </div>
 
-      <form onSubmit={handleSubmitOrder}>
+      <form onSubmit={handleSubmitOrder} noValidate id="checkout-form">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
           {/* Left Column: Form Details (7 cols) */}
           <div className="lg:col-span-7 space-y-4">
@@ -466,21 +576,32 @@ export const CheckoutPage: React.FC = () => {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold text-gray-700 mb-1">
-                    Full Name *
+                    Full Name <span className="text-rose-600">*</span>
                   </label>
                   <input
                     type="text"
-                    required
                     name="fullName"
                     value={formData.fullName}
                     onChange={handleChange}
-                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs sm:text-sm focus:outline-none focus:border-orange-500 focus:bg-white"
+                    onBlur={() => handleBlur('fullName')}
+                    placeholder="e.g. Rahul Sharma"
+                    className={`w-full px-3 py-2 bg-gray-50 border rounded-xl text-xs sm:text-sm focus:outline-none transition-colors ${
+                      touched.fullName && errors.fullName
+                        ? 'border-rose-500 bg-rose-50/40 focus:border-rose-600 text-rose-950'
+                        : 'border-gray-200 focus:border-orange-500 focus:bg-white text-gray-900'
+                    }`}
                   />
+                  {touched.fullName && errors.fullName && (
+                    <p className="mt-1 text-[11px] text-rose-600 font-medium flex items-center gap-1">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                      <span>{errors.fullName}</span>
+                    </p>
+                  )}
                 </div>
 
                 <div>
                   <label className="block text-xs font-semibold text-gray-700 mb-1">
-                    Phone Number *
+                    Phone Number <span className="text-rose-600">*</span>
                   </label>
                   <div className="relative">
                     <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-gray-500">
@@ -488,29 +609,53 @@ export const CheckoutPage: React.FC = () => {
                     </span>
                     <input
                       type="tel"
-                      required
                       name="phone"
-                      pattern="[0-9]{10}"
+                      maxLength={10}
                       value={formData.phone}
                       onChange={handleChange}
+                      onBlur={() => handleBlur('phone')}
                       placeholder="10-digit mobile number"
-                      className="w-full pl-10 pr-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs sm:text-sm focus:outline-none focus:border-orange-500 focus:bg-white"
+                      className={`w-full pl-10 pr-3 py-2 bg-gray-50 border rounded-xl text-xs sm:text-sm focus:outline-none transition-colors ${
+                        touched.phone && errors.phone
+                          ? 'border-rose-500 bg-rose-50/40 focus:border-rose-600 text-rose-950'
+                          : 'border-gray-200 focus:border-orange-500 focus:bg-white text-gray-900'
+                      }`}
                     />
                   </div>
+                  {touched.phone && errors.phone && (
+                    <p className="mt-1 text-[11px] text-rose-600 font-medium flex items-center gap-1">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                      <span>{errors.phone}</span>
+                    </p>
+                  )}
                 </div>
 
                 <div className="sm:col-span-2">
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">
-                    Email Address *
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-semibold text-gray-700">
+                      Email Address <span className="text-stone-400 font-normal">(Optional)</span>
+                    </label>
+                    <span className="text-[10px] text-stone-400">For digital invoice & order tracking</span>
+                  </div>
                   <input
                     type="email"
-                    required
                     name="email"
                     value={formData.email}
                     onChange={handleChange}
-                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs sm:text-sm focus:outline-none focus:border-orange-500 focus:bg-white"
+                    onBlur={() => handleBlur('email')}
+                    placeholder="e.g. name@example.com (optional)"
+                    className={`w-full px-3 py-2 bg-gray-50 border rounded-xl text-xs sm:text-sm focus:outline-none transition-colors ${
+                      touched.email && errors.email
+                        ? 'border-rose-500 bg-rose-50/40 focus:border-rose-600 text-rose-950'
+                        : 'border-gray-200 focus:border-orange-500 focus:bg-white text-gray-900'
+                    }`}
                   />
+                  {touched.email && errors.email && (
+                    <p className="mt-1 text-[11px] text-rose-600 font-medium flex items-center gap-1">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                      <span>{errors.email}</span>
+                    </p>
+                  )}
                 </div>
               </div>
             </div>
@@ -527,21 +672,32 @@ export const CheckoutPage: React.FC = () => {
               <div className="space-y-3">
                 <div>
                   <label className="block text-xs font-semibold text-gray-700 mb-1">
-                    Complete Address (Flat / House No / Building / Street) *
+                    Complete Address (Flat / House No / Building / Street) <span className="text-rose-600">*</span>
                   </label>
                   <input
                     type="text"
-                    required
                     name="address"
                     value={formData.address}
                     onChange={handleChange}
-                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs sm:text-sm focus:outline-none focus:border-orange-500 focus:bg-white"
+                    onBlur={() => handleBlur('address')}
+                    placeholder="e.g. Flat 301, Silver Heights, MG Road"
+                    className={`w-full px-3 py-2 bg-gray-50 border rounded-xl text-xs sm:text-sm focus:outline-none transition-colors ${
+                      touched.address && errors.address
+                        ? 'border-rose-500 bg-rose-50/40 focus:border-rose-600 text-rose-950'
+                        : 'border-gray-200 focus:border-orange-500 focus:bg-white text-gray-900'
+                    }`}
                   />
+                  {touched.address && errors.address && (
+                    <p className="mt-1 text-[11px] text-rose-600 font-medium flex items-center gap-1">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                      <span>{errors.address}</span>
+                    </p>
+                  )}
                 </div>
 
                 <div>
                   <label className="block text-xs font-semibold text-gray-700 mb-1">
-                    Landmark (Optional)
+                    Landmark <span className="text-stone-400 font-normal">(Optional)</span>
                   </label>
                   <input
                     type="text"
@@ -556,45 +712,68 @@ export const CheckoutPage: React.FC = () => {
                 <div className="grid grid-cols-3 gap-2.5">
                   <div>
                     <label className="block text-xs font-semibold text-gray-700 mb-1">
-                      City *
+                      City <span className="text-rose-600">*</span>
                     </label>
                     <input
                       type="text"
-                      required
                       name="city"
+                      placeholder="e.g. Bangalore"
                       value={formData.city}
                       onChange={handleChange}
-                      className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs sm:text-sm focus:outline-none focus:border-orange-500 focus:bg-white"
+                      onBlur={() => handleBlur('city')}
+                      className={`w-full px-3 py-2 bg-gray-50 border rounded-xl text-xs sm:text-sm focus:outline-none transition-colors ${
+                        touched.city && errors.city
+                          ? 'border-rose-500 bg-rose-50/40 focus:border-rose-600 text-rose-950'
+                          : 'border-gray-200 focus:border-orange-500 focus:bg-white text-gray-900'
+                      }`}
                     />
+                    {touched.city && errors.city && (
+                      <p className="mt-1 text-[10px] text-rose-600 font-medium">{errors.city}</p>
+                    )}
                   </div>
 
                   <div>
                     <label className="block text-xs font-semibold text-gray-700 mb-1">
-                      State *
+                      State <span className="text-rose-600">*</span>
                     </label>
                     <input
                       type="text"
-                      required
                       name="state"
+                      placeholder="e.g. Karnataka"
                       value={formData.state}
                       onChange={handleChange}
-                      className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs sm:text-sm focus:outline-none focus:border-orange-500 focus:bg-white"
+                      onBlur={() => handleBlur('state')}
+                      className={`w-full px-3 py-2 bg-gray-50 border rounded-xl text-xs sm:text-sm focus:outline-none transition-colors ${
+                        touched.state && errors.state
+                          ? 'border-rose-500 bg-rose-50/40 focus:border-rose-600 text-rose-950'
+                          : 'border-gray-200 focus:border-orange-500 focus:bg-white text-gray-900'
+                      }`}
                     />
+                    {touched.state && errors.state && (
+                      <p className="mt-1 text-[10px] text-rose-600 font-medium">{errors.state}</p>
+                    )}
                   </div>
 
                   <div>
                     <label className="block text-xs font-semibold text-gray-700 mb-1">
-                      PIN Code *
+                      PIN Code <span className="text-rose-600">*</span>
                     </label>
                     <input
                       type="text"
-                      required
                       name="pincode"
-                      pattern="[0-9]{6}"
+                      maxLength={6}
                       value={formData.pincode}
                       onChange={handleChange}
-                      className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs sm:text-sm focus:outline-none focus:border-orange-500 focus:bg-white"
+                      onBlur={() => handleBlur('pincode')}
+                      className={`w-full px-3 py-2 bg-gray-50 border rounded-xl text-xs sm:text-sm focus:outline-none transition-colors ${
+                        touched.pincode && errors.pincode
+                          ? 'border-rose-500 bg-rose-50/40 focus:border-rose-600 text-rose-950'
+                          : 'border-gray-200 focus:border-orange-500 focus:bg-white text-gray-900'
+                      }`}
                     />
+                    {touched.pincode && errors.pincode && (
+                      <p className="mt-1 text-[10px] text-rose-600 font-medium">{errors.pincode}</p>
+                    )}
                   </div>
                 </div>
 

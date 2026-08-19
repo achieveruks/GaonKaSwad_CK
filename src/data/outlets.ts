@@ -17,6 +17,14 @@ export const INITIAL_OUTLETS: Outlet[] = [
     packagingFee: 25,
     avgCookingTime: '25-35 mins',
     operatingHours: '11:00 AM - 11:30 PM',
+    heroFireLine: 'ARTISANAL CLOUD KITCHEN • SLOW-COOKED DUM',
+    heroHeader: 'Authentic Indian Flavors, Slow-Cooked to Perfection',
+    heroDescription:
+      'Experience royal dum biryanis, 24-hour slow-simmered dal makhani, and smoky clay-oven tandoori grills, delivered piping hot to your doorstep in sealed eco-handis.',
+    trustBadgeRating: '4.9 ★ (2.8k+)',
+    trustBadgeRatingSub: 'Google & Zomato',
+    trustBadgeUsp: '100% Pure',
+    trustBadgeUspSub: 'Desi Ghee Recipe',
   },
   {
     id: 'blr-whitefield',
@@ -34,6 +42,14 @@ export const INITIAL_OUTLETS: Outlet[] = [
     packagingFee: 30,
     avgCookingTime: '30-40 mins',
     operatingHours: '11:00 AM - 11:30 PM',
+    heroFireLine: 'ARTISANAL CLOUD KITCHEN • SLOW-COOKED DUM',
+    heroHeader: 'Authentic Indian Flavors, Slow-Cooked to Perfection',
+    heroDescription:
+      'Experience royal dum biryanis, 24-hour slow-simmered dal makhani, and smoky clay-oven tandoori grills, delivered piping hot to your doorstep in sealed eco-handis.',
+    trustBadgeRating: '4.9 ★ (2.8k+)',
+    trustBadgeRatingSub: 'Google & Zomato',
+    trustBadgeUsp: '100% Pure',
+    trustBadgeUspSub: 'Desi Ghee Recipe',
   },
   {
     id: 'blr-indiranagar',
@@ -51,6 +67,14 @@ export const INITIAL_OUTLETS: Outlet[] = [
     packagingFee: 25,
     avgCookingTime: '20-30 mins',
     operatingHours: '11:00 AM - 11:30 PM',
+    heroFireLine: 'ARTISANAL CLOUD KITCHEN • SLOW-COOKED DUM',
+    heroHeader: 'Authentic Indian Flavors, Slow-Cooked to Perfection',
+    heroDescription:
+      'Experience royal dum biryanis, 24-hour slow-simmered dal makhani, and smoky clay-oven tandoori grills, delivered piping hot to your doorstep in sealed eco-handis.',
+    trustBadgeRating: '4.9 ★ (2.8k+)',
+    trustBadgeRatingSub: 'Google & Zomato',
+    trustBadgeUsp: '100% Pure',
+    trustBadgeUspSub: 'Desi Ghee Recipe',
   },
   {
     id: 'bbsr-patia',
@@ -68,6 +92,14 @@ export const INITIAL_OUTLETS: Outlet[] = [
     packagingFee: 20,
     avgCookingTime: '25-35 mins',
     operatingHours: '11:30 AM - 11:00 PM',
+    heroFireLine: 'ARTISANAL CLOUD KITCHEN • SLOW-COOKED DUM',
+    heroHeader: 'Authentic Indian Flavors, Slow-Cooked to Perfection',
+    heroDescription:
+      'Experience royal dum biryanis, 24-hour slow-simmered dal makhani, and smoky clay-oven tandoori grills, delivered piping hot to your doorstep in sealed eco-handis.',
+    trustBadgeRating: '4.9 ★ (2.8k+)',
+    trustBadgeRatingSub: 'Google & Zomato',
+    trustBadgeUsp: '100% Pure',
+    trustBadgeUspSub: 'Desi Ghee Recipe',
   },
   {
     id: 'bbsr-khandagiri',
@@ -85,6 +117,14 @@ export const INITIAL_OUTLETS: Outlet[] = [
     packagingFee: 20,
     avgCookingTime: '25-35 mins',
     operatingHours: '11:30 AM - 11:00 PM',
+    heroFireLine: 'ARTISANAL CLOUD KITCHEN • SLOW-COOKED DUM',
+    heroHeader: 'Authentic Indian Flavors, Slow-Cooked to Perfection',
+    heroDescription:
+      'Experience royal dum biryanis, 24-hour slow-simmered dal makhani, and smoky clay-oven tandoori grills, delivered piping hot to your doorstep in sealed eco-handis.',
+    trustBadgeRating: '4.9 ★ (2.8k+)',
+    trustBadgeRatingSub: 'Google & Zomato',
+    trustBadgeUsp: '100% Pure',
+    trustBadgeUspSub: 'Desi Ghee Recipe',
   },
 ];
 

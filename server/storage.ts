@@ -40,6 +40,15 @@ class AppStorage {
             ...o,
             packagingFee: o.packagingFee !== undefined ? Number(o.packagingFee) : 25,
             avgCookingTime: o.avgCookingTime || o.estimatedDeliveryTime || '25-35 mins',
+            heroFireLine: o.heroFireLine || 'ARTISANAL CLOUD KITCHEN • SLOW-COOKED DUM',
+            heroHeader: o.heroHeader || 'Authentic Indian Flavors, Slow-Cooked to Perfection',
+            heroDescription:
+              o.heroDescription ||
+              'Experience royal dum biryanis, 24-hour slow-simmered dal makhani, and smoky clay-oven tandoori grills, delivered piping hot to your doorstep in sealed eco-handis.',
+            trustBadgeRating: o.trustBadgeRating || '4.9 ★ (2.8k+)',
+            trustBadgeRatingSub: o.trustBadgeRatingSub || 'Google & Zomato',
+            trustBadgeUsp: o.trustBadgeUsp || '100% Pure',
+            trustBadgeUspSub: o.trustBadgeUspSub || 'Desi Ghee Recipe',
           }));
         } else {
           this.outlets = [...INITIAL_OUTLETS];

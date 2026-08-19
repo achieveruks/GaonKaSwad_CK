@@ -16,6 +16,13 @@ export interface Outlet {
   deliveryFee?: number;
   estimatedDeliveryTime?: string;
   operatingHours?: string;
+  heroFireLine?: string;
+  heroHeader?: string;
+  heroDescription?: string;
+  trustBadgeRating?: string;
+  trustBadgeRatingSub?: string;
+  trustBadgeUsp?: string;
+  trustBadgeUspSub?: string;
   assignedProductIds?: string[];
   createdAt?: string;
   updatedAt?: string;

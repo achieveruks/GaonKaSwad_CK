@@ -40,28 +40,32 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, viewMode = 'g
     }
     if (!isServedHere || !isInStockHere) return;
 
-    if (product.variants && product.variants.length > 0) {
-      goToProduct(product.slug);
-    } else {
-      addToCart(product, 1);
-    }
+    // Pick default variant if variants exist
+    const defaultVariant =
+      product.variants && product.variants.length > 0
+        ? product.variants.find((v) => v.price === product.price) || product.variants[0]
+        : undefined;
+
+    addToCart(product, 1, defaultVariant);
   };
 
   const handleIncrement = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (cartItemsForProduct.length === 1) {
+    if (cartItemsForProduct.length >= 1) {
       updateQuantity(cartItemsForProduct[0].id, 1);
     } else {
-      goToProduct(product.slug);
+      const defaultVariant =
+        product.variants && product.variants.length > 0
+          ? product.variants.find((v) => v.price === product.price) || product.variants[0]
+          : undefined;
+      addToCart(product, 1, defaultVariant);
     }
   };
 
   const handleDecrement = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (cartItemsForProduct.length === 1) {
-      updateQuantity(cartItemsForProduct[0].id, -1);
-    } else {
-      goToProduct(product.slug);
+    if (cartItemsForProduct.length >= 1) {
+      updateQuantity(cartItemsForProduct[cartItemsForProduct.length - 1].id, -1);
     }
   };
 

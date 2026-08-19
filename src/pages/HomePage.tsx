@@ -1,10 +1,17 @@
-import React from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigation } from '../context/NavigationContext';
 import { useCart } from '../context/CartContext';
 import { useProducts } from '../context/ProductContext';
+import { useLocation } from '../context/LocationContext';
 import { CATEGORIES } from '../data/products';
 import { ProductCard } from '../components/ProductCard';
 import { CategoryCard } from '../components/CategoryCard';
+import {
+  isProductServedAtOutlet,
+  isProductInStockAtOutlet,
+  isProductFeaturedAtOutlet,
+  isProductBestsellerAtOutlet,
+} from '../lib/locationService';
 import {
   Flame,
   ArrowRight,
@@ -16,17 +23,117 @@ import {
   Truck,
   Heart,
   ChevronRight,
+  ChevronLeft,
   Tag,
   CheckCircle2,
   Soup,
   Quote
 } from 'lucide-react';
-import { motion } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
 
 export const HomePage: React.FC = () => {
   const { goToShop, goToProduct, goToCategories, goToAbout } = useNavigation();
   const { addToCart } = useCart();
   const { activeProducts } = useProducts();
+  const { currentZone, currentOutlet, selectedLocation } = useLocation();
+
+  const deliveryTime =
+    currentZone?.estimatedDeliveryTime ||
+    currentOutlet?.estimatedDeliveryTime ||
+    currentOutlet?.avgCookingTime ||
+    '30–40 Mins';
+
+  // Dynamic hero texts from selected outlet with sensible defaults
+  const heroFireLine = (
+    currentOutlet?.heroFireLine || 'ARTISANAL CLOUD KITCHEN • SLOW-COOKED DUM'
+  ).toUpperCase();
+
+  const heroHeader =
+    currentOutlet?.heroHeader || 'Authentic Indian Flavors, Slow-Cooked to Perfection';
+
+  // Split heroHeader by comma to display the second part in accent orange
+  const headerParts = useMemo(() => {
+    if (!heroHeader.includes(',')) {
+      return { part1: heroHeader, part2: '' };
+    }
+    const commaIndex = heroHeader.indexOf(',');
+    return {
+      part1: heroHeader.slice(0, commaIndex + 1),
+      part2: heroHeader.slice(commaIndex + 1).trim(),
+    };
+  }, [heroHeader]);
+
+  const heroDescription =
+    currentOutlet?.heroDescription ||
+    'Experience royal dum biryanis, 24-hour slow-simmered dal makhani, and smoky clay-oven tandoori grills, delivered piping hot to your doorstep in sealed eco-handis.';
+
+  const trustBadgeRating = currentOutlet?.trustBadgeRating || '4.9 ★ (2.8k+)';
+  const trustBadgeRatingSub = currentOutlet?.trustBadgeRatingSub || 'Google & Zomato';
+  const trustBadgeUsp = currentOutlet?.trustBadgeUsp || '100% Pure';
+  const trustBadgeUspSub = currentOutlet?.trustBadgeUspSub || 'Desi Ghee Recipe';
+
+  // Outlet-scoped products for the carousel
+  const outletId = selectedLocation?.outletId || currentOutlet?.id;
+
+  const outletAvailableProducts = useMemo(() => {
+    return activeProducts.filter((p) => {
+      if (!outletId) return p.inStock !== false;
+      return isProductServedAtOutlet(p, outletId) && isProductInStockAtOutlet(p, outletId);
+    });
+  }, [activeProducts, outletId]);
+
+  // Composition rules for Hero Carousel:
+  // Primary Selection: Up to 3 bestsellers + up to 2 featured (Max 5)
+  // Rule A: If bestseller + featured count < 5, show that many items (can be 4/3/2/1)
+  // Rule B: If bestseller + featured === 0, fallback to first 3 items
+  // Rule C: If total outlet items < 3, show all available items
+  const carouselItems = useMemo(() => {
+    const bestsellers = outletAvailableProducts.filter((p) =>
+      outletId ? isProductBestsellerAtOutlet(p, outletId) : !!p.bestseller
+    );
+
+    const featured = outletAvailableProducts.filter((p) => {
+      const isBs = outletId ? isProductBestsellerAtOutlet(p, outletId) : !!p.bestseller;
+      const isFt = outletId ? isProductFeaturedAtOutlet(p, outletId) : !!p.featured;
+      return isFt && !isBs;
+    });
+
+    const chosenBestsellers = bestsellers.slice(0, 3);
+    const chosenFeatured = featured.slice(0, 2);
+    let items = [...chosenBestsellers, ...chosenFeatured];
+
+    // Rule B: fallback to first 3 items
+    if (items.length === 0) {
+      items = outletAvailableProducts.slice(0, 3);
+    }
+
+    // Rule C: fallback to all available products
+    if (items.length === 0 && activeProducts.length > 0) {
+      items = activeProducts.slice(0, 3);
+    }
+
+    return items;
+  }, [outletAvailableProducts, outletId, activeProducts]);
+
+  // Carousel state and rotation
+  const [currentSlide, setCurrentSlide] = useState(0);
+  const [isPaused, setIsPaused] = useState(false);
+
+  useEffect(() => {
+    setCurrentSlide(0);
+  }, [carouselItems.length, outletId]);
+
+  useEffect(() => {
+    if (carouselItems.length <= 1 || isPaused) return;
+
+    const timer = setInterval(() => {
+      setCurrentSlide((prev) => (prev + 1) % carouselItems.length);
+    }, 4500);
+
+    return () => clearInterval(timer);
+  }, [carouselItems.length, isPaused]);
+
+  const activeItem = carouselItems[currentSlide] || carouselItems[0];
 
   const bestsellers = activeProducts.filter((p) => p.bestseller).slice(0, 4);
   const chefSignatures = activeProducts.filter((p) => p.chefSpecial).slice(0, 4);
@@ -47,21 +154,23 @@ export const HomePage: React.FC = () => {
             >
               {/* Pill badge */}
               <div className="inline-flex items-center gap-1.5 bg-orange-50 text-orange-800 border border-orange-200 px-3 py-1 rounded-full text-xs font-bold tracking-wide shadow-xs mx-auto lg:mx-0">
-                <Flame className="w-3.5 h-3.5 text-orange-600 fill-orange-600" />
-                <span>ARTISANAL CLOUD KITCHEN • SLOW-COOKED DUM</span>
+                <Flame className="w-3.5 h-3.5 text-orange-600 fill-orange-600 shrink-0" />
+                <span>{heroFireLine}</span>
               </div>
 
               {/* Main Headline */}
               <h1 className="font-extrabold text-3xl sm:text-4xl lg:text-5xl text-gray-900 tracking-tight leading-tight">
-                Authentic Indian Flavors,{' '}
-                <span className="text-orange-600">
-                  Slow-Cooked to Perfection
-                </span>
+                {headerParts.part1}{' '}
+                {headerParts.part2 && (
+                  <span className="text-orange-600">
+                    {headerParts.part2}
+                  </span>
+                )}
               </h1>
 
               {/* Subtitle */}
               <p className="text-xs sm:text-sm text-gray-600 max-w-xl mx-auto lg:mx-0 leading-relaxed">
-                Experience royal Nizami dum biryanis, 24-hour slow-simmered dal makhani, and smoky clay-oven tandoori grills, delivered piping hot to your doorstep in sealed eco-handis.
+                {heroDescription}
               </p>
 
               {/* Dual CTA Buttons */}
@@ -91,15 +200,15 @@ export const HomePage: React.FC = () => {
                 <div className="flex items-center gap-2">
                   <Star className="w-4 h-4 text-amber-400 fill-amber-400 shrink-0" />
                   <div className="text-left">
-                    <p className="font-bold text-xs text-gray-900">4.9 ★ (2.8k+)</p>
-                    <p className="text-[10px] text-gray-400">Google & Zomato</p>
+                    <p className="font-bold text-xs text-gray-900">{trustBadgeRating}</p>
+                    <p className="text-[10px] text-gray-400">{trustBadgeRatingSub}</p>
                   </div>
                 </div>
 
                 <div className="flex items-center gap-2">
                   <Clock className="w-4 h-4 text-orange-600 shrink-0" />
                   <div className="text-left">
-                    <p className="font-bold text-xs text-gray-900">30–40 Mins</p>
+                    <p className="font-bold text-xs text-gray-900">{deliveryTime}</p>
                     <p className="text-[10px] text-gray-400">Express Delivery</p>
                   </div>
                 </div>
@@ -107,54 +216,140 @@ export const HomePage: React.FC = () => {
                 <div className="flex items-center gap-2">
                   <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
                   <div className="text-left">
-                    <p className="font-bold text-xs text-gray-900">100% Pure</p>
-                    <p className="text-[10px] text-gray-400">Desi Ghee Recipe</p>
+                    <p className="font-bold text-xs text-gray-900">{trustBadgeUsp}</p>
+                    <p className="text-[10px] text-gray-400">{trustBadgeUspSub}</p>
                   </div>
                 </div>
               </div>
             </motion.div>
 
-            {/* Right Visual (5 cols) */}
+            {/* Right Visual (5 cols) - Interactive Carousel */}
             <motion.div
               initial={{ opacity: 0, scale: 0.98 }}
               animate={{ opacity: 1, scale: 1 }}
               transition={{ duration: 0.4, delay: 0.1 }}
               className="lg:col-span-5 relative"
+              onMouseEnter={() => setIsPaused(true)}
+              onMouseLeave={() => setIsPaused(false)}
             >
-              <div className="relative mx-auto max-w-md lg:max-w-none aspect-4/3 sm:aspect-square rounded-2xl overflow-hidden shadow-lg border border-gray-200 bg-gray-900">
-                <img
-                  src="https://images.unsplash.com/photo-1563379091339-03b21ab4a4f8?q=80&w=1000&auto=format&fit=crop"
-                  alt="Authentic Nizami Dum Biryani"
-                  className="w-full h-full object-cover"
-                  referrerPolicy="no-referrer"
-                />
-                <div className="absolute inset-0 bg-gradient-to-t from-gray-950/80 via-transparent to-transparent" />
+              {activeItem ? (
+                <div className="relative mx-auto max-w-md lg:max-w-none aspect-4/3 sm:aspect-square rounded-2xl overflow-hidden shadow-lg border border-gray-200 bg-gray-900 select-none">
+                  <AnimatePresence mode="wait">
+                    <motion.img
+                      key={activeItem.id}
+                      src={activeItem.image || activeItem.imageUrl || activeItem.galleryImages?.[0] || 'https://images.unsplash.com/photo-1563379091339-03b21ab4a4f8?q=80&w=1000&auto=format&fit=crop'}
+                      alt={activeItem.name}
+                      initial={{ opacity: 0, scale: 1.05 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0 }}
+                      transition={{ duration: 0.45 }}
+                      className="w-full h-full object-cover"
+                      referrerPolicy="no-referrer"
+                    />
+                  </AnimatePresence>
 
-                {/* Floating Bottom Card */}
-                <div className="absolute bottom-3 left-3 right-3 bg-gray-900/90 backdrop-blur-md rounded-xl p-3 border border-gray-700/60 text-white flex items-center justify-between shadow-md">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-9 h-9 rounded-lg bg-orange-500/20 border border-orange-500/40 text-orange-400 flex items-center justify-center font-bold">
-                      <Flame className="w-4 h-4 fill-orange-400" />
+                  <div className="absolute inset-0 bg-gradient-to-t from-gray-950/85 via-black/20 to-black/40" />
+
+                  {/* Top Left Carousel Pagination Dots */}
+                  {carouselItems.length > 1 && (
+                    <div className="absolute top-3 sm:top-3.5 left-3 sm:left-3.5 flex items-center gap-1.5 z-20 bg-black/50 backdrop-blur-md px-2.5 py-1 rounded-full border border-white/10 shadow-sm">
+                      {carouselItems.map((item, idx) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setCurrentSlide(idx);
+                          }}
+                          className={`h-1.5 rounded-full transition-all duration-300 ${
+                            idx === currentSlide
+                              ? 'w-5 bg-orange-500'
+                              : 'w-1.5 bg-white/50 hover:bg-white/90'
+                          }`}
+                          title={`Slide ${idx + 1}: ${item.name}`}
+                        />
+                      ))}
                     </div>
-                    <div>
-                      <p className="text-[10px] font-semibold text-orange-400 uppercase">Today&apos;s Special</p>
-                      <h4 className="font-bold text-xs text-white">
-                        Nizami Royal Dum Biryani
-                      </h4>
+                  )}
+
+                  {/* Top Right Badges: Bestseller / Featured / Chef's Special (All applicable icons, smaller responsive size) & Veg Indicator */}
+                  <div className="absolute top-3 sm:top-3.5 right-3 sm:right-3.5 flex items-center gap-1.5 z-20">
+                    {/* Bestseller Icon Badge */}
+                    {(outletId ? isProductBestsellerAtOutlet(activeItem, outletId) : activeItem.bestseller) && (
+                      <div
+                        className="w-6 h-6 sm:w-6.5 sm:h-6.5 lg:w-8 lg:h-8 rounded-md lg:rounded-lg bg-amber-500 flex items-center justify-center shadow-md shrink-0"
+                        title="Bestseller"
+                        aria-label="Bestseller"
+                      >
+                        <Star className="w-3 h-3 sm:w-3.5 sm:h-3.5 lg:w-4 lg:h-4 text-stone-950 fill-stone-950" />
+                      </div>
+                    )}
+
+                    {/* Featured Dish Icon Badge */}
+                    {(outletId ? isProductFeaturedAtOutlet(activeItem, outletId) : activeItem.featured) && (
+                      <div
+                        className="w-6 h-6 sm:w-6.5 sm:h-6.5 lg:w-8 lg:h-8 rounded-md lg:rounded-lg bg-orange-600 flex items-center justify-center shadow-md shrink-0"
+                        title="Featured Dish"
+                        aria-label="Featured Dish"
+                      >
+                        <Sparkles className="w-3 h-3 sm:w-3.5 sm:h-3.5 lg:w-4 lg:h-4 text-white fill-white" />
+                      </div>
+                    )}
+
+                    {/* Chef's Special Icon Badge */}
+                    {activeItem.chefSpecial && (
+                      <div
+                        className="w-6 h-6 sm:w-6.5 sm:h-6.5 lg:w-8 lg:h-8 rounded-md lg:rounded-lg bg-purple-600 flex items-center justify-center shadow-md shrink-0"
+                        title="Chef's Special"
+                        aria-label="Chef's Special"
+                      >
+                        <Flame className="w-3 h-3 sm:w-3.5 sm:h-3.5 lg:w-4 lg:h-4 text-white fill-white" />
+                      </div>
+                    )}
+
+                    {/* Veg / Non-Veg icon */}
+                    <div
+                      className={`w-6 h-6 sm:w-6.5 sm:h-6.5 lg:w-8 lg:h-8 rounded-md lg:rounded-lg bg-white border ${
+                        activeItem.isVeg ? 'border-emerald-600' : 'border-rose-600'
+                      } flex items-center justify-center shadow-md shrink-0`}
+                      title={activeItem.isVeg ? 'Vegetarian' : 'Non-Vegetarian'}
+                      aria-label={activeItem.isVeg ? 'Vegetarian' : 'Non-Vegetarian'}
+                    >
+                      <span
+                        className={`w-2 h-2 sm:w-2.5 sm:h-2.5 lg:w-3 lg:h-3 rounded-full ${
+                          activeItem.isVeg ? 'bg-emerald-600' : 'bg-rose-600'
+                        }`}
+                      />
                     </div>
                   </div>
-                  <div className="text-right">
-                    <span className="text-sm font-bold text-white">₹499</span>
-                    <button
-                      type="button"
-                      onClick={() => goToProduct('nizami-royal-dum-mutton-biryani')}
-                      className="block text-[10px] font-semibold text-orange-400 hover:text-orange-300"
-                    >
-                      View Dish →
-                    </button>
+
+                  {/* Floating Bottom Card - Only this section is clickable */}
+                  <div
+                    onClick={() => goToProduct(activeItem.slug)}
+                    className="absolute bottom-3 left-3 right-3 bg-stone-900/90 hover:bg-stone-900/95 active:bg-stone-950 backdrop-blur-md rounded-xl p-3 border border-stone-700/60 hover:border-orange-500/50 text-white flex items-center justify-between shadow-md z-20 cursor-pointer transition-all group"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0 pr-2">
+                      <div className="w-9 h-9 rounded-lg bg-orange-500/20 border border-orange-500/40 text-orange-400 flex items-center justify-center font-bold shrink-0 group-hover:scale-105 transition-transform">
+                        <Flame className="w-4 h-4 fill-orange-400" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-[10px] font-semibold text-orange-400 uppercase tracking-wide">
+                          Today&apos;s Special
+                        </p>
+                        <h4 className="font-bold text-xs text-white truncate max-w-[150px] sm:max-w-[200px] group-hover:text-orange-200 transition-colors">
+                          {activeItem.name}
+                        </h4>
+                      </div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <span className="text-sm font-bold text-white block">₹{activeItem.price}</span>
+                      <span className="block text-[10px] font-semibold text-orange-400 group-hover:text-orange-300 transition-colors">
+                        View Dish →
+                      </span>
+                    </div>
                   </div>
                 </div>
-              </div>
+              ) : null}
             </motion.div>
           </div>
         </div>

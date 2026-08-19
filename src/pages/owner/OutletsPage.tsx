@@ -83,6 +83,10 @@ export const OutletsPage: React.FC = () => {
     packagingFee: 25,
     avgCookingTime: '25-35 mins',
     operatingHours: '11:00 AM - 11:30 PM',
+    heroFireLine: 'ARTISANAL CLOUD KITCHEN • SLOW-COOKED DUM',
+    heroHeader: 'Authentic Indian Flavors, Slow-Cooked to Perfection',
+    heroDescription:
+      'Experience royal dum biryanis, 24-hour slow-simmered dal makhani, and smoky clay-oven tandoori grills, delivered piping hot to your doorstep in sealed eco-handis.',
   });
 
   // Per-outlet menu item states in modal
@@ -165,6 +169,14 @@ export const OutletsPage: React.FC = () => {
       packagingFee: 25,
       avgCookingTime: '25-35 mins',
       operatingHours: '11:00 AM - 11:30 PM',
+      heroFireLine: 'ARTISANAL CLOUD KITCHEN • SLOW-COOKED DUM',
+      heroHeader: 'Authentic Indian Flavors, Slow-Cooked to Perfection',
+      heroDescription:
+        'Experience royal dum biryanis, 24-hour slow-simmered dal makhani, and smoky clay-oven tandoori grills, delivered piping hot to your doorstep in sealed eco-handis.',
+      trustBadgeRating: '4.9 ★ (2.8k+)',
+      trustBadgeRatingSub: 'Google & Zomato',
+      trustBadgeUsp: '100% Pure',
+      trustBadgeUspSub: 'Desi Ghee Recipe',
     });
     initOutletItemStates(null);
     setIsModalOpen(true);
@@ -186,6 +198,15 @@ export const OutletsPage: React.FC = () => {
       packagingFee: outlet.packagingFee ?? 25,
       avgCookingTime: outlet.avgCookingTime || outlet.estimatedDeliveryTime || '25-35 mins',
       operatingHours: outlet.operatingHours || '11:00 AM - 11:30 PM',
+      heroFireLine: outlet.heroFireLine || 'ARTISANAL CLOUD KITCHEN • SLOW-COOKED DUM',
+      heroHeader: outlet.heroHeader || 'Authentic Indian Flavors, Slow-Cooked to Perfection',
+      heroDescription:
+        outlet.heroDescription ||
+        'Experience royal dum biryanis, 24-hour slow-simmered dal makhani, and smoky clay-oven tandoori grills, delivered piping hot to your doorstep in sealed eco-handis.',
+      trustBadgeRating: outlet.trustBadgeRating || '4.9 ★ (2.8k+)',
+      trustBadgeRatingSub: outlet.trustBadgeRatingSub || 'Google & Zomato',
+      trustBadgeUsp: outlet.trustBadgeUsp || '100% Pure',
+      trustBadgeUspSub: outlet.trustBadgeUspSub || 'Desi Ghee Recipe',
       assignedProductIds: outlet.assignedProductIds || [],
     });
     initOutletItemStates(outlet);
@@ -1038,6 +1059,134 @@ export const OutletsPage: React.FC = () => {
                             placeholder="e.g. 11:00 AM - 11:30 PM"
                             className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700 focus:bg-white"
                           />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* 3. Homepage Hero Section Customization */}
+                    <div className="space-y-3 pt-3 border-t border-stone-100">
+                      <div className="flex items-center gap-1.5">
+                        <Flame className="w-3.5 h-3.5 text-orange-600" />
+                        <h3 className="font-bold text-xs text-stone-900 uppercase tracking-wider">
+                          3. Homepage Hero Section Customization
+                        </h3>
+                      </div>
+                      <p className="text-[11px] text-stone-500">
+                        Customise the hero header, flame pill tag, and description shown to customers when this outlet is selected.
+                      </p>
+
+                      <div className="space-y-3">
+                        <div>
+                          <label className="block text-xs font-semibold text-stone-700 mb-1">
+                            Hero Flame Tagline (Always uppercase)
+                          </label>
+                          <input
+                            type="text"
+                            value={formData.heroFireLine || ''}
+                            onChange={(e) =>
+                              setFormData({ ...formData, heroFireLine: e.target.value.toUpperCase() })
+                            }
+                            placeholder="e.g. ARTISANAL CLOUD KITCHEN • SLOW-COOKED DUM"
+                            className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700 focus:bg-white"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-semibold text-stone-700 mb-1">
+                            Hero Main Headline
+                          </label>
+                          <input
+                            type="text"
+                            value={formData.heroHeader || ''}
+                            onChange={(e) =>
+                              setFormData({ ...formData, heroHeader: e.target.value })
+                            }
+                            placeholder="e.g. Authentic Indian Flavors, Slow-Cooked to Perfection"
+                            className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700 focus:bg-white"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-semibold text-stone-700 mb-1">
+                            Hero Subtitle / Description
+                          </label>
+                          <textarea
+                            rows={2}
+                            value={formData.heroDescription || ''}
+                            onChange={(e) =>
+                              setFormData({ ...formData, heroDescription: e.target.value })
+                            }
+                            placeholder="e.g. Experience royal dum biryanis, 24-hour slow-simmered dal makhani, and smoky clay-oven tandoori grills..."
+                            className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700 focus:bg-white resize-none"
+                          />
+                        </div>
+
+                        {/* Trust Badges Configuration */}
+                        <div className="pt-3 border-t border-stone-100/80 space-y-2">
+                          <p className="text-[11px] font-bold text-stone-800 uppercase tracking-wide">
+                            Trust Badges Bar Customization
+                          </p>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div>
+                              <label className="block text-[11px] font-semibold text-stone-700 mb-1">
+                                Badge 1: Rating Headline
+                              </label>
+                              <input
+                                type="text"
+                                value={formData.trustBadgeRating || ''}
+                                onChange={(e) =>
+                                  setFormData({ ...formData, trustBadgeRating: e.target.value })
+                                }
+                                placeholder="e.g. 4.9 ★ (2.8k+)"
+                                className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700 focus:bg-white"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="block text-[11px] font-semibold text-stone-700 mb-1">
+                                Badge 1: Rating Source / Subtext
+                              </label>
+                              <input
+                                type="text"
+                                value={formData.trustBadgeRatingSub || ''}
+                                onChange={(e) =>
+                                  setFormData({ ...formData, trustBadgeRatingSub: e.target.value })
+                                }
+                                placeholder="e.g. Google & Zomato"
+                                className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700 focus:bg-white"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="block text-[11px] font-semibold text-stone-700 mb-1">
+                                Badge 3: Quality USP Title
+                              </label>
+                              <input
+                                type="text"
+                                value={formData.trustBadgeUsp || ''}
+                                onChange={(e) =>
+                                  setFormData({ ...formData, trustBadgeUsp: e.target.value })
+                                }
+                                placeholder="e.g. 100% Pure"
+                                className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700 focus:bg-white"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="block text-[11px] font-semibold text-stone-700 mb-1">
+                                Badge 3: Quality USP Subtext
+                              </label>
+                              <input
+                                type="text"
+                                value={formData.trustBadgeUspSub || ''}
+                                onChange={(e) =>
+                                  setFormData({ ...formData, trustBadgeUspSub: e.target.value })
+                                }
+                                placeholder="e.g. Desi Ghee Recipe"
+                                className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700 focus:bg-white"
+                              />
+                            </div>
+                          </div>
                         </div>
                       </div>
                     </div>

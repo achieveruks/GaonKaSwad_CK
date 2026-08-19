@@ -21,13 +21,41 @@ export const Navbar: React.FC = () => {
   const { currentRoute, goToHome, goToShop, goToCategories, goToAbout, goToContact } =
     useNavigation();
   const { totalItemsCount, setIsCartDrawerOpen } = useCart();
-  const { selectedLocation, setIsLocationModalOpen } = useLocation();
+  const { selectedLocation, setIsLocationModalOpen, currentOutlet, currentZone } = useLocation();
 
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSearchExpanded, setIsSearchExpanded] = useState(false);
   const [isCategoriesDropdownOpen, setIsCategoriesDropdownOpen] = useState(false);
 
   const isActive = (path: string) => currentRoute.path === path;
+
+  // Dynamic kitchen hours from outlet data
+  const kitchenHours = currentOutlet?.operatingHours || '11:00 AM - 11:30 PM';
+
+  // Dynamic express delivery from selected delivery zone data (or outlet fallback)
+  const deliveryTime =
+    currentZone?.estimatedDeliveryTime ||
+    currentOutlet?.estimatedDeliveryTime ||
+    currentOutlet?.avgCookingTime ||
+    '30-40 min';
+
+  // Format second line outlet name beside "G"
+  const getOutletSecondLine = () => {
+    const rawName = selectedLocation?.outletName || currentOutlet?.name;
+    if (!rawName) return 'Select Location';
+
+    const cleaned = rawName
+      .replace(/^Gaon\s+Ka\s+Swad\s*[-–:]\s*/i, '')
+      .replace(/^Gaon\s+Ka\s+Swad\s*/i, '')
+      .replace(/\bOutlet\s+Name\b/gi, '')
+      .replace(/\bOutlet\b/gi, '')
+      .replace(/\bCloud\s+Kitchen\b/gi, '')
+      .trim();
+
+    return cleaned || rawName;
+  };
+
+  const outletSecondLine = getOutletSecondLine();
 
   return (
     <header className="sticky top-0 z-40 bg-white border-b border-stone-200 shadow-xs">
@@ -46,11 +74,11 @@ export const Navbar: React.FC = () => {
           <div className="hidden md:flex items-center gap-4 shrink-0 text-stone-400">
             <div className="flex items-center gap-1">
               <Clock className="w-3.5 h-3.5 text-amber-500" />
-              <span>Kitchen Open: 11:30 AM – 11:30 PM</span>
+              <span>Kitchen Open: {kitchenHours}</span>
             </div>
             <div className="flex items-center gap-1">
               <MapPin className="w-3.5 h-3.5 text-amber-500" />
-              <span>30-40 min Express Delivery</span>
+              <span>{deliveryTime} Express Delivery</span>
             </div>
           </div>
         </div>
@@ -59,20 +87,24 @@ export const Navbar: React.FC = () => {
       {/* Main Nav Container */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16 gap-3">
-          {/* Brand Logo */}
+          {/* Brand Logo - 2-liner */}
           <div
             onClick={goToHome}
             className="flex items-center gap-2.5 cursor-pointer select-none group shrink-0"
           >
-            <div className="w-8 h-8 sm:w-9 sm:h-9 bg-amber-800 rounded-lg flex items-center justify-center text-white font-bold text-lg sm:text-xl shadow-xs group-hover:scale-105 transition-transform">
+            <div className="w-8 h-8 sm:w-9 sm:h-9 bg-amber-800 rounded-lg flex items-center justify-center text-white font-bold text-lg sm:text-xl shadow-xs group-hover:scale-105 transition-transform shrink-0">
               G
             </div>
-            <div>
-              <div className="flex items-center gap-1.5">
-                <span className="font-heading font-bold text-lg sm:text-xl text-stone-900 tracking-tight">
-                  Gaon Ka <span className="text-amber-800">Swad</span>
-                </span>
-              </div>
+            <div className="flex flex-col justify-center leading-tight text-left">
+              <span className="font-heading font-bold text-base sm:text-lg text-stone-900 tracking-tight">
+                Gaon Ka <span className="text-amber-800">Swad</span>
+              </span>
+              <span
+                style={{ fontFamily: "'Playfair Display', Georgia, serif" }}
+                className="text-[12px] sm:text-[13px] italic font-semibold text-amber-700 tracking-wide max-w-[130px] sm:max-w-[200px] truncate block group-hover:text-amber-800 transition-colors"
+              >
+                {outletSecondLine}
+              </span>
             </div>
           </div>
 
