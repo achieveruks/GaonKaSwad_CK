@@ -129,10 +129,26 @@ export interface Product {
   reviewsList?: Review[];
 }
 
+export type UserRole = 'owner' | 'outlet_manager' | 'customer';
+
+export interface Profile {
+  id: string;
+  role: UserRole;
+  outletId?: string;
+  fullName?: string;
+  phone?: string;
+  email?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface OwnerUser {
+  id?: string;
   email: string;
-  role: 'owner' | 'admin';
+  role: UserRole | 'admin';
   name?: string;
+  outletId?: string;
+  isSupabaseAuth?: boolean;
 }
 
 export interface DashboardStats {

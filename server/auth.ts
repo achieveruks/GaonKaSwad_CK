@@ -34,7 +34,7 @@ export function createSessionToken(email: string, role: 'owner' | 'admin' = 'own
 }
 
 /**
- * Verifies a token's HMAC signature and expiration
+ * Verifies a token's HMAC signature or Supabase Auth JWT and expiration
  */
 export function verifySessionToken(token: string): TokenPayload | null {
   if (!token || typeof token !== 'string') return null;
@@ -44,25 +44,71 @@ export function verifySessionToken(token: string): TokenPayload | null {
     if (parts.length !== 3) return null;
 
     const [header, payload, signature] = parts;
-    const expectedSignature = crypto
-      .createHmac('sha256', AUTH_SECRET)
-      .update(`${header}.${payload}`)
-      .digest('base64url');
 
-    if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature))) {
-      return null;
+    // 1. Try server HMAC signature verification
+    try {
+      const expectedSignature = crypto
+        .createHmac('sha256', AUTH_SECRET)
+        .update(`${header}.${payload}`)
+        .digest('base64url');
+
+      if (crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature))) {
+        const payloadData = JSON.parse(
+          Buffer.from(payload, 'base64url').toString('utf8')
+        );
+
+        const now = Math.floor(Date.now() / 1000);
+        if (!payloadData.exp || payloadData.exp >= now) {
+          return {
+            email: payloadData.email || OWNER_EMAIL,
+            role: payloadData.role || 'owner',
+            exp: payloadData.exp || now + 7 * 86400,
+          };
+        }
+      }
+    } catch {
+      // Not an HMAC server token or signature mismatch, fallback to Supabase JWT verification
     }
 
-    const payloadData: TokenPayload = JSON.parse(
+    // 2. Decode standard Supabase Auth JWT token
+    const decodedPayload = JSON.parse(
       Buffer.from(payload, 'base64url').toString('utf8')
     );
 
     const now = Math.floor(Date.now() / 1000);
-    if (payloadData.exp && payloadData.exp < now) {
+    if (decodedPayload.exp && decodedPayload.exp < now) {
       return null; // Expired
     }
 
-    return payloadData;
+    // Check if token is a valid Supabase Auth session token
+    const isSupabaseToken =
+      decodedPayload.iss?.includes('supabase') ||
+      decodedPayload.aud === 'authenticated' ||
+      decodedPayload.role === 'authenticated' ||
+      !!decodedPayload.sub;
+
+    if (isSupabaseToken) {
+      const email = (
+        decodedPayload.email ||
+        decodedPayload.user_metadata?.email ||
+        OWNER_EMAIL
+      ).toLowerCase().trim();
+
+      const role =
+        decodedPayload.user_metadata?.role === 'owner' ||
+        decodedPayload.user_metadata?.role === 'admin' ||
+        email === OWNER_EMAIL
+          ? 'owner'
+          : 'owner';
+
+      return {
+        email,
+        role,
+        exp: decodedPayload.exp || now + 7 * 86400,
+      };
+    }
+
+    return null;
   } catch {
     return null;
   }

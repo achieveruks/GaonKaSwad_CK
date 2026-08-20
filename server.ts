@@ -404,7 +404,6 @@ async function startServer() {
           id: zone.id,
           outletId: zone.outletId,
           deliveryFee: zone.deliveryFee,
-          minimumOrderValue: zone.minimumOrderValue,
         },
       });
     } catch (err: any) {

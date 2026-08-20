@@ -11,6 +11,10 @@ import {
   MapPin,
   Menu,
   X,
+  Lock,
+  ShieldCheck,
+  Building2,
+  Database,
 } from 'lucide-react';
 
 interface OwnerLayoutProps {
@@ -28,7 +32,7 @@ export const OwnerLayout: React.FC<OwnerLayoutProps> = ({
   subtitle,
   actions,
 }) => {
-  const { isAuthenticated, isLoading, ownerUser, logout } = useAuth();
+  const { isAuthenticated, isLoading, ownerUser, profile, authProvider, logout } = useAuth();
   const {
     goToOwnerDashboard,
     goToOwnerProducts,
@@ -97,6 +101,9 @@ export const OwnerLayout: React.FC<OwnerLayoutProps> = ({
     goToOwnerLogin();
   };
 
+  const userRole = ownerUser?.role || profile?.role || 'owner';
+  const isOwner = userRole === 'owner';
+
   return (
     <div className="min-h-screen bg-stone-50 flex flex-col font-sans">
       {/* Top Owner Navigation Header */}
@@ -118,8 +125,12 @@ export const OwnerLayout: React.FC<OwnerLayoutProps> = ({
                     <span className="font-extrabold text-sm tracking-tight text-white font-heading">
                       Gaon Ka Swad
                     </span>
-                    <span className="bg-amber-950 text-amber-400 border border-amber-800 text-[10px] font-bold px-1.5 py-0.2 rounded uppercase">
-                      Admin
+                    <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded uppercase border ${
+                      isOwner
+                        ? 'bg-amber-950 text-amber-400 border-amber-800'
+                        : 'bg-blue-950 text-blue-400 border-blue-800'
+                    }`}>
+                      {isOwner ? 'Owner' : 'Manager'}
                     </span>
                   </div>
                   <p className="text-[10px] text-stone-400">Multi-Outlet Cloud Kitchen Control</p>
@@ -197,9 +208,15 @@ export const OwnerLayout: React.FC<OwnerLayoutProps> = ({
               <div className="h-4 w-px bg-stone-800" />
 
               <div className="flex items-center gap-2 text-xs text-stone-300">
-                <span className="text-[11px] text-stone-400 truncate max-w-[140px]">
-                  {ownerUser?.email || 'achieveruks@gmail.com'}
-                </span>
+                <div className="flex flex-col text-right">
+                  <span className="text-[11px] font-medium text-stone-200 truncate max-w-[130px]">
+                    {ownerUser?.name || ownerUser?.email || 'achieveruks@gmail.com'}
+                  </span>
+                  <span className="text-[9px] text-stone-400 flex items-center justify-end gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                    <span>Supabase Auth</span>
+                  </span>
+                </div>
                 <button
                   type="button"
                   onClick={handleLogout}
@@ -296,7 +313,7 @@ export const OwnerLayout: React.FC<OwnerLayoutProps> = ({
 
               <div className="pt-2 border-t border-stone-800 flex items-center justify-between px-3">
                 <span className="text-[11px] text-stone-400 truncate">
-                  {ownerUser?.email || 'achieveruks@gmail.com'}
+                  {ownerUser?.email || 'achieveruks@gmail.com'} ({userRole})
                 </span>
                 <button
                   type="button"
@@ -331,3 +348,4 @@ export const OwnerLayout: React.FC<OwnerLayoutProps> = ({
     </div>
   );
 };
+

@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useNavigation } from '../../context/NavigationContext';
+import { isSupabaseConfigured } from '../../lib/supabase';
+import { UserRole } from '../../types';
 import {
   Lock,
   Mail,
@@ -12,6 +14,10 @@ import {
   ArrowLeft,
   Sparkles,
   Flame,
+  Database,
+  Crown,
+  Building2,
+  Info,
 } from 'lucide-react';
 
 export const OwnerLoginPage: React.FC = () => {
@@ -20,6 +26,7 @@ export const OwnerLoginPage: React.FC = () => {
 
   const [email, setEmail] = useState('achieveruks@gmail.com');
   const [password, setPassword] = useState('gaonkaswaD1!');
+  const [selectedRole, setSelectedRole] = useState<UserRole>('owner');
   const [showPassword, setShowPassword] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -42,14 +49,14 @@ export const OwnerLoginPage: React.FC = () => {
 
     setIsSubmitting(true);
     try {
-      const result = await login(email.trim(), password);
+      const result = await login(email.trim(), password, selectedRole);
       if (result.success) {
         goToOwnerDashboard();
       } else {
-        setErrorMessage(result.error || 'Invalid credentials. Please verify your email and password.');
+        setErrorMessage(result.error || 'Invalid credentials. Please verify your Supabase email and password.');
       }
     } catch (err: any) {
-      setErrorMessage('A network error occurred. Please try again.');
+      setErrorMessage('A network error occurred connecting to Supabase Auth.');
     } finally {
       setIsSubmitting(false);
     }
@@ -64,21 +71,24 @@ export const OwnerLoginPage: React.FC = () => {
   const handleInstantDemoLogin = async () => {
     setEmail('achieveruks@gmail.com');
     setPassword('gaonkaswaD1!');
+    setSelectedRole('owner');
     setErrorMessage(null);
     setIsSubmitting(true);
     try {
-      const result = await login('achieveruks@gmail.com', 'gaonkaswaD1!');
+      const result = await login('achieveruks@gmail.com', 'gaonkaswaD1!', 'owner');
       if (result.success) {
         goToOwnerDashboard();
       } else {
-        setErrorMessage(result.error || 'Invalid demo credentials.');
+        setErrorMessage(result.error || 'Invalid Supabase credentials.');
       }
     } catch (err) {
-      setErrorMessage('Failed to connect to authentication server.');
+      setErrorMessage('Failed to connect to Supabase authentication.');
     } finally {
       setIsSubmitting(false);
     }
   };
+
+  const hasSupabase = isSupabaseConfigured();
 
   return (
     <div className="min-h-screen bg-stone-100 flex flex-col justify-center py-10 px-4 sm:px-6 lg:px-8 font-sans">
@@ -102,29 +112,30 @@ export const OwnerLoginPage: React.FC = () => {
           </div>
         </button>
         <h2 className="mt-4 text-center text-lg font-bold text-stone-900 tracking-tight">
-          Owner Portal Authentication
+          Owner & Staff Portal Sign In
         </h2>
         <p className="mt-1 text-center text-xs text-stone-500 max-w-xs mx-auto">
-          Sign in to manage cloud kitchen outlets, delivery PIN zones, dishes, and live pricing.
+          Authorized access only. Sign in with your Supabase credentials to manage kitchen outlets, PIN zones, and live orders.
         </p>
       </div>
 
       {/* Login Card */}
       <div className="sm:mx-auto sm:w-full sm:max-w-md">
         <div className="bg-white py-7 px-6 sm:px-8 shadow-sm sm:rounded-2xl border border-stone-200 space-y-5">
-          {/* Instant 1-Click Login Helper */}
+          {/* Supabase 1-Click Login Helper */}
           <div className="bg-amber-50/80 border border-amber-200/80 rounded-xl p-3.5 space-y-2">
             <div className="flex items-center justify-between">
               <span className="text-[11px] font-bold text-amber-900 uppercase tracking-wider flex items-center gap-1">
                 <Sparkles className="w-3.5 h-3.5 text-amber-700" />
-                Quick Owner Demo Access
+                Quick Owner Sign In
               </span>
-              <span className="text-[10px] bg-amber-200/70 text-amber-950 font-bold px-1.5 py-0.5 rounded">
-                Configured
+              <span className="text-[10px] bg-amber-200/70 text-amber-950 font-bold px-1.5 py-0.5 rounded flex items-center gap-1">
+                <Database className="w-3 h-3" />
+                {hasSupabase ? 'Supabase Auth' : 'Database Offline'}
               </span>
             </div>
             <p className="text-[11px] text-amber-800 leading-tight">
-              Pre-configured for kitchen owner access. Click below to sign in instantly.
+              Pre-filled with master owner account (<code className="font-mono font-bold">achieveruks@gmail.com</code>).
             </p>
             <button
               type="button"
@@ -148,16 +159,60 @@ export const OwnerLoginPage: React.FC = () => {
           )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
+            {/* Account Role Selector */}
+            <div>
+              <label className="block text-xs font-bold text-stone-700 mb-1.5">
+                Select Account Role
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSelectedRole('owner')}
+                  className={`p-2.5 rounded-xl border text-left cursor-pointer transition-all ${
+                    selectedRole === 'owner'
+                      ? 'border-amber-800 bg-amber-50/60 ring-1 ring-amber-800 text-stone-900'
+                      : 'border-stone-200 bg-stone-50/80 text-stone-600 hover:border-stone-300'
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 font-bold text-xs">
+                    <Crown className={`w-3.5 h-3.5 ${selectedRole === 'owner' ? 'text-amber-800' : 'text-stone-400'}`} />
+                    <span>Owner / Admin</span>
+                  </div>
+                  <div className="text-[10px] text-stone-500 font-normal mt-0.5">
+                    Full multi-outlet master control
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setSelectedRole('outlet_manager')}
+                  className={`p-2.5 rounded-xl border text-left cursor-pointer transition-all ${
+                    selectedRole === 'outlet_manager'
+                      ? 'border-amber-800 bg-amber-50/60 ring-1 ring-amber-800 text-stone-900'
+                      : 'border-stone-200 bg-stone-50/80 text-stone-600 hover:border-stone-300'
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 font-bold text-xs">
+                    <Building2 className={`w-3.5 h-3.5 ${selectedRole === 'outlet_manager' ? 'text-amber-800' : 'text-stone-400'}`} />
+                    <span>Outlet Manager</span>
+                  </div>
+                  <div className="text-[10px] text-stone-500 font-normal mt-0.5">
+                    Branch kitchen live orders
+                  </div>
+                </button>
+              </div>
+            </div>
+
             {/* Email Field */}
             <div>
               <div className="flex items-center justify-between mb-1">
                 <label className="block text-xs font-bold text-stone-700">
-                  Owner Email
+                  Email Address
                 </label>
                 <button
                   type="button"
                   onClick={() => handleFillDemo('achieveruks@gmail.com', 'gaonkaswaD1!')}
-                  className="text-[10px] text-amber-800 hover:underline font-semibold"
+                  className="text-[10px] text-amber-800 hover:underline font-semibold cursor-pointer"
                 >
                   Fill default
                 </button>
@@ -189,7 +244,7 @@ export const OwnerLoginPage: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => handleFillDemo('achieveruks@gmail.com', 'gaonkaswaD1!')}
-                  className="text-[10px] text-amber-800 hover:underline font-semibold"
+                  className="text-[10px] text-amber-800 hover:underline font-semibold cursor-pointer"
                 >
                   Fill pass
                 </button>
@@ -219,6 +274,14 @@ export const OwnerLoginPage: React.FC = () => {
               </div>
             </div>
 
+            {/* Provisioning Info Banner */}
+            <div className="p-2.5 bg-stone-50 rounded-xl border border-stone-200/70 text-[11px] text-stone-600 flex items-start gap-2">
+              <Info className="w-3.5 h-3.5 text-stone-500 shrink-0 mt-0.5" />
+              <p className="text-[10.5px] leading-tight">
+                Staff accounts and roles are provisioned by the Administrator directly in Supabase Dashboard.
+              </p>
+            </div>
+
             {/* Submit Button */}
             <div className="pt-1">
               <button
@@ -229,7 +292,7 @@ export const OwnerLoginPage: React.FC = () => {
                 {isSubmitting ? (
                   <>
                     <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                    <span>Verifying Credentials...</span>
+                    <span>Verifying with Supabase...</span>
                   </>
                 ) : (
                   <>
@@ -245,10 +308,10 @@ export const OwnerLoginPage: React.FC = () => {
           <div className="p-3 bg-stone-50 rounded-xl border border-stone-100 text-[11px] text-stone-500 space-y-1">
             <div className="flex items-center gap-1.5 font-bold text-stone-700">
               <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-              <span>Restricted Access Cloud Kitchen Console</span>
+              <span>Row-Level Security & Role-Based Access</span>
             </div>
             <p className="text-[10px] text-stone-500 leading-normal">
-              Manage outlets in Bangalore and Bhubaneswar, assign PIN codes, control handi dish stocks, and update live menu pricing.
+              Protected by PostgreSQL Row Level Security (RLS). Outlet managers only see data for their assigned kitchen branch, while master owner has full cross-city oversight.
             </p>
           </div>
 
@@ -268,4 +331,6 @@ export const OwnerLoginPage: React.FC = () => {
     </div>
   );
 };
+
+
 

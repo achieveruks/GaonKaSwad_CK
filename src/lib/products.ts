@@ -1,5 +1,17 @@
 import { Product, DashboardStats } from '../types';
 import { PRODUCTS as FALLBACK_PRODUCTS } from '../data/products';
+import {
+  fetchSupabaseProducts,
+  fetchSupabaseProductBySlug,
+  createSupabaseProduct,
+  updateSupabaseProduct,
+  deleteSupabaseProduct,
+  toggleSupabaseProductActive,
+  toggleSupabaseProductStock,
+  updateSupabaseOutletProductConfig,
+  batchUpdateSupabaseOutletProducts,
+} from './supabaseService';
+import { isSupabaseConfigured } from './supabase';
 
 const API_BASE = '/api';
 
@@ -17,9 +29,22 @@ function getAuthHeaders(token?: string): HeadersInit {
 }
 
 /**
- * Fetch all products from API, with fallback to initial data if server is unavailable
+ * Fetch all products from Supabase PostgreSQL (with fallback to API / initial data)
  */
 export async function getProducts(includeInactive = false, token?: string): Promise<Product[]> {
+  // 1. Try Supabase PostgreSQL first
+  if (isSupabaseConfigured()) {
+    try {
+      const supaProducts = await fetchSupabaseProducts(includeInactive);
+      if (Array.isArray(supaProducts) && supaProducts.length > 0) {
+        return supaProducts;
+      }
+    } catch (err) {
+      console.warn('Supabase products fetch failed or empty, trying fallback API:', err);
+    }
+  }
+
+  // 2. Fallback to server API
   try {
     const url = includeInactive ? `${API_BASE}/products?includeInactive=true` : `${API_BASE}/products`;
     const res = await fetch(url, {
@@ -49,6 +74,17 @@ export async function getProducts(includeInactive = false, token?: string): Prom
  * Fetch a single product by slug
  */
 export async function getProductBySlug(slug: string): Promise<Product | null> {
+  // 1. Try Supabase first
+  if (isSupabaseConfigured()) {
+    try {
+      const product = await fetchSupabaseProductBySlug(slug);
+      if (product) return product;
+    } catch (err) {
+      console.warn('Supabase fetch product by slug failed, trying fallback API:', err);
+    }
+  }
+
+  // 2. Fallback to API
   try {
     const res = await fetch(`${API_BASE}/products/${encodeURIComponent(slug)}`);
     if (!res.ok) {
@@ -73,6 +109,24 @@ export async function getProductBySlug(slug: string): Promise<Product | null> {
  * Create a new product (Owner action)
  */
 export async function createProduct(productData: Partial<Product>, token: string): Promise<Product> {
+  // Try Supabase first
+  if (isSupabaseConfigured()) {
+    try {
+      const created = await createSupabaseProduct(productData);
+      // Also notify server storage in background if available
+      try {
+        fetch(`${API_BASE}/products`, {
+          method: 'POST',
+          headers: getAuthHeaders(token),
+          body: JSON.stringify(productData),
+        }).catch(() => {});
+      } catch {}
+      return created;
+    } catch (err) {
+      console.warn('Supabase product creation error, falling back to API:', err);
+    }
+  }
+
   const res = await fetch(`${API_BASE}/products`, {
     method: 'POST',
     headers: getAuthHeaders(token),
@@ -95,6 +149,22 @@ export async function updateProduct(
   productData: Partial<Product>,
   token: string
 ): Promise<Product> {
+  if (isSupabaseConfigured()) {
+    try {
+      const updated = await updateSupabaseProduct(id, productData);
+      try {
+        fetch(`${API_BASE}/products/${id}`, {
+          method: 'PUT',
+          headers: getAuthHeaders(token),
+          body: JSON.stringify(productData),
+        }).catch(() => {});
+      } catch {}
+      return updated;
+    } catch (err) {
+      console.warn('Supabase product update error, falling back to API:', err);
+    }
+  }
+
   const res = await fetch(`${API_BASE}/products/${id}`, {
     method: 'PUT',
     headers: getAuthHeaders(token),
@@ -113,6 +183,21 @@ export async function updateProduct(
  * Delete a product (Owner action)
  */
 export async function deleteProduct(id: string | number, token: string): Promise<boolean> {
+  if (isSupabaseConfigured()) {
+    try {
+      await deleteSupabaseProduct(id);
+      try {
+        fetch(`${API_BASE}/products/${id}`, {
+          method: 'DELETE',
+          headers: getAuthHeaders(token),
+        }).catch(() => {});
+      } catch {}
+      return true;
+    } catch (err) {
+      console.warn('Supabase product delete error, falling back to API:', err);
+    }
+  }
+
   const res = await fetch(`${API_BASE}/products/${id}`, {
     method: 'DELETE',
     headers: getAuthHeaders(token),
@@ -130,6 +215,21 @@ export async function deleteProduct(id: string | number, token: string): Promise
  * Toggle product active status (Owner action)
  */
 export async function toggleProductActive(id: string | number, token: string): Promise<Product> {
+  if (isSupabaseConfigured()) {
+    try {
+      const updated = await toggleSupabaseProductActive(id);
+      try {
+        fetch(`${API_BASE}/products/${id}/toggle-active`, {
+          method: 'PATCH',
+          headers: getAuthHeaders(token),
+        }).catch(() => {});
+      } catch {}
+      return updated;
+    } catch (err) {
+      console.warn('Supabase toggle active error, falling back to API:', err);
+    }
+  }
+
   const res = await fetch(`${API_BASE}/products/${id}/toggle-active`, {
     method: 'PATCH',
     headers: getAuthHeaders(token),
@@ -147,6 +247,21 @@ export async function toggleProductActive(id: string | number, token: string): P
  * Toggle product stock status (Owner action)
  */
 export async function toggleProductStock(id: string | number, token: string): Promise<Product> {
+  if (isSupabaseConfigured()) {
+    try {
+      const updated = await toggleSupabaseProductStock(id);
+      try {
+        fetch(`${API_BASE}/products/${id}/toggle-stock`, {
+          method: 'PATCH',
+          headers: getAuthHeaders(token),
+        }).catch(() => {});
+      } catch {}
+      return updated;
+    } catch (err) {
+      console.warn('Supabase toggle stock error, falling back to API:', err);
+    }
+  }
+
   const res = await fetch(`${API_BASE}/products/${id}/toggle-stock`, {
     method: 'PATCH',
     headers: getAuthHeaders(token),
@@ -169,6 +284,22 @@ export async function updateOutletProductConfig(
   config: { inStock?: boolean; isFeatured?: boolean; isBestseller?: boolean; isChefSpecial?: boolean; isAssigned?: boolean },
   token: string
 ): Promise<Product> {
+  if (isSupabaseConfigured()) {
+    try {
+      const updated = await updateSupabaseOutletProductConfig(outletId, productId, config);
+      try {
+        fetch(`${API_BASE}/outlets/${outletId}/products/${productId}`, {
+          method: 'PATCH',
+          headers: getAuthHeaders(token),
+          body: JSON.stringify(config),
+        }).catch(() => {});
+      } catch {}
+      return updated;
+    } catch (err) {
+      console.warn('Supabase update outlet config error, falling back to API:', err);
+    }
+  }
+
   const res = await fetch(`${API_BASE}/outlets/${outletId}/products/${productId}`, {
     method: 'PATCH',
     headers: getAuthHeaders(token),
@@ -198,6 +329,23 @@ export async function batchUpdateOutletProducts(
   }[],
   token: string
 ): Promise<Product[]> {
+  if (isSupabaseConfigured()) {
+    try {
+      const supaUpdated = await batchUpdateSupabaseOutletProducts(outletId, updates);
+      // Fire-and-forget sync to Node backend storage
+      try {
+        fetch(`${API_BASE}/outlets/${outletId}/products`, {
+          method: 'PUT',
+          headers: getAuthHeaders(token),
+          body: JSON.stringify({ updates }),
+        }).catch(() => {});
+      } catch {}
+      return supaUpdated;
+    } catch (err) {
+      console.warn('Supabase batch update failed, falling back to API:', err);
+    }
+  }
+
   const res = await fetch(`${API_BASE}/outlets/${outletId}/products`, {
     method: 'PUT',
     headers: getAuthHeaders(token),
@@ -216,14 +364,28 @@ export async function batchUpdateOutletProducts(
  * Get dashboard metrics (Owner action)
  */
 export async function getDashboardStats(token: string): Promise<DashboardStats> {
-  const res = await fetch(`${API_BASE}/stats`, {
-    headers: getAuthHeaders(token),
-  });
+  try {
+    const res = await fetch(`${API_BASE}/stats`, {
+      headers: getAuthHeaders(token),
+    });
 
-  const data = await res.json();
-  if (!res.ok || !data.success) {
-    throw new Error(data.error || 'Failed to retrieve stats');
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && data.stats) {
+        return data.stats;
+      }
+    }
+  } catch (err) {
+    console.warn('API getDashboardStats failed, calculating from client catalog:', err);
   }
 
-  return data.stats;
+  // Graceful fallback computed stats if API unavailable
+  return {
+    totalProducts: FALLBACK_PRODUCTS.length,
+    activeProducts: FALLBACK_PRODUCTS.filter((p) => p.active !== false).length,
+    outOfStockProducts: FALLBACK_PRODUCTS.filter((p) => p.inStock === false).length,
+    featuredProducts: FALLBACK_PRODUCTS.filter((p) => p.featured && p.active !== false).length,
+    bestsellerProducts: FALLBACK_PRODUCTS.filter((p) => p.bestseller && p.active !== false).length,
+  };
 }
+

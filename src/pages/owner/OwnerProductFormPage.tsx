@@ -80,7 +80,6 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
   const [prepTimeMinutes, setPrepTimeMinutes] = useState<number>(30);
   const [serves, setServes] = useState('Serves 1-2');
   const [calories, setCalories] = useState<string>('');
-  const [newArrival, setNewArrival] = useState(true);
   const [active, setActive] = useState(true);
   const [ingredientsText, setIngredientsText] = useState('Pure Cow Ghee, Heirloom Spices, Saffron, Fresh Ingredients');
 
@@ -152,7 +151,6 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
         setPrepTimeMinutes(found.prepTimeMinutes || 30);
         setServes(found.serves || 'Serves 1-2');
         setCalories(found.calories ? String(found.calories) : '');
-        setNewArrival(!!found.newArrival);
         setActive(found.active !== false);
         setIngredientsText(
           Array.isArray(found.ingredients)
@@ -342,7 +340,6 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
       prepTimeMinutes: Number(prepTimeMinutes) || 30,
       serves: serves.trim() || 'Serves 1-2',
       calories: calories ? parseInt(calories, 10) : undefined,
-      newArrival,
       active,
       inStock: assignedOutletsList.some((o) => o.inStock),
       outlets: assignedOutletsList,

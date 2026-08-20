@@ -1,5 +1,19 @@
 import { Outlet, DeliveryZone, Product } from '../types';
 import { INITIAL_OUTLETS, INITIAL_DELIVERY_ZONES } from '../data/outlets';
+import {
+  fetchSupabaseOutlets,
+  createSupabaseOutlet,
+  updateSupabaseOutlet,
+  toggleSupabaseOutletActive,
+  deleteSupabaseOutlet,
+  fetchSupabaseZones,
+  createSupabaseZone,
+  updateSupabaseZone,
+  toggleSupabaseZoneActive,
+  deleteSupabaseZone,
+  createSupabaseOrder,
+} from './supabaseService';
+import { isSupabaseConfigured } from './supabase';
 
 const OUTLETS_CACHE_KEY = 'gaonkaswad_outlets_cache_v1';
 const ZONES_CACHE_KEY = 'gaonkaswad_zones_cache_v1';
@@ -55,6 +69,20 @@ function updateLocalCache(outlets?: Outlet[], zones?: DeliveryZone[]) {
  * 1. getOutlets - fetch all outlets (optionally include inactive for owner)
  */
 export async function getOutlets(includeInactive = false, token?: string): Promise<Outlet[]> {
+  // 1. Try Supabase first
+  if (isSupabaseConfigured()) {
+    try {
+      const supaOutlets = await fetchSupabaseOutlets(includeInactive);
+      if (Array.isArray(supaOutlets) && supaOutlets.length > 0) {
+        updateLocalCache(supaOutlets);
+        return supaOutlets;
+      }
+    } catch (err) {
+      console.warn('Supabase outlets fetch failed, trying fallback API:', err);
+    }
+  }
+
+  // 2. Fallback to API
   try {
     const headers: Record<string, string> = {};
     if (token) headers['Authorization'] = `Bearer ${token}`;
@@ -109,6 +137,20 @@ export function getOutletsByCity(city?: string, outletsList: Outlet[] = cachedOu
  * 5. getDeliveryZones - fetch all delivery zones
  */
 export async function getDeliveryZones(includeInactive = false, token?: string): Promise<DeliveryZone[]> {
+  // 1. Try Supabase first
+  if (isSupabaseConfigured()) {
+    try {
+      const supaZones = await fetchSupabaseZones(includeInactive);
+      if (Array.isArray(supaZones) && supaZones.length > 0) {
+        updateLocalCache(undefined, supaZones);
+        return supaZones;
+      }
+    } catch (err) {
+      console.warn('Supabase zones fetch failed, trying fallback API:', err);
+    }
+  }
+
+  // 2. Fallback to API
   try {
     const headers: Record<string, string> = {};
     if (token) headers['Authorization'] = `Bearer ${token}`;
@@ -173,13 +215,38 @@ export function getProductOutletConfig(product: Product, outletId?: string) {
  */
 export function isProductServedAtOutlet(product: Product, outletId?: string): boolean {
   if (!outletId) return true;
+  if (!product) return false;
+
+  // 1. Check explicit outlet config on product
   if (product.outlets && Array.isArray(product.outlets) && product.outlets.length > 0) {
-    return product.outlets.some((o) => o.outletId === outletId);
+    if (product.outlets.some((o) => o.outletId === outletId)) {
+      return true;
+    }
   }
+
+  // 2. Check outletIds array on product
   if (product.outletIds && Array.isArray(product.outletIds) && product.outletIds.length > 0) {
-    return product.outletIds.includes(outletId);
+    if (product.outletIds.includes(outletId)) {
+      return true;
+    }
   }
-  return true;
+
+  // 3. Check outlet's assignedProductIds list
+  const outlet = cachedOutlets.find((o) => o.id === outletId);
+  if (outlet && Array.isArray(outlet.assignedProductIds) && outlet.assignedProductIds.length > 0) {
+    const prodIdStr = String(product.id);
+    return outlet.assignedProductIds.some((id) => String(id) === prodIdStr);
+  }
+
+  // 4. If product has empty outlet restrictions
+  if (
+    (!product.outlets || product.outlets.length === 0) &&
+    (!product.outletIds || product.outletIds.length === 0)
+  ) {
+    return true;
+  }
+
+  return false;
 }
 
 /**
@@ -294,10 +361,13 @@ export function getDeliveryFee(
  */
 export function getMinimumOrderValue(
   pinCode: string,
-  zonesList: DeliveryZone[] = cachedZones
+  zonesList: DeliveryZone[] = cachedZones,
+  outletsList: Outlet[] = cachedOutlets
 ): number {
   const zone = getDeliveryZoneByPinCode(pinCode, zonesList);
-  return zone?.minimumOrderValue || 0;
+  if (!zone) return 0;
+  const outlet = getOutletById(zone.outletId, outletsList);
+  return outlet?.minimumOrderValue || 0;
 }
 
 /**
@@ -328,8 +398,8 @@ export async function checkPinCodeOnline(pinCode: string): Promise<{
           available: true,
           outlet: data.outlet,
           zone: data.zone,
-          deliveryFee: data.zone?.deliveryFee ?? 40,
-          minimumOrderValue: data.zone?.minimumOrderValue ?? 199,
+          deliveryFee: data.zone?.deliveryFee ?? (data.outlet?.deliveryFee ?? 40),
+          minimumOrderValue: data.outlet?.minimumOrderValue ?? 200,
         };
       } else {
         return {
@@ -364,13 +434,31 @@ export async function checkPinCodeOnline(pinCode: string): Promise<{
     outlet,
     zone,
     deliveryFee: zone.deliveryFee,
-    minimumOrderValue: zone.minimumOrderValue,
+    minimumOrderValue: outlet.minimumOrderValue || 200,
   };
 }
 
 // Owner API Helpers
 
 export async function createOutletApi(outletData: Partial<Outlet>, token: string): Promise<Outlet> {
+  if (isSupabaseConfigured()) {
+    try {
+      const created = await createSupabaseOutlet(outletData);
+      const updatedOutlets = [...cachedOutlets.filter((o) => o.id !== created.id), created];
+      updateLocalCache(updatedOutlets);
+      try {
+        fetch('/api/outlets', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify(outletData),
+        }).catch(() => {});
+      } catch {}
+      return created;
+    } catch (err) {
+      console.warn('Supabase createOutlet error, falling back to API:', err);
+    }
+  }
+
   const res = await fetch('/api/outlets', {
     method: 'POST',
     headers: {
@@ -393,6 +481,24 @@ export async function createOutletApi(outletData: Partial<Outlet>, token: string
 }
 
 export async function updateOutletApi(id: string, outletData: Partial<Outlet>, token: string): Promise<Outlet> {
+  if (isSupabaseConfigured()) {
+    try {
+      const updated = await updateSupabaseOutlet(id, outletData);
+      const updatedOutlets = cachedOutlets.map((o) => (o.id === id ? updated : o));
+      updateLocalCache(updatedOutlets);
+      try {
+        fetch(`/api/outlets/${id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify(outletData),
+        }).catch(() => {});
+      } catch {}
+      return updated;
+    } catch (err) {
+      console.warn('Supabase updateOutlet error, falling back to API:', err);
+    }
+  }
+
   const res = await fetch(`/api/outlets/${id}`, {
     method: 'PUT',
     headers: {
@@ -414,6 +520,23 @@ export async function updateOutletApi(id: string, outletData: Partial<Outlet>, t
 }
 
 export async function toggleOutletActiveApi(id: string, token: string): Promise<Outlet> {
+  if (isSupabaseConfigured()) {
+    try {
+      const updated = await toggleSupabaseOutletActive(id);
+      const updatedOutlets = cachedOutlets.map((o) => (o.id === id ? updated : o));
+      updateLocalCache(updatedOutlets);
+      try {
+        fetch(`/api/outlets/${id}/toggle-active`, {
+          method: 'PATCH',
+          headers: { Authorization: `Bearer ${token}` },
+        }).catch(() => {});
+      } catch {}
+      return updated;
+    } catch (err) {
+      console.warn('Supabase toggleOutletActive error, falling back to API:', err);
+    }
+  }
+
   const res = await fetch(`/api/outlets/${id}/toggle-active`, {
     method: 'PATCH',
     headers: {
@@ -433,6 +556,24 @@ export async function toggleOutletActiveApi(id: string, token: string): Promise<
 }
 
 export async function deleteOutletApi(id: string, token: string): Promise<boolean> {
+  if (isSupabaseConfigured()) {
+    try {
+      await deleteSupabaseOutlet(id);
+      const updatedOutlets = cachedOutlets.filter((o) => o.id !== id);
+      const updatedZones = cachedZones.filter((z) => z.outletId !== id);
+      updateLocalCache(updatedOutlets, updatedZones);
+      try {
+        fetch(`/api/outlets/${id}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` },
+        }).catch(() => {});
+      } catch {}
+      return true;
+    } catch (err) {
+      console.warn('Supabase deleteOutlet error, falling back to API:', err);
+    }
+  }
+
   const res = await fetch(`/api/outlets/${id}`, {
     method: 'DELETE',
     headers: {
@@ -456,6 +597,24 @@ export async function createZoneApi(
   zoneData: Partial<DeliveryZone> & { transferConflicts?: boolean },
   token: string
 ): Promise<DeliveryZone> {
+  if (isSupabaseConfigured()) {
+    try {
+      const created = await createSupabaseZone(zoneData);
+      const updatedZones = [...cachedZones.filter((z) => z.id !== created.id), created];
+      updateLocalCache(undefined, updatedZones);
+      try {
+        fetch('/api/delivery-zones', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify(zoneData),
+        }).catch(() => {});
+      } catch {}
+      return created;
+    } catch (err) {
+      console.warn('Supabase createZone error, falling back to API:', err);
+    }
+  }
+
   const res = await fetch('/api/delivery-zones', {
     method: 'POST',
     headers: {
@@ -477,6 +636,24 @@ export async function updateZoneApi(
   zoneData: Partial<DeliveryZone> & { transferConflicts?: boolean },
   token: string
 ): Promise<DeliveryZone> {
+  if (isSupabaseConfigured()) {
+    try {
+      const updated = await updateSupabaseZone(id, zoneData);
+      const updatedZones = cachedZones.map((z) => (z.id === id ? updated : z));
+      updateLocalCache(undefined, updatedZones);
+      try {
+        fetch(`/api/delivery-zones/${id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify(zoneData),
+        }).catch(() => {});
+      } catch {}
+      return updated;
+    } catch (err) {
+      console.warn('Supabase updateZone error, falling back to API:', err);
+    }
+  }
+
   const res = await fetch(`/api/delivery-zones/${id}`, {
     method: 'PUT',
     headers: {
@@ -494,6 +671,23 @@ export async function updateZoneApi(
 }
 
 export async function toggleZoneActiveApi(id: string, token: string): Promise<DeliveryZone> {
+  if (isSupabaseConfigured()) {
+    try {
+      const updated = await toggleSupabaseZoneActive(id);
+      const updatedZones = cachedZones.map((z) => (z.id === id ? updated : z));
+      updateLocalCache(undefined, updatedZones);
+      try {
+        fetch(`/api/delivery-zones/${id}/toggle-active`, {
+          method: 'PATCH',
+          headers: { Authorization: `Bearer ${token}` },
+        }).catch(() => {});
+      } catch {}
+      return updated;
+    } catch (err) {
+      console.warn('Supabase toggleZoneActive error, falling back to API:', err);
+    }
+  }
+
   const res = await fetch(`/api/delivery-zones/${id}/toggle-active`, {
     method: 'PATCH',
     headers: {
@@ -509,6 +703,23 @@ export async function toggleZoneActiveApi(id: string, token: string): Promise<De
 }
 
 export async function deleteZoneApi(id: string, token: string): Promise<boolean> {
+  if (isSupabaseConfigured()) {
+    try {
+      await deleteSupabaseZone(id);
+      const updatedZones = cachedZones.filter((z) => z.id !== id);
+      updateLocalCache(undefined, updatedZones);
+      try {
+        fetch(`/api/delivery-zones/${id}`, {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` },
+        }).catch(() => {});
+      } catch {}
+      return true;
+    } catch (err) {
+      console.warn('Supabase deleteZone error, falling back to API:', err);
+    }
+  }
+
   const res = await fetch(`/api/delivery-zones/${id}`, {
     method: 'DELETE',
     headers: {
@@ -524,6 +735,22 @@ export async function deleteZoneApi(id: string, token: string): Promise<boolean>
 }
 
 export async function createOrderApi(orderData: any): Promise<any> {
+  if (isSupabaseConfigured()) {
+    try {
+      const created = await createSupabaseOrder(orderData);
+      try {
+        fetch('/api/orders', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(orderData),
+        }).catch(() => {});
+      } catch {}
+      return created;
+    } catch (err) {
+      console.warn('Supabase createOrder error, falling back to API:', err);
+    }
+  }
+
   const res = await fetch('/api/orders', {
     method: 'POST',
     headers: {

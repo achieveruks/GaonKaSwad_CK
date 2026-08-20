@@ -6,6 +6,7 @@ import { useAuth } from '../../context/AuthContext';
 import { getDashboardStats } from '../../lib/products';
 import { DashboardStats, Product, Outlet, DeliveryZone } from '../../types';
 import { getOutlets, getDeliveryZones } from '../../lib/locationService';
+import { CloudDatabaseStatus } from '../../components/CloudDatabaseStatus';
 import {
   UtensilsCrossed,
   CheckCircle2,
@@ -117,6 +118,9 @@ export const OwnerDashboardPage: React.FC = () => {
         </div>
       }
     >
+      {/* Supabase Cloud Database Status & Migration Tool */}
+      <CloudDatabaseStatus />
+
       {/* 1. Metric Cards Grid */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Total Outlets */}

@@ -131,12 +131,18 @@ export const OutletsPage: React.FC = () => {
   const initOutletItemStates = (outlet: Outlet | null) => {
     const states: Record<string | number, OutletProductItemState> = {};
     const outletId = outlet?.id;
+    const assignedIds = Array.isArray(outlet?.assignedProductIds) ? outlet.assignedProductIds.map(String) : [];
+    const hasAssignedIds = assignedIds.length > 0;
 
     allProducts.forEach((p) => {
       if (outletId) {
+        const isAssigned = hasAssignedIds
+          ? assignedIds.includes(String(p.id))
+          : isProductServedAtOutlet(p, outletId);
+
         states[p.id] = {
           productId: p.id,
-          isAssigned: isProductServedAtOutlet(p, outletId),
+          isAssigned,
           inStock: isProductInStockAtOutlet(p, outletId),
           isFeatured: isProductFeaturedAtOutlet(p, outletId),
           isBestseller: isProductBestsellerAtOutlet(p, outletId),
@@ -227,17 +233,24 @@ export const OutletsPage: React.FC = () => {
 
     setIsSaving(true);
     try {
+      const statesList = Object.values(outletItemStates) as OutletProductItemState[];
+      const assignedProductIds = statesList.filter((s) => s.isAssigned).map((s) => s.productId);
+
+      const outletPayload = {
+        ...formData,
+        assignedProductIds,
+      };
+
       let savedOutlet: Outlet;
       if (editingOutlet) {
-        savedOutlet = await updateOutletApi(editingOutlet.id, formData, token || '');
-        showFeedback('success', `Outlet "${formData.name}" updated successfully!`);
+        savedOutlet = await updateOutletApi(editingOutlet.id, outletPayload, token || '');
+        showFeedback('success', `Outlet "${formData.name}" and menu catalog updated successfully!`);
       } else {
-        savedOutlet = await createOutletApi(formData, token || '');
-        showFeedback('success', `New kitchen outlet "${formData.name}" created!`);
+        savedOutlet = await createOutletApi(outletPayload, token || '');
+        showFeedback('success', `New kitchen outlet "${formData.name}" and menu catalog created!`);
       }
 
-      // Save menu item configurations if updated
-      const statesList = Object.values(outletItemStates) as OutletProductItemState[];
+      // Save dish merchandising & stock configurations if updated
       const updates = statesList.map((item) => ({
         productId: item.productId,
         isAssigned: item.isAssigned,
@@ -1269,6 +1282,24 @@ export const OutletsPage: React.FC = () => {
                         </button>
                       </div>
                     </div>
+
+                    {modalAssignedCount === 0 && (
+                      <div className="p-3 bg-amber-50/80 border border-amber-200 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-amber-950">
+                        <div className="flex items-center gap-2">
+                          <AlertCircle className="w-4 h-4 text-amber-700 shrink-0" />
+                          <span>
+                            No dishes currently assigned to <strong>{editingOutlet?.name || 'this kitchen'}</strong>. Click <strong>Serve All</strong> to make all menu items available, or tick individual dishes below.
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleBulkAssignAll(true)}
+                          className="px-3 py-1 bg-amber-800 hover:bg-amber-900 text-white rounded-lg text-xs font-bold shrink-0 cursor-pointer self-start sm:self-auto"
+                        >
+                          Serve All ({allProducts.length} items)
+                        </button>
+                      </div>
+                    )}
 
                     {/* Search & Category Filter */}
                     <div className="flex flex-col sm:flex-row gap-2">

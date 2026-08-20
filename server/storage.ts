@@ -12,6 +12,19 @@ const ORDERS_FILE = path.join(DATA_DIR, 'orders_store.json');
 
 const ALL_INITIAL_OUTLET_IDS = INITIAL_OUTLETS.map((o) => o.id);
 
+function safeReadJson<T>(filePath: string, fallback: T): T {
+  try {
+    if (!fs.existsSync(filePath)) return fallback;
+    const raw = fs.readFileSync(filePath, 'utf-8').trim();
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw);
+    return parsed !== undefined && parsed !== null ? parsed : fallback;
+  } catch (e) {
+    console.warn(`Warning: Could not parse ${filePath}, using fallback.`, e);
+    return fallback;
+  }
+}
+
 class AppStorage {
   private products: Product[] = [];
   private outlets: Outlet[] = [];
@@ -32,43 +45,31 @@ class AppStorage {
       }
 
       // 1. Initialize Outlets
-      if (fs.existsSync(OUTLETS_FILE)) {
-        const raw = fs.readFileSync(OUTLETS_FILE, 'utf-8');
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          this.outlets = parsed.map((o: any) => ({
-            ...o,
-            packagingFee: o.packagingFee !== undefined ? Number(o.packagingFee) : 25,
-            avgCookingTime: o.avgCookingTime || o.estimatedDeliveryTime || '25-35 mins',
-            heroFireLine: o.heroFireLine || 'ARTISANAL CLOUD KITCHEN • SLOW-COOKED DUM',
-            heroHeader: o.heroHeader || 'Authentic Indian Flavors, Slow-Cooked to Perfection',
-            heroDescription:
-              o.heroDescription ||
-              'Experience royal dum biryanis, 24-hour slow-simmered dal makhani, and smoky clay-oven tandoori grills, delivered piping hot to your doorstep in sealed eco-handis.',
-            trustBadgeRating: o.trustBadgeRating || '4.9 ★ (2.8k+)',
-            trustBadgeRatingSub: o.trustBadgeRatingSub || 'Google & Zomato',
-            trustBadgeUsp: o.trustBadgeUsp || '100% Pure',
-            trustBadgeUspSub: o.trustBadgeUspSub || 'Desi Ghee Recipe',
-          }));
-        } else {
-          this.outlets = [...INITIAL_OUTLETS];
-          this.saveOutlets();
-        }
+      const parsedOutlets = safeReadJson<any[]>(OUTLETS_FILE, []);
+      if (Array.isArray(parsedOutlets) && parsedOutlets.length > 0) {
+        this.outlets = parsedOutlets.map((o: any) => ({
+          ...o,
+          packagingFee: o.packagingFee !== undefined ? Number(o.packagingFee) : 25,
+          avgCookingTime: o.avgCookingTime || o.estimatedDeliveryTime || '25-35 mins',
+          heroFireLine: o.heroFireLine || 'ARTISANAL CLOUD KITCHEN • SLOW-COOKED DUM',
+          heroHeader: o.heroHeader || 'Authentic Indian Flavors, Slow-Cooked to Perfection',
+          heroDescription:
+            o.heroDescription ||
+            'Experience royal dum biryanis, 24-hour slow-simmered dal makhani, and smoky clay-oven tandoori grills, delivered piping hot to your doorstep in sealed eco-handis.',
+          trustBadgeRating: o.trustBadgeRating || '4.9 ★ (2.8k+)',
+          trustBadgeRatingSub: o.trustBadgeRatingSub || 'Google & Zomato',
+          trustBadgeUsp: o.trustBadgeUsp || '100% Pure',
+          trustBadgeUspSub: o.trustBadgeUspSub || 'Desi Ghee Recipe',
+        }));
       } else {
         this.outlets = [...INITIAL_OUTLETS];
         this.saveOutlets();
       }
 
       // 2. Initialize Delivery Zones
-      if (fs.existsSync(ZONES_FILE)) {
-        const raw = fs.readFileSync(ZONES_FILE, 'utf-8');
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) {
-          this.zones = parsed;
-        } else {
-          this.zones = [...INITIAL_DELIVERY_ZONES];
-          this.saveZones();
-        }
+      const parsedZones = safeReadJson<any[]>(ZONES_FILE, []);
+      if (Array.isArray(parsedZones) && parsedZones.length > 0) {
+        this.zones = parsedZones;
       } else {
         this.zones = [...INITIAL_DELIVERY_ZONES];
         this.saveZones();
@@ -116,27 +117,21 @@ class AppStorage {
         };
       };
 
-      if (fs.existsSync(PRODUCTS_FILE)) {
-        const raw = fs.readFileSync(PRODUCTS_FILE, 'utf-8');
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          this.products = parsed.map(normalizeProductOutlets);
-        } else {
-          this.products = INITIAL_PRODUCTS.map(normalizeProductOutlets);
-          this.saveProducts();
-        }
+      const parsedProducts = safeReadJson<any[]>(PRODUCTS_FILE, []);
+      if (Array.isArray(parsedProducts) && parsedProducts.length > 0) {
+        this.products = parsedProducts.map(normalizeProductOutlets);
       } else {
         this.products = INITIAL_PRODUCTS.map(normalizeProductOutlets);
         this.saveProducts();
       }
 
       // 4. Initialize Orders
-      if (fs.existsSync(ORDERS_FILE)) {
-        const raw = fs.readFileSync(ORDERS_FILE, 'utf-8');
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) {
-          this.orders = parsed;
-        }
+      const parsedOrders = safeReadJson<any[]>(ORDERS_FILE, []);
+      if (Array.isArray(parsedOrders)) {
+        this.orders = parsedOrders;
+      } else {
+        this.orders = [];
+        this.saveOrders();
       }
 
       this.isInitialized = true;
@@ -157,6 +152,7 @@ class AppStorage {
         })),
         outletIds: activeIds,
       }));
+      this.orders = [];
       this.isInitialized = true;
     }
   }
