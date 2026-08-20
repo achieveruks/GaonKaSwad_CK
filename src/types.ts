@@ -85,6 +85,7 @@ export interface ProductOutletConfig {
   inStock: boolean;
   isFeatured?: boolean;
   isBestseller?: boolean;
+  isChefSpecial?: boolean;
 }
 
 export interface Product {

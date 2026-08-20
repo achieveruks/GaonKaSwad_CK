@@ -166,7 +166,7 @@ export async function toggleProductStock(id: string | number, token: string): Pr
 export async function updateOutletProductConfig(
   outletId: string,
   productId: string | number,
-  config: { inStock?: boolean; isFeatured?: boolean; isBestseller?: boolean; isAssigned?: boolean },
+  config: { inStock?: boolean; isFeatured?: boolean; isBestseller?: boolean; isChefSpecial?: boolean; isAssigned?: boolean },
   token: string
 ): Promise<Product> {
   const res = await fetch(`${API_BASE}/outlets/${outletId}/products/${productId}`, {
@@ -194,6 +194,7 @@ export async function batchUpdateOutletProducts(
     inStock?: boolean;
     isFeatured?: boolean;
     isBestseller?: boolean;
+    isChefSpecial?: boolean;
   }[],
   token: string
 ): Promise<Product[]> {

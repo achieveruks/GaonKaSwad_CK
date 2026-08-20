@@ -1,16 +1,30 @@
 import React from 'react';
 import { Category } from '../types';
 import { useNavigation } from '../context/NavigationContext';
+import { useProducts } from '../context/ProductContext';
 import { Flame, Soup, Utensils, Wheat, Sparkles, ChevronRight } from 'lucide-react';
 import { motion } from 'motion/react';
 
 interface CategoryCardProps {
   category: Category;
   isActive?: boolean;
+  itemCount?: number;
 }
 
-export const CategoryCard: React.FC<CategoryCardProps> = ({ category, isActive = false }) => {
+export const CategoryCard: React.FC<CategoryCardProps> = ({
+  category,
+  isActive = false,
+  itemCount
+}) => {
   const { goToShop } = useNavigation();
+  const { activeProducts } = useProducts();
+
+  const count =
+    itemCount !== undefined
+      ? itemCount
+      : activeProducts.filter(
+          (p) => p.category === category.slug || p.category === category.id
+        ).length;
 
   const getIcon = (iconName: string) => {
     switch (iconName) {
@@ -56,7 +70,7 @@ export const CategoryCard: React.FC<CategoryCardProps> = ({ category, isActive =
 
         {/* Items Pill */}
         <div className="absolute top-2.5 right-2.5 px-2 py-0.5 rounded-md bg-gray-950/70 backdrop-blur-xs text-[10px] font-semibold text-gray-200">
-          {category.itemCount} items
+          {count} {count === 1 ? 'item' : 'items'}
         </div>
 
         {/* Content bottom */}

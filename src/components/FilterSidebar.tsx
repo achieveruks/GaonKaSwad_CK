@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { FilterState } from '../types';
 import { CATEGORIES } from '../data/products';
+import { useProducts } from '../context/ProductContext';
 import { RotateCcw, SlidersHorizontal, Check } from 'lucide-react';
 
 interface FilterSidebarProps {
@@ -16,7 +17,18 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
   onReset,
   totalResultsCount
 }) => {
+  const { activeProducts } = useProducts();
   const spiceOptions = ['All', 'Mild', 'Medium', 'Spicy', 'Extra Spicy'];
+
+  const categoryCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const cat of CATEGORIES) {
+      counts[cat.slug] = activeProducts.filter(
+        (p) => p.category === cat.slug || p.category === cat.id
+      ).length;
+    }
+    return counts;
+  }, [activeProducts]);
 
   return (
     <aside className="bg-white rounded-xl border border-gray-200 p-4 shadow-xs space-y-5">
@@ -120,26 +132,35 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
             }`}
           >
             <span>All Categories</span>
-            {filters.category === '' && <Check className="w-3.5 h-3.5 text-orange-600" />}
+            <span className="flex items-center gap-1.5">
+              <span className="text-[10px] text-gray-400 font-normal">({activeProducts.length})</span>
+              {filters.category === '' && <Check className="w-3.5 h-3.5 text-orange-600" />}
+            </span>
           </button>
 
-          {CATEGORIES.map((cat) => (
-            <button
-              key={cat.slug}
-              type="button"
-              onClick={() => setFilters((prev) => ({ ...prev, category: cat.slug }))}
-              className={`w-full text-left px-3 py-2 rounded-lg text-xs font-medium transition-colors flex items-center justify-between ${
-                filters.category === cat.slug
-                  ? 'bg-orange-50 text-orange-900 font-semibold border border-orange-200'
-                  : 'text-gray-600 hover:bg-gray-50'
-              }`}
-            >
-              <span>{cat.name}</span>
-              {filters.category === cat.slug && (
-                <Check className="w-3.5 h-3.5 text-orange-600" />
-              )}
-            </button>
-          ))}
+          {CATEGORIES.map((cat) => {
+            const count = categoryCounts[cat.slug] ?? 0;
+            return (
+              <button
+                key={cat.slug}
+                type="button"
+                onClick={() => setFilters((prev) => ({ ...prev, category: cat.slug }))}
+                className={`w-full text-left px-3 py-2 rounded-lg text-xs font-medium transition-colors flex items-center justify-between ${
+                  filters.category === cat.slug
+                    ? 'bg-orange-50 text-orange-900 font-semibold border border-orange-200'
+                    : 'text-gray-600 hover:bg-gray-50'
+                }`}
+              >
+                <span>{cat.name}</span>
+                <span className="flex items-center gap-1.5">
+                  <span className="text-[10px] text-gray-400 font-normal">({count})</span>
+                  {filters.category === cat.slug && (
+                    <Check className="w-3.5 h-3.5 text-orange-600" />
+                  )}
+                </span>
+              </button>
+            );
+          })}
         </div>
       </div>
 

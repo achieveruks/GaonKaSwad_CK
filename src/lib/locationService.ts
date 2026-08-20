@@ -233,6 +233,23 @@ export function isProductBestsellerAtOutlet(product: Product, outletId?: string)
 }
 
 /**
+ * 13. isProductChefSpecialAtOutlet - checks if product is marked as chef's special in this outlet
+ */
+export function isProductChefSpecialAtOutlet(product: Product, outletId?: string): boolean {
+  if (!product) return false;
+  if (!outletId) {
+    return Array.isArray(product.outlets)
+      ? product.outlets.some((o) => !!o.isChefSpecial)
+      : false;
+  }
+  if (Array.isArray(product.outlets)) {
+    const config = product.outlets.find((o) => o.outletId === outletId);
+    if (config) return !!config.isChefSpecial;
+  }
+  return false;
+}
+
+/**
  * 13. getProductsForOutlet - filters products by outlet assignment
  */
 export function getProductsForOutlet(products: Product[], outletId: string): Product[] {

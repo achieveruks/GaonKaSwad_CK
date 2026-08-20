@@ -120,7 +120,18 @@ export const ShopPage: React.FC = () => {
           return (b.bestseller ? 2 : 0) + b.rating - ((a.bestseller ? 2 : 0) + a.rating);
       }
     });
-  }, [filters]);
+  }, [filters, activeProducts]);
+
+  // Dynamic category counts map based on active products
+  const categoryCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const cat of CATEGORIES) {
+      counts[cat.slug] = activeProducts.filter(
+        (p) => p.category === cat.slug || p.category === cat.id
+      ).length;
+    }
+    return counts;
+  }, [activeProducts]);
 
   const activeCategoryObj = CATEGORIES.find((c) => c.slug === filters.category);
 
@@ -224,20 +235,23 @@ export const ShopPage: React.FC = () => {
             All Specialties ({activeProducts.length})
           </button>
 
-          {CATEGORIES.map((cat) => (
-            <button
-              key={cat.id}
-              type="button"
-              onClick={() => setFilters((prev) => ({ ...prev, category: cat.slug }))}
-              className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-colors shrink-0 ${
-                filters.category === cat.slug
-                  ? 'bg-orange-600 text-white shadow-xs'
-                  : 'bg-white border border-gray-200 text-gray-700 hover:bg-gray-50'
-              }`}
-            >
-              {cat.name} ({cat.itemCount})
-            </button>
-          ))}
+          {CATEGORIES.map((cat) => {
+            const count = categoryCounts[cat.slug] ?? 0;
+            return (
+              <button
+                key={cat.id}
+                type="button"
+                onClick={() => setFilters((prev) => ({ ...prev, category: cat.slug }))}
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-colors shrink-0 ${
+                  filters.category === cat.slug
+                    ? 'bg-orange-600 text-white shadow-xs'
+                    : 'bg-white border border-gray-200 text-gray-700 hover:bg-gray-50'
+                }`}
+              >
+                {cat.name} ({count})
+              </button>
+            );
+          })}
         </div>
 
         {/* Active Filters Summary Bar */}

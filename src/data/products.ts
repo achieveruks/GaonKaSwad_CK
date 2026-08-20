@@ -7,7 +7,7 @@ export const CATEGORIES: Category[] = [
     slug: 'dum-biryanis',
     tagline: 'Slow-cooked in sealed handis with saffron & whole spices',
     image: 'https://images.unsplash.com/photo-1563379091339-03b21ab4a4f8?q=80&w=800&auto=format&fit=crop',
-    itemCount: 4,
+    itemCount: 3,
     iconName: 'Flame'
   },
   {
@@ -25,7 +25,7 @@ export const CATEGORIES: Category[] = [
     slug: 'tandoor-starters',
     tagline: 'Smoky, charred clay oven kebabs & crisp bites',
     image: 'https://images.unsplash.com/photo-1599488615731-7e5c2823ff28?q=80&w=800&auto=format&fit=crop',
-    itemCount: 4,
+    itemCount: 3,
     iconName: 'Utensils'
   },
   {
@@ -34,7 +34,7 @@ export const CATEGORIES: Category[] = [
     slug: 'breads-accompaniments',
     tagline: 'Freshly baked tandoori naans, rotis & seasoned raitas',
     image: 'https://images.unsplash.com/photo-1601050690597-df0568f70950?q=80&w=800&auto=format&fit=crop',
-    itemCount: 3,
+    itemCount: 2,
     iconName: 'Wheat'
   },
   {
@@ -50,12 +50,18 @@ export const CATEGORIES: Category[] = [
 
 const ALL_OUTLET_IDS = ['blr-hsr', 'blr-whitefield', 'blr-indiranagar', 'bbsr-patia', 'bbsr-khandagiri'];
 
-const createOutletConfigs = (isFeatured = false, isBestseller = false, inStock = true) => {
+const createOutletConfigs = (
+  isFeatured = false,
+  isBestseller = false,
+  isChefSpecial = false,
+  inStock = true
+) => {
   return ALL_OUTLET_IDS.map((outletId) => ({
     outletId,
     inStock,
     isFeatured,
     isBestseller,
+    isChefSpecial,
   }));
 };
 
@@ -86,7 +92,7 @@ export const PRODUCTS: Product[] = [
     calories: 680,
     newArrival: false,
     chefSpecial: true,
-    outlets: createOutletConfigs(true, true, true),
+    outlets: createOutletConfigs(true, true, true, true),
     variants: [
       { id: 'v1-regular', name: 'Regular (Serves 1-2)', price: 499, originalPrice: 599, serves: '1-2 Persons', weight: '650g' },
       { id: 'v1-jumbo', name: 'Handi Feast (Serves 3-4)', price: 949, originalPrice: 1149, serves: '3-4 Persons', weight: '1300g' }
@@ -169,7 +175,7 @@ export const PRODUCTS: Product[] = [
     calories: 610,
     newArrival: false,
     chefSpecial: true,
-    outlets: createOutletConfigs(true, true, true),
+    outlets: createOutletConfigs(true, true, true, true),
     variants: [
       { id: 'v3-half', name: 'Regular Portion (500ml)', price: 449, originalPrice: 529, serves: '2 Persons', weight: '500ml' },
       { id: 'v3-full', name: 'Family Feast (900ml)', price: 799, originalPrice: 949, serves: '3-4 Persons', weight: '900ml' }
@@ -249,7 +255,7 @@ export const PRODUCTS: Product[] = [
     calories: 640,
     newArrival: true,
     chefSpecial: true,
-    outlets: createOutletConfigs(false, false, true),
+    outlets: createOutletConfigs(false, false, true, true),
     variants: [
       { id: 'v5-reg', name: 'Regular Portion (500ml)', price: 529, originalPrice: 629, serves: '2 Persons', weight: '500ml' }
     ],
@@ -364,7 +370,7 @@ export const PRODUCTS: Product[] = [
     calories: 520,
     newArrival: true,
     chefSpecial: true,
-    outlets: createOutletConfigs(true, false, true),
+    outlets: createOutletConfigs(true, false, true, true),
     variants: [
       { id: 'v8-4pcs', name: 'Plate of 4 Kebabs + 2 Parathas', price: 469, originalPrice: 539, serves: '2 Persons', weight: '400g' }
     ],
@@ -533,7 +539,7 @@ export const PRODUCTS: Product[] = [
     calories: 390,
     newArrival: false,
     chefSpecial: true,
-    outlets: createOutletConfigs(true, true, true),
+    outlets: createOutletConfigs(true, true, true, true),
     variants: [
       { id: 'v13-4pcs', name: 'Box of 4 Pieces', price: 189, originalPrice: 229, serves: '2 Persons', weight: '200g' },
       { id: 'v13-8pcs', name: 'Family Box (8 Pieces)', price: 349, originalPrice: 429, serves: '4 Persons', weight: '400g' }
@@ -628,7 +634,7 @@ export const PRODUCTS: Product[] = [
     calories: 660,
     newArrival: true,
     chefSpecial: true,
-    outlets: createOutletConfigs(true, false, true),
+    outlets: createOutletConfigs(true, false, true, true),
     variants: [
       { id: 'v16-reg', name: 'Handi Portion (500g)', price: 549, originalPrice: 649, serves: '2 Persons', weight: '500g' }
     ],

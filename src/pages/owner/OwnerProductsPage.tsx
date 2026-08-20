@@ -18,6 +18,7 @@ import {
   EyeOff,
   Sparkles,
   Flame,
+  ChefHat,
   AlertCircle,
   CheckCircle2,
   X,
@@ -59,7 +60,7 @@ export const OwnerProductsPage: React.FC = () => {
   // Quick Outlet Stock Edit Modal
   const [productForOutletConfig, setProductForOutletConfig] = useState<Product | null>(null);
   const [quickConfigState, setQuickConfigState] = useState<
-    Record<string, { isAssigned: boolean; inStock: boolean; isFeatured: boolean; isBestseller: boolean }>
+    Record<string, { isAssigned: boolean; inStock: boolean; isFeatured: boolean; isBestseller: boolean; isChefSpecial: boolean }>
   >({});
   const [isSavingQuickConfig, setIsSavingQuickConfig] = useState(false);
 
@@ -165,7 +166,7 @@ export const OwnerProductsPage: React.FC = () => {
   // Open Quick Outlet Config Modal
   const openQuickOutletConfig = (product: Product) => {
     setProductForOutletConfig(product);
-    const configs: Record<string, { isAssigned: boolean; inStock: boolean; isFeatured: boolean; isBestseller: boolean }> = {};
+    const configs: Record<string, { isAssigned: boolean; inStock: boolean; isFeatured: boolean; isBestseller: boolean; isChefSpecial: boolean }> = {};
     outlets.forEach((o) => {
       if (Array.isArray(product.outlets)) {
         const oc = product.outlets.find((item) => item.outletId === o.id);
@@ -174,6 +175,7 @@ export const OwnerProductsPage: React.FC = () => {
           inStock: oc ? oc.inStock !== false : true,
           isFeatured: oc ? !!oc.isFeatured : false,
           isBestseller: oc ? !!oc.isBestseller : false,
+          isChefSpecial: oc ? !!oc.isChefSpecial : false,
         };
       } else if (Array.isArray(product.outletIds)) {
         const isAssigned = product.outletIds.includes(o.id);
@@ -182,6 +184,7 @@ export const OwnerProductsPage: React.FC = () => {
           inStock: product.inStock !== false,
           isFeatured: !!product.featured,
           isBestseller: !!product.bestseller,
+          isChefSpecial: false,
         };
       } else {
         configs[o.id] = {
@@ -189,6 +192,7 @@ export const OwnerProductsPage: React.FC = () => {
           inStock: product.inStock !== false,
           isFeatured: !!product.featured,
           isBestseller: !!product.bestseller,
+          isChefSpecial: false,
         };
       }
     });
@@ -206,6 +210,7 @@ export const OwnerProductsPage: React.FC = () => {
           inStock: quickConfigState[o.id]?.inStock !== false,
           isFeatured: !!quickConfigState[o.id]?.isFeatured,
           isBestseller: !!quickConfigState[o.id]?.isBestseller,
+          isChefSpecial: !!quickConfigState[o.id]?.isChefSpecial,
         }));
 
       await editProduct(productForOutletConfig.id, {
@@ -235,6 +240,7 @@ export const OwnerProductsPage: React.FC = () => {
         inStock: product.inStock !== false,
         isFeatured: !!product.featured,
         isBestseller: !!product.bestseller,
+        isChefSpecial: !!product.chefSpecial,
       }));
     } else {
       assignedList = outlets.map((o) => ({
@@ -242,6 +248,7 @@ export const OwnerProductsPage: React.FC = () => {
         inStock: product.inStock !== false,
         isFeatured: !!product.featured,
         isBestseller: !!product.bestseller,
+        isChefSpecial: !!product.chefSpecial,
       }));
     }
 
@@ -250,6 +257,7 @@ export const OwnerProductsPage: React.FC = () => {
     const outOfStockCount = totalAssigned - inStockCount;
     const featuredCount = assignedList.filter((o) => o.isFeatured).length;
     const bestsellerCount = assignedList.filter((o) => o.isBestseller).length;
+    const chefSpecialCount = assignedList.filter((o) => o.isChefSpecial).length;
 
     return {
       totalAssigned,
@@ -257,6 +265,7 @@ export const OwnerProductsPage: React.FC = () => {
       outOfStockCount,
       featuredCount,
       bestsellerCount,
+      chefSpecialCount,
       assignedList,
     };
   };
@@ -344,12 +353,17 @@ export const OwnerProductsPage: React.FC = () => {
               onChange={(e) => setSelectedCategory(e.target.value)}
               className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs text-gray-700 font-medium focus:outline-none focus:border-orange-500 focus:bg-white"
             >
-              <option value="all">All Categories ({CATEGORIES.length})</option>
-              {CATEGORIES.map((cat) => (
-                <option key={cat.id} value={cat.slug || cat.id}>
-                  {cat.name}
-                </option>
-              ))}
+              <option value="all">All Categories ({allProducts.length} items)</option>
+              {CATEGORIES.map((cat) => {
+                const count = allProducts.filter(
+                  (p) => p.category === cat.slug || p.category === cat.id
+                ).length;
+                return (
+                  <option key={cat.id} value={cat.slug || cat.id}>
+                    {cat.name} ({count})
+                  </option>
+                );
+              })}
             </select>
           </div>
 
@@ -537,7 +551,13 @@ export const OwnerProductsPage: React.FC = () => {
                                   {metrics.bestsellerCount} Bestseller
                                 </span>
                               )}
-                              {metrics.featuredCount === 0 && metrics.bestsellerCount === 0 && (
+                              {metrics.chefSpecialCount > 0 && (
+                                <span className="bg-amber-50 text-amber-800 border border-amber-300 text-[9px] font-bold px-1.5 py-0.5 rounded flex items-center gap-0.5">
+                                  <ChefHat className="w-2.5 h-2.5 text-amber-700" />
+                                  {metrics.chefSpecialCount} Chef's Special
+                                </span>
+                              )}
+                              {metrics.featuredCount === 0 && metrics.bestsellerCount === 0 && metrics.chefSpecialCount === 0 && (
                                 <span className="text-[10px] text-gray-400 italic">No outlet ribbons</span>
                               )}
                             </div>
@@ -676,17 +696,26 @@ export const OwnerProductsPage: React.FC = () => {
 
                       <div className="flex items-center gap-1 flex-wrap">
                         {metrics.featuredCount > 0 && (
-                          <span className="bg-purple-100 text-purple-800 text-[9px] font-bold px-1.5 py-0.5 rounded">
+                          <span className="bg-purple-100 text-purple-800 text-[9px] font-bold px-1.5 py-0.5 rounded flex items-center gap-0.5">
+                            <Sparkles className="w-2.5 h-2.5" />
                             {metrics.featuredCount} Featured
                           </span>
                         )}
                         {metrics.bestsellerCount > 0 && (
-                          <span className="bg-orange-100 text-orange-800 text-[9px] font-bold px-1.5 py-0.5 rounded">
+                          <span className="bg-orange-100 text-orange-800 text-[9px] font-bold px-1.5 py-0.5 rounded flex items-center gap-0.5">
+                            <Flame className="w-2.5 h-2.5" />
                             {metrics.bestsellerCount} Bestseller
                           </span>
                         )}
+                        {metrics.chefSpecialCount > 0 && (
+                          <span className="bg-amber-100 text-amber-900 border border-amber-200 text-[9px] font-bold px-1.5 py-0.5 rounded flex items-center gap-0.5">
+                            <ChefHat className="w-2.5 h-2.5 text-amber-700" />
+                            {metrics.chefSpecialCount} Chef's Special
+                          </span>
+                        )}
                         {metrics.outOfStockCount > 0 && (
-                          <span className="bg-rose-100 text-rose-800 text-[9px] font-bold px-1.5 py-0.5 rounded">
+                          <span className="bg-rose-100 text-rose-800 text-[9px] font-bold px-1.5 py-0.5 rounded flex items-center gap-0.5">
+                            <PackageX className="w-2.5 h-2.5" />
                             {metrics.outOfStockCount} Out of Stock
                           </span>
                         )}
@@ -735,9 +764,57 @@ export const OwnerProductsPage: React.FC = () => {
               </button>
             </div>
 
-            <p className="text-xs text-gray-600">
-              Configure which cloud kitchen outlets serve this dish and toggle instant daily stock status or homepage ribbons.
-            </p>
+            <div className="flex items-center justify-between">
+              <p className="text-xs text-gray-600">
+                Configure which cloud kitchen outlets serve this dish and toggle instant daily stock status or homepage ribbons.
+              </p>
+              <div className="flex items-center gap-2 text-xs shrink-0 ml-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setQuickConfigState((prev) => {
+                      const next = { ...prev };
+                      outlets.forEach((o) => {
+                        const existing = prev[o.id];
+                        next[o.id] = {
+                          isAssigned: true,
+                          inStock: existing !== undefined ? existing.inStock : true,
+                          isFeatured: existing ? !!existing.isFeatured : false,
+                          isBestseller: existing ? !!existing.isBestseller : false,
+                          isChefSpecial: existing ? !!existing.isChefSpecial : false,
+                        };
+                      });
+                      return next;
+                    });
+                  }}
+                  className="text-orange-600 hover:text-orange-700 font-bold"
+                >
+                  Select All
+                </button>
+                <span className="text-gray-300">|</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setQuickConfigState((prev) => {
+                      const next = { ...prev };
+                      outlets.forEach((o) => {
+                        next[o.id] = {
+                          isAssigned: false,
+                          inStock: false,
+                          isFeatured: false,
+                          isBestseller: false,
+                          isChefSpecial: false,
+                        };
+                      });
+                      return next;
+                    });
+                  }}
+                  className="text-gray-500 hover:text-gray-700 font-medium"
+                >
+                  Clear All
+                </button>
+              </div>
+            </div>
 
             <div className="max-h-72 overflow-y-auto space-y-2.5 pr-1">
               {outlets.map((outlet) => {
@@ -842,6 +919,27 @@ export const OwnerProductsPage: React.FC = () => {
                             }`}
                           >
                             Bestseller
+                          </button>
+
+                          {/* Chef Special toggle */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setQuickConfigState((prev) => ({
+                                ...prev,
+                                [outlet.id]: {
+                                  ...prev[outlet.id],
+                                  isChefSpecial: !prev[outlet.id]?.isChefSpecial,
+                                },
+                              }));
+                            }}
+                            className={`px-2 py-0.5 rounded text-[10px] font-bold border transition-colors cursor-pointer ${
+                              cfg.isChefSpecial
+                                ? 'bg-amber-100 text-amber-900 border-amber-300'
+                                : 'bg-gray-100 text-gray-600 border-gray-200'
+                            }`}
+                          >
+                            Chef Special
                           </button>
                         </div>
                       )}

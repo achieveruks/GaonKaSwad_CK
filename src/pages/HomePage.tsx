@@ -11,6 +11,7 @@ import {
   isProductInStockAtOutlet,
   isProductFeaturedAtOutlet,
   isProductBestsellerAtOutlet,
+  isProductChefSpecialAtOutlet,
 } from '../lib/locationService';
 import {
   Flame,
@@ -34,7 +35,7 @@ import { motion, AnimatePresence } from 'motion/react';
 export const HomePage: React.FC = () => {
   const { goToShop, goToProduct, goToCategories, goToAbout } = useNavigation();
   const { addToCart } = useCart();
-  const { activeProducts } = useProducts();
+  const { activeProducts, bestsellerProducts, chefSignatures, newArrivals } = useProducts();
   const { currentZone, currentOutlet, selectedLocation } = useLocation();
 
   const deliveryTime =
@@ -135,9 +136,9 @@ export const HomePage: React.FC = () => {
 
   const activeItem = carouselItems[currentSlide] || carouselItems[0];
 
-  const bestsellers = activeProducts.filter((p) => p.bestseller).slice(0, 4);
-  const chefSignatures = activeProducts.filter((p) => p.chefSpecial).slice(0, 4);
-  const newArrivals = activeProducts.filter((p) => p.newArrival).slice(0, 4);
+  const bestsellers = bestsellerProducts.slice(0, 4);
+  const chefSpecialItems = chefSignatures.slice(0, 4);
+  const seasonalArrivals = newArrivals.slice(0, 4);
 
   return (
     <div className="space-y-12 sm:space-y-16 pb-16">
@@ -153,13 +154,13 @@ export const HomePage: React.FC = () => {
               className="lg:col-span-7 space-y-5 text-center lg:text-left"
             >
               {/* Pill badge */}
-              <div className="inline-flex items-center gap-1.5 bg-orange-50 text-orange-800 border border-orange-200 px-3 py-1 rounded-full text-xs font-bold tracking-wide shadow-xs mx-auto lg:mx-0">
+              <div className="inline-flex max-w-full items-center gap-1.5 bg-orange-50 text-orange-800 border border-orange-200 px-3 py-1 rounded-full text-[11px] sm:text-xs font-bold tracking-wide shadow-xs mx-auto lg:mx-0">
                 <Flame className="w-3.5 h-3.5 text-orange-600 fill-orange-600 shrink-0" />
-                <span>{heroFireLine}</span>
+                <span className="truncate">{heroFireLine}</span>
               </div>
 
               {/* Main Headline */}
-              <h1 className="font-extrabold text-3xl sm:text-4xl lg:text-5xl text-gray-900 tracking-tight leading-tight">
+              <h1 className="font-extrabold text-2xl sm:text-3xl md:text-4xl lg:text-5xl text-gray-900 tracking-tight leading-tight break-words">
                 {headerParts.part1}{' '}
                 {headerParts.part2 && (
                   <span className="text-orange-600">
@@ -197,27 +198,27 @@ export const HomePage: React.FC = () => {
 
               {/* Trust Badges Bar */}
               <div className="pt-4 border-t border-gray-100 grid grid-cols-3 gap-2 sm:gap-4 max-w-md mx-auto lg:mx-0 text-gray-700">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
                   <Star className="w-4 h-4 text-amber-400 fill-amber-400 shrink-0" />
-                  <div className="text-left">
-                    <p className="font-bold text-xs text-gray-900">{trustBadgeRating}</p>
-                    <p className="text-[10px] text-gray-400">{trustBadgeRatingSub}</p>
+                  <div className="text-left min-w-0">
+                    <p className="font-bold text-[11px] sm:text-xs text-gray-900 truncate">{trustBadgeRating}</p>
+                    <p className="text-[9px] sm:text-[10px] text-gray-400 truncate">{trustBadgeRatingSub}</p>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
                   <Clock className="w-4 h-4 text-orange-600 shrink-0" />
-                  <div className="text-left">
-                    <p className="font-bold text-xs text-gray-900">{deliveryTime}</p>
-                    <p className="text-[10px] text-gray-400">Express Delivery</p>
+                  <div className="text-left min-w-0">
+                    <p className="font-bold text-[11px] sm:text-xs text-gray-900 truncate">{deliveryTime}</p>
+                    <p className="text-[9px] sm:text-[10px] text-gray-400 truncate">Express Delivery</p>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
                   <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <div className="text-left">
-                    <p className="font-bold text-xs text-gray-900">{trustBadgeUsp}</p>
-                    <p className="text-[10px] text-gray-400">{trustBadgeUspSub}</p>
+                  <div className="text-left min-w-0">
+                    <p className="font-bold text-[11px] sm:text-xs text-gray-900 truncate">{trustBadgeUsp}</p>
+                    <p className="text-[9px] sm:text-[10px] text-gray-400 truncate">{trustBadgeUspSub}</p>
                   </div>
                 </div>
               </div>
@@ -297,7 +298,7 @@ export const HomePage: React.FC = () => {
                     )}
 
                     {/* Chef's Special Icon Badge */}
-                    {activeItem.chefSpecial && (
+                    {(outletId ? isProductChefSpecialAtOutlet(activeItem, outletId) : isProductChefSpecialAtOutlet(activeItem)) && (
                       <div
                         className="w-6 h-6 sm:w-6.5 sm:h-6.5 lg:w-8 lg:h-8 rounded-md lg:rounded-lg bg-purple-600 flex items-center justify-center shadow-md shrink-0"
                         title="Chef's Special"
@@ -378,9 +379,18 @@ export const HomePage: React.FC = () => {
         </div>
 
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
-          {CATEGORIES.map((category) => (
-            <CategoryCard key={category.id} category={category} />
-          ))}
+          {CATEGORIES.map((category) => {
+            const count = activeProducts.filter(
+              (p) => p.category === category.slug || p.category === category.id
+            ).length;
+            return (
+              <CategoryCard
+                key={category.id}
+                category={category}
+                itemCount={count}
+              />
+            );
+          })}
         </div>
       </section>
 
@@ -499,7 +509,7 @@ export const HomePage: React.FC = () => {
         </div>
 
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-          {newArrivals.map((product) => (
+          {seasonalArrivals.map((product) => (
             <ProductCard key={product.id} product={product} />
           ))}
         </div>

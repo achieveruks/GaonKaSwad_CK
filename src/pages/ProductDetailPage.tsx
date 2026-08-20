@@ -7,6 +7,8 @@ import {
   isProductAvailableAtOutlet,
   isProductServedAtOutlet,
   isProductInStockAtOutlet,
+  isProductBestsellerAtOutlet,
+  isProductChefSpecialAtOutlet,
 } from '../lib/locationService';
 import { ProductGallery } from '../components/ProductGallery';
 import { QuantitySelector } from '../components/QuantitySelector';
@@ -94,6 +96,8 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
   const currentOutletId = selectedLocation?.outletId;
   const isAvailableAtOutlet = isProductServedAtOutlet(product, currentOutletId);
   const isInStockHere = isProductInStockAtOutlet(product, currentOutletId);
+  const isBestsellerHere = isProductBestsellerAtOutlet(product, currentOutletId);
+  const isChefSpecialHere = isProductChefSpecialAtOutlet(product, currentOutletId);
   const isItemInStock = isInStockHere && product.inStock !== false;
 
   // Calculate pricing
@@ -218,8 +222,8 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
             images={product.galleryImages}
             productName={product.name}
             isVeg={product.isVeg}
-            bestseller={product.bestseller}
-            chefSpecial={product.chefSpecial}
+            bestseller={isBestsellerHere}
+            chefSpecial={isChefSpecialHere}
             spiceLevel={product.spiceLevel}
           />
         </div>

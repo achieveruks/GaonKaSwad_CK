@@ -77,13 +77,12 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
   const [serves, setServes] = useState('Serves 1-2');
   const [calories, setCalories] = useState<string>('');
   const [newArrival, setNewArrival] = useState(true);
-  const [chefSpecial, setChefSpecial] = useState(false);
   const [active, setActive] = useState(true);
   const [ingredientsText, setIngredientsText] = useState('Pure Cow Ghee, Heirloom Spices, Saffron, Fresh Ingredients');
 
-  // Outlet assignment state: Record<outletId, { isAssigned: boolean; inStock: boolean; isFeatured: boolean; isBestseller: boolean }>
+  // Outlet assignment state: Record<outletId, { isAssigned: boolean; inStock: boolean; isFeatured: boolean; isBestseller: boolean; isChefSpecial: boolean }>
   const [outletConfigs, setOutletConfigs] = useState<
-    Record<string, { isAssigned: boolean; inStock: boolean; isFeatured: boolean; isBestseller: boolean }>
+    Record<string, { isAssigned: boolean; inStock: boolean; isFeatured: boolean; isBestseller: boolean; isChefSpecial: boolean }>
   >({});
 
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -150,7 +149,6 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
         setServes(found.serves || 'Serves 1-2');
         setCalories(found.calories ? String(found.calories) : '');
         setNewArrival(!!found.newArrival);
-        setChefSpecial(!!found.chefSpecial);
         setActive(found.active !== false);
         setIngredientsText(
           Array.isArray(found.ingredients)
@@ -159,7 +157,7 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
         );
 
         // Map outlet configs
-        const configs: Record<string, { isAssigned: boolean; inStock: boolean; isFeatured: boolean; isBestseller: boolean }> = {};
+        const configs: Record<string, { isAssigned: boolean; inStock: boolean; isFeatured: boolean; isBestseller: boolean; isChefSpecial: boolean }> = {};
         availableOutlets.forEach((o) => {
           if (Array.isArray(found.outlets)) {
             const oc = found.outlets.find((item) => item.outletId === o.id);
@@ -168,6 +166,7 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
               inStock: oc ? oc.inStock !== false : true,
               isFeatured: oc ? !!oc.isFeatured : false,
               isBestseller: oc ? !!oc.isBestseller : false,
+              isChefSpecial: oc ? !!oc.isChefSpecial : false,
             };
           } else if (Array.isArray(found.outletIds)) {
             const isAssigned = found.outletIds.includes(o.id);
@@ -176,6 +175,7 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
               inStock: found.inStock !== false,
               isFeatured: !!found.featured,
               isBestseller: !!found.bestseller,
+              isChefSpecial: false,
             };
           } else {
             // Default assigned
@@ -184,6 +184,7 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
               inStock: found.inStock !== false,
               isFeatured: !!found.featured,
               isBestseller: !!found.bestseller,
+              isChefSpecial: false,
             };
           }
         });
@@ -195,13 +196,14 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
       // In new mode, default select all active outlets as in stock
       setOutletConfigs((prev) => {
         if (Object.keys(prev).length > 0) return prev;
-        const initial: Record<string, { isAssigned: boolean; inStock: boolean; isFeatured: boolean; isBestseller: boolean }> = {};
+        const initial: Record<string, { isAssigned: boolean; inStock: boolean; isFeatured: boolean; isBestseller: boolean; isChefSpecial: boolean }> = {};
         availableOutlets.forEach((o) => {
           initial[o.id] = {
             isAssigned: o.isActive !== false,
             inStock: true,
             isFeatured: false,
             isBestseller: false,
+            isChefSpecial: false,
           };
         });
         return initial;
@@ -213,17 +215,17 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
     setOutletConfigs((prev) => ({
       ...prev,
       [outletId]: {
-        ...(prev[outletId] || { inStock: true, isFeatured: false, isBestseller: false }),
+        ...(prev[outletId] || { inStock: true, isFeatured: false, isBestseller: false, isChefSpecial: false }),
         isAssigned: !prev[outletId]?.isAssigned,
       },
     }));
   };
 
-  const updateOutletField = (outletId: string, field: 'inStock' | 'isFeatured' | 'isBestseller', val: boolean) => {
+  const updateOutletField = (outletId: string, field: 'inStock' | 'isFeatured' | 'isBestseller' | 'isChefSpecial', val: boolean) => {
     setOutletConfigs((prev) => ({
       ...prev,
       [outletId]: {
-        ...(prev[outletId] || { isAssigned: true, inStock: true, isFeatured: false, isBestseller: false }),
+        ...(prev[outletId] || { isAssigned: true, inStock: true, isFeatured: false, isBestseller: false, isChefSpecial: false }),
         [field]: val,
       },
     }));
@@ -233,10 +235,26 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
     setOutletConfigs((prev) => {
       const next = { ...prev };
       availableOutlets.forEach((o) => {
-        next[o.id] = {
-          ...(next[o.id] || { inStock: true, isFeatured: false, isBestseller: false }),
-          isAssigned: assigned,
-        };
+        const existing = prev[o.id];
+        if (assigned) {
+          // Select all: select all outlets below without changing ribbon selections
+          next[o.id] = {
+            isAssigned: true,
+            inStock: existing !== undefined ? existing.inStock : true,
+            isFeatured: existing ? !!existing.isFeatured : false,
+            isBestseller: existing ? !!existing.isBestseller : false,
+            isChefSpecial: existing ? !!existing.isChefSpecial : false,
+          };
+        } else {
+          // Clear all: uncheck all checkboxes (outlet + ribbon checkboxes) and mark out of stock
+          next[o.id] = {
+            isAssigned: false,
+            inStock: false,
+            isFeatured: false,
+            isBestseller: false,
+            isChefSpecial: false,
+          };
+        }
       });
       return next;
     });
@@ -287,6 +305,7 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
         inStock: outletConfigs[o.id]?.inStock !== false,
         isFeatured: !!outletConfigs[o.id]?.isFeatured,
         isBestseller: !!outletConfigs[o.id]?.isBestseller,
+        isChefSpecial: !!outletConfigs[o.id]?.isChefSpecial,
       }));
 
     if (assignedOutletsList.length === 0) {
@@ -320,7 +339,6 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
       serves: serves.trim() || 'Serves 1-2',
       calories: calories ? parseInt(calories, 10) : undefined,
       newArrival,
-      chefSpecial,
       active,
       inStock: assignedOutletsList.some((o) => o.inStock),
       outlets: assignedOutletsList,
@@ -624,6 +642,17 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
                                 />
                                 <span className="text-orange-900">Bestseller</span>
                               </label>
+
+                              {/* Chef's Special checkbox */}
+                              <label className="flex items-center gap-1 text-[11px] font-semibold text-gray-700 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={cfg.isChefSpecial}
+                                  onChange={(e) => updateOutletField(outlet.id, 'isChefSpecial', e.target.checked)}
+                                  className="w-3.5 h-3.5 rounded text-amber-600 focus:ring-amber-500 border-gray-300"
+                                />
+                                <span className="text-amber-900">Chef Special</span>
+                              </label>
                             </div>
                           )}
                         </div>
@@ -860,17 +889,6 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
                     className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-gray-300"
                   />
                   <span className="font-semibold text-xs text-gray-900">Jain Friendly (No Onion/Garlic option)</span>
-                </label>
-
-                {/* Chef Special */}
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={chefSpecial}
-                    onChange={(e) => setChefSpecial(e.target.checked)}
-                    className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500 border-gray-300"
-                  />
-                  <span className="font-semibold text-xs text-gray-900">Chef Special Dish</span>
                 </label>
               </div>
             </div>

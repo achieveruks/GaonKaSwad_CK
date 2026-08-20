@@ -19,6 +19,7 @@ import {
   isProductInStockAtOutlet,
   isProductFeaturedAtOutlet,
   isProductBestsellerAtOutlet,
+  isProductChefSpecialAtOutlet,
 } from '../lib/locationService';
 
 interface ProductContextType {
@@ -49,7 +50,7 @@ interface ProductContextType {
   updateOutletProduct: (
     outletId: string,
     productId: string | number,
-    config: { inStock?: boolean; isFeatured?: boolean; isBestseller?: boolean; isAssigned?: boolean }
+    config: { inStock?: boolean; isFeatured?: boolean; isBestseller?: boolean; isChefSpecial?: boolean; isAssigned?: boolean }
   ) => Promise<Product>;
   batchUpdateOutletProducts: (
     outletId: string,
@@ -59,6 +60,7 @@ interface ProductContextType {
       inStock?: boolean;
       isFeatured?: boolean;
       isBestseller?: boolean;
+      isChefSpecial?: boolean;
     }[]
   ) => Promise<Product[]>;
 }
@@ -122,10 +124,11 @@ export const ProductProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return outletProducts.filter((p) => p.newArrival);
   }, [outletProducts]);
 
-  // Chef's special (for selected outlet)
+  // Chef's special (evaluated per selected outlet)
   const chefSignatures = useMemo(() => {
-    return outletProducts.filter((p) => p.chefSpecial);
-  }, [outletProducts]);
+    const activeOutletId = selectedLocation?.outletId;
+    return outletProducts.filter((p) => isProductChefSpecialAtOutlet(p, activeOutletId));
+  }, [outletProducts, selectedLocation?.outletId]);
 
   // Dynamic Categories with updated product counts for current outlet
   const categories = useMemo(() => {
@@ -229,7 +232,7 @@ export const ProductProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const updateOutletProduct = async (
     outletId: string,
     productId: string | number,
-    config: { inStock?: boolean; isFeatured?: boolean; isBestseller?: boolean; isAssigned?: boolean }
+    config: { inStock?: boolean; isFeatured?: boolean; isBestseller?: boolean; isChefSpecial?: boolean; isAssigned?: boolean }
   ): Promise<Product> => {
     if (!token) throw new Error('Authentication required');
     const updated = await apiUpdateOutletProductConfig(outletId, productId, config, token);
@@ -247,6 +250,7 @@ export const ProductProvider: React.FC<{ children: React.ReactNode }> = ({ child
       inStock?: boolean;
       isFeatured?: boolean;
       isBestseller?: boolean;
+      isChefSpecial?: boolean;
     }[]
   ): Promise<Product[]> => {
     if (!token) throw new Error('Authentication required');

@@ -36,7 +36,9 @@ export const CategoriesPage: React.FC = () => {
       {/* Categories Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5">
         {CATEGORIES.map((category) => {
-          const categoryProducts = activeProducts.filter((p) => p.category === category.slug);
+          const categoryProducts = activeProducts.filter(
+            (p) => p.category === category.slug || p.category === category.id
+          );
           return (
             <div
               key={category.id}
@@ -54,7 +56,7 @@ export const CategoriesPage: React.FC = () => {
                   <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent" />
                   <div className="absolute bottom-2.5 left-3.5 right-3.5 text-white">
                     <span className="text-[10px] font-bold text-orange-400 uppercase tracking-wider">
-                      {categoryProducts.length} Delicacies
+                      {categoryProducts.length} {categoryProducts.length === 1 ? 'Delicacy' : 'Delicacies'}
                     </span>
                     <h3 className="font-bold text-base text-white">
                       {category.name}

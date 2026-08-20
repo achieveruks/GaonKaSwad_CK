@@ -273,12 +273,13 @@ class AppStorage {
     if (Array.isArray(data.outlets) && data.outlets.length > 0) {
       outletsConfig = data.outlets.map((o: any) =>
         typeof o === 'string'
-          ? { outletId: o, inStock: true, isFeatured: false, isBestseller: false }
+          ? { outletId: o, inStock: true, isFeatured: false, isBestseller: false, isChefSpecial: false }
           : {
               outletId: o.outletId,
               inStock: o.inStock !== false,
               isFeatured: !!o.isFeatured,
               isBestseller: !!o.isBestseller,
+              isChefSpecial: !!o.isChefSpecial,
             }
       );
     } else if (Array.isArray(data.outletIds) && data.outletIds.length > 0) {
@@ -287,6 +288,7 @@ class AppStorage {
         inStock: data.inStock !== false,
         isFeatured: !!data.featured,
         isBestseller: !!data.bestseller,
+        isChefSpecial: !!data.chefSpecial,
       }));
     } else {
       outletsConfig = activeOutletIds.map((oid) => ({
@@ -294,6 +296,7 @@ class AppStorage {
         inStock: true,
         isFeatured: false,
         isBestseller: false,
+        isChefSpecial: false,
       }));
     }
 
@@ -369,19 +372,20 @@ class AppStorage {
     if (data.outlets !== undefined) {
       updatedOutlets = data.outlets.map((o: any) =>
         typeof o === 'string'
-          ? { outletId: o, inStock: true, isFeatured: false, isBestseller: false }
+          ? { outletId: o, inStock: true, isFeatured: false, isBestseller: false, isChefSpecial: false }
           : {
               outletId: o.outletId,
               inStock: o.inStock !== false,
               isFeatured: !!o.isFeatured,
               isBestseller: !!o.isBestseller,
+              isChefSpecial: !!o.isChefSpecial,
             }
       );
     } else if (data.outletIds !== undefined) {
       // Retain configurations for kept outletIds, add new defaults if added
       updatedOutlets = data.outletIds.map((oid) => {
         const prev = existing.outlets?.find((o) => o.outletId === oid);
-        return prev || { outletId: oid, inStock: true, isFeatured: false, isBestseller: false };
+        return prev || { outletId: oid, inStock: true, isFeatured: false, isBestseller: false, isChefSpecial: false };
       });
     }
 
@@ -421,7 +425,7 @@ class AppStorage {
   public updateOutletProductConfig(
     outletId: string,
     productId: string | number,
-    config: { inStock?: boolean; isFeatured?: boolean; isBestseller?: boolean; isAssigned?: boolean; assigned?: boolean }
+    config: { inStock?: boolean; isFeatured?: boolean; isBestseller?: boolean; isChefSpecial?: boolean; isAssigned?: boolean; assigned?: boolean }
   ): Product | null {
     this.init();
     const idStr = String(productId);
@@ -442,6 +446,7 @@ class AppStorage {
           inStock: config.inStock !== undefined ? config.inStock : outlets[existingIdx].inStock,
           isFeatured: config.isFeatured !== undefined ? config.isFeatured : outlets[existingIdx].isFeatured,
           isBestseller: config.isBestseller !== undefined ? config.isBestseller : outlets[existingIdx].isBestseller,
+          isChefSpecial: config.isChefSpecial !== undefined ? config.isChefSpecial : outlets[existingIdx].isChefSpecial,
         };
       } else {
         outlets.push({
@@ -449,6 +454,7 @@ class AppStorage {
           inStock: config.inStock !== undefined ? config.inStock : true,
           isFeatured: !!config.isFeatured,
           isBestseller: !!config.isBestseller,
+          isChefSpecial: !!config.isChefSpecial,
         });
       }
     }
@@ -472,6 +478,7 @@ class AppStorage {
       inStock?: boolean;
       isFeatured?: boolean;
       isBestseller?: boolean;
+      isChefSpecial?: boolean;
     }[]
   ): Product[] {
     this.init();
@@ -481,6 +488,7 @@ class AppStorage {
         inStock: item.inStock,
         isFeatured: item.isFeatured,
         isBestseller: item.isBestseller,
+        isChefSpecial: item.isChefSpecial,
       });
     });
 

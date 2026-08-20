@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useNavigation } from '../context/NavigationContext';
 import { useCart } from '../context/CartContext';
 import { useLocation } from '../context/LocationContext';
+import { useProducts } from '../context/ProductContext';
 import { SearchBar } from './SearchBar';
 import {
   ShoppingBag,
@@ -22,6 +23,7 @@ export const Navbar: React.FC = () => {
     useNavigation();
   const { totalItemsCount, setIsCartDrawerOpen } = useCart();
   const { selectedLocation, setIsLocationModalOpen, currentOutlet, currentZone } = useLocation();
+  const { activeProducts } = useProducts();
 
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSearchExpanded, setIsSearchExpanded] = useState(false);
@@ -113,7 +115,7 @@ export const Navbar: React.FC = () => {
             type="button"
             id="header-location-button"
             onClick={() => setIsLocationModalOpen(true)}
-            className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-full border text-xs font-medium transition-all shrink-0 ${
+            className={`flex items-center gap-1.5 px-2 sm:px-3 py-1.5 rounded-full border text-xs font-medium transition-all shrink-0 max-w-[130px] sm:max-w-[220px] ${
               selectedLocation
                 ? 'bg-amber-50/80 hover:bg-amber-100/90 border-amber-200/80 text-stone-900 shadow-2xs'
                 : 'bg-amber-100/80 hover:bg-amber-200 border-amber-400 text-amber-950 ring-2 ring-amber-400/30'
@@ -121,22 +123,23 @@ export const Navbar: React.FC = () => {
             title="Click to select or change delivery PIN code"
           >
             <MapPin className="w-3.5 h-3.5 text-amber-800 shrink-0" />
-            <div className="text-left hidden xs:block sm:block">
+            <div className="text-left flex flex-col justify-center leading-none min-w-0">
               {selectedLocation ? (
-                <div className="flex items-center gap-1">
-                  <span className="font-bold text-stone-900">PIN {selectedLocation.pinCode}</span>
-                  <span className="text-stone-500 text-[11px] truncate max-w-[100px] md:max-w-[140px]">
-                    · {selectedLocation.outletName.replace('Gaon Ka Swad - ', '')}
+                <div className="flex items-center gap-1 min-w-0">
+                  <span className="font-bold text-stone-900 text-xs shrink-0">
+                    PIN {selectedLocation.pinCode}
+                  </span>
+                  <span className="text-stone-500 text-[10px] sm:text-[11px] truncate hidden sm:inline max-w-[110px]">
+                    · {selectedLocation.outletName.replace(/^Gaon\s+Ka\s+Swad\s*[-–:]\s*/i, '')}
                   </span>
                 </div>
               ) : (
-                <span className="font-bold text-amber-950">Select Delivery PIN</span>
+                <span className="font-bold text-amber-950 text-xs whitespace-nowrap">
+                  Select PIN
+                </span>
               )}
             </div>
-            <div className="block xs:hidden sm:hidden text-left font-bold text-xs">
-              {selectedLocation ? selectedLocation.pinCode : 'Set PIN'}
-            </div>
-            <span className="text-[10px] text-amber-800 underline font-semibold ml-0.5">
+            <span className="text-[10px] text-amber-800 underline font-semibold shrink-0 hidden sm:inline">
               Change
             </span>
           </button>
@@ -146,12 +149,12 @@ export const Navbar: React.FC = () => {
             <SearchBar />
           </div>
 
-          {/* Desktop Navigation Links */}
-          <nav className="hidden md:flex items-center gap-1 lg:gap-1 text-sm font-medium">
+          {/* Desktop Navigation Links (Visible on Large/Desktop screens) */}
+          <nav className="hidden lg:flex items-center gap-1 text-sm font-medium shrink-0">
             <button
               type="button"
               onClick={goToHome}
-              className={`px-3 py-5 text-sm font-medium transition-colors border-b-2 -mb-px ${
+              className={`px-2.5 xl:px-3 py-5 text-sm font-medium transition-colors border-b-2 -mb-px ${
                 isActive('/')
                   ? 'text-amber-800 border-amber-800 font-semibold'
                   : 'text-stone-600 border-transparent hover:text-stone-900 hover:border-stone-300'
@@ -163,7 +166,7 @@ export const Navbar: React.FC = () => {
             <button
               type="button"
               onClick={() => goToShop()}
-              className={`px-3 py-5 text-sm font-medium transition-colors border-b-2 -mb-px ${
+              className={`px-2.5 xl:px-3 py-5 text-sm font-medium transition-colors border-b-2 -mb-px ${
                 isActive('/shop')
                   ? 'text-amber-800 border-amber-800 font-semibold'
                   : 'text-stone-600 border-transparent hover:text-stone-900 hover:border-stone-300'
@@ -181,7 +184,7 @@ export const Navbar: React.FC = () => {
               <button
                 type="button"
                 onClick={goToCategories}
-                className={`px-3 py-5 text-sm font-medium transition-colors flex items-center gap-1 border-b-2 -mb-px ${
+                className={`px-2.5 xl:px-3 py-5 text-sm font-medium transition-colors flex items-center gap-1 border-b-2 -mb-px ${
                   isActive('/categories')
                     ? 'text-amber-800 border-amber-800 font-semibold'
                     : 'text-stone-600 border-transparent hover:text-stone-900 hover:border-stone-300'
@@ -203,22 +206,27 @@ export const Navbar: React.FC = () => {
                     <div className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-stone-400">
                       Our Specialties
                     </div>
-                    {CATEGORIES.map((cat) => (
-                      <button
-                        key={cat.id}
-                        type="button"
-                        onClick={() => {
-                          setIsCategoriesDropdownOpen(false);
-                          goToShop(cat.slug);
-                        }}
-                        className="w-full text-left px-3 py-1.5 text-xs font-medium text-stone-700 hover:text-amber-800 hover:bg-amber-50 transition-colors flex items-center justify-between"
-                      >
-                        <span>{cat.name}</span>
-                        <span className="text-[10px] text-stone-400 bg-stone-100 px-1.5 py-0.5 rounded">
-                          {cat.itemCount}
-                        </span>
-                      </button>
-                    ))}
+                    {CATEGORIES.map((cat) => {
+                      const count = activeProducts.filter(
+                        (p) => p.category === cat.slug || p.category === cat.id
+                      ).length;
+                      return (
+                        <button
+                          key={cat.id}
+                          type="button"
+                          onClick={() => {
+                            setIsCategoriesDropdownOpen(false);
+                            goToShop(cat.slug);
+                          }}
+                          className="w-full text-left px-3 py-1.5 text-xs font-medium text-stone-700 hover:text-amber-800 hover:bg-amber-50 transition-colors flex items-center justify-between"
+                        >
+                          <span>{cat.name}</span>
+                          <span className="text-[10px] text-stone-400 bg-stone-100 px-1.5 py-0.5 rounded font-semibold">
+                            {count}
+                          </span>
+                        </button>
+                      );
+                    })}
                     <div className="border-t border-stone-100 mt-1 pt-1">
                       <button
                         type="button"
@@ -239,7 +247,7 @@ export const Navbar: React.FC = () => {
             <button
               type="button"
               onClick={goToAbout}
-              className={`px-3 py-5 text-sm font-medium transition-colors border-b-2 -mb-px ${
+              className={`px-2.5 xl:px-3 py-5 text-sm font-medium transition-colors border-b-2 -mb-px ${
                 isActive('/about')
                   ? 'text-amber-800 border-amber-800 font-semibold'
                   : 'text-stone-600 border-transparent hover:text-stone-900 hover:border-stone-300'
@@ -251,7 +259,7 @@ export const Navbar: React.FC = () => {
             <button
               type="button"
               onClick={goToContact}
-              className={`px-3 py-5 text-sm font-medium transition-colors border-b-2 -mb-px ${
+              className={`px-2.5 xl:px-3 py-5 text-sm font-medium transition-colors border-b-2 -mb-px ${
                 isActive('/contact')
                   ? 'text-amber-800 border-amber-800 font-semibold'
                   : 'text-stone-600 border-transparent hover:text-stone-900 hover:border-stone-300'
@@ -262,8 +270,8 @@ export const Navbar: React.FC = () => {
           </nav>
 
           {/* Right Action Icons */}
-          <div className="flex items-center gap-2 sm:gap-3">
-            {/* Mobile Search Toggle */}
+          <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
+            {/* Mobile/Tablet Search Toggle */}
             <button
               type="button"
               onClick={() => setIsSearchExpanded(!isSearchExpanded)}
@@ -289,11 +297,11 @@ export const Navbar: React.FC = () => {
               )}
             </button>
 
-            {/* Mobile Menu Hamburger */}
+            {/* Mobile/Tablet Menu Hamburger */}
             <button
               type="button"
               onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-              className="md:hidden p-2 text-stone-700 hover:text-stone-900 rounded-lg hover:bg-stone-100 transition-colors"
+              className="lg:hidden p-2 text-stone-700 hover:text-stone-900 rounded-lg hover:bg-stone-100 transition-colors"
               aria-label="Toggle navigation menu"
             >
               {isMobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
@@ -301,7 +309,7 @@ export const Navbar: React.FC = () => {
           </div>
         </div>
 
-        {/* Mobile Search Collapsible */}
+        {/* Mobile/Tablet Search Collapsible */}
         <AnimatePresence>
           {isSearchExpanded && (
             <motion.div
@@ -316,14 +324,14 @@ export const Navbar: React.FC = () => {
         </AnimatePresence>
       </div>
 
-      {/* Mobile Navigation Drawer / Menu */}
+      {/* Mobile/Tablet Navigation Drawer */}
       <AnimatePresence>
         {isMobileMenuOpen && (
           <motion.div
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: 'auto' }}
             exit={{ opacity: 0, height: 0 }}
-            className="md:hidden bg-white border-b border-stone-200 overflow-hidden"
+            className="lg:hidden bg-white border-b border-stone-200 overflow-hidden"
           >
             <div className="px-4 py-4 space-y-1.5">
               {/* Location info inside mobile menu */}

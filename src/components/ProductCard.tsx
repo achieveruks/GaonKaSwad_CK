@@ -8,6 +8,7 @@ import {
   isProductInStockAtOutlet,
   isProductFeaturedAtOutlet,
   isProductBestsellerAtOutlet,
+  isProductChefSpecialAtOutlet,
 } from '../lib/locationService';
 import { Star, Clock, Flame, Plus } from 'lucide-react';
 import { motion } from 'motion/react';
@@ -27,6 +28,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, viewMode = 'g
   const isInStockHere = isProductInStockAtOutlet(product, currentOutletId);
   const isFeaturedHere = isProductFeaturedAtOutlet(product, currentOutletId);
   const isBestsellerHere = isProductBestsellerAtOutlet(product, currentOutletId);
+  const isChefSpecialHere = isProductChefSpecialAtOutlet(product, currentOutletId);
 
   // Check if item is already in cart (default variant)
   const cartItemsForProduct = cart.filter((item) => item.product.id === product.id);
@@ -113,13 +115,13 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, viewMode = 'g
                 <span className="px-2 py-0.5 bg-amber-700 text-white font-bold text-[10px] uppercase tracking-wider rounded shadow-2xs">
                   FEATURED
                 </span>
+              ) : isChefSpecialHere ? (
+                <span className="px-2 py-0.5 bg-stone-900 text-white font-bold text-[10px] uppercase tracking-wider rounded shadow-2xs">
+                  CHEF SPECIAL
+                </span>
               ) : product.spiceLevel === 'Spicy' || product.spiceLevel === 'Extra Spicy' ? (
                 <span className="px-2 py-0.5 bg-rose-600 text-white font-bold text-[10px] uppercase tracking-wider rounded shadow-2xs">
                   SPICY
-                </span>
-              ) : product.chefSpecial ? (
-                <span className="px-2 py-0.5 bg-stone-900 text-white font-bold text-[10px] uppercase tracking-wider rounded shadow-2xs">
-                  CHEF SPECIAL
                 </span>
               ) : null}
             </div>
