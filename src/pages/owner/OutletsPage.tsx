@@ -15,6 +15,7 @@ import {
   isProductInStockAtOutlet,
   isProductFeaturedAtOutlet,
   isProductBestsellerAtOutlet,
+  isProductChefSpecialAtOutlet,
 } from '../../lib/locationService';
 import {
   Store,
@@ -37,6 +38,7 @@ import {
   UtensilsCrossed,
   Sparkles,
   Flame,
+  ChefHat,
   PackageCheck,
   PackageX,
   SlidersHorizontal,
@@ -49,6 +51,7 @@ interface OutletProductItemState {
   inStock: boolean;
   isFeatured: boolean;
   isBestseller: boolean;
+  isChefSpecial: boolean;
 }
 
 export const OutletsPage: React.FC = () => {
@@ -137,6 +140,7 @@ export const OutletsPage: React.FC = () => {
           inStock: isProductInStockAtOutlet(p, outletId),
           isFeatured: isProductFeaturedAtOutlet(p, outletId),
           isBestseller: isProductBestsellerAtOutlet(p, outletId),
+          isChefSpecial: isProductChefSpecialAtOutlet(p, outletId),
         };
       } else {
         // New outlet defaults: all products assigned & in stock
@@ -146,6 +150,7 @@ export const OutletsPage: React.FC = () => {
           inStock: true,
           isFeatured: !!p.featured,
           isBestseller: !!p.bestseller,
+          isChefSpecial: isProductChefSpecialAtOutlet(p, undefined),
         };
       }
     });
@@ -239,6 +244,7 @@ export const OutletsPage: React.FC = () => {
         inStock: item.inStock,
         isFeatured: item.isFeatured,
         isBestseller: item.isBestseller,
+        isChefSpecial: item.isChefSpecial,
       }));
 
       if (updates.length > 0) {
@@ -558,6 +564,7 @@ export const OutletsPage: React.FC = () => {
               const inStockProducts = servedProducts.filter((p) => isProductInStockAtOutlet(p, outlet.id));
               const featuredCount = servedProducts.filter((p) => isProductFeaturedAtOutlet(p, outlet.id)).length;
               const bestsellerCount = servedProducts.filter((p) => isProductBestsellerAtOutlet(p, outlet.id)).length;
+              const chefSpecialCount = servedProducts.filter((p) => isProductChefSpecialAtOutlet(p, outlet.id)).length;
 
               return (
                 <div
@@ -677,6 +684,7 @@ export const OutletsPage: React.FC = () => {
                           <p className="text-[11px] text-stone-600">
                             {featuredCount > 0 && `${featuredCount} Featured • `}
                             {bestsellerCount > 0 && `${bestsellerCount} Bestsellers • `}
+                            {chefSpecialCount > 0 && `${chefSpecialCount} Chef's Special • `}
                             {servedProducts.length - inStockProducts.length > 0 && (
                               <span className="text-rose-700 font-semibold">
                                 {servedProducts.length - inStockProducts.length} out of stock
@@ -1300,6 +1308,7 @@ export const OutletsPage: React.FC = () => {
                           inStock: true,
                           isFeatured: false,
                           isBestseller: false,
+                          isChefSpecial: false,
                         };
 
                         return (
@@ -1399,12 +1408,12 @@ export const OutletsPage: React.FC = () => {
                                   }}
                                   className={`px-2 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-colors cursor-pointer border ${
                                     itemState.isFeatured
-                                      ? 'bg-amber-100 text-amber-950 border-amber-300'
+                                      ? 'bg-purple-100 text-purple-950 border-purple-300'
                                       : 'bg-stone-100 text-stone-500 border-stone-200 hover:bg-stone-200'
                                   }`}
                                   title="Toggle Featured on Homepage for this outlet"
                                 >
-                                  <Sparkles className={`w-3 h-3 ${itemState.isFeatured ? 'text-amber-700' : 'text-stone-400'}`} />
+                                  <Sparkles className={`w-3 h-3 ${itemState.isFeatured ? 'text-purple-700' : 'text-stone-400'}`} />
                                   <span>Featured</span>
                                 </button>
 
@@ -1429,6 +1438,29 @@ export const OutletsPage: React.FC = () => {
                                 >
                                   <Flame className={`w-3 h-3 ${itemState.isBestseller ? 'text-orange-600' : 'text-stone-400'}`} />
                                   <span>Bestseller</span>
+                                </button>
+
+                                {/* Chef's Special Toggle */}
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setOutletItemStates((prev) => ({
+                                      ...prev,
+                                      [product.id]: {
+                                        ...itemState,
+                                        isChefSpecial: !itemState.isChefSpecial,
+                                      },
+                                    }));
+                                  }}
+                                  className={`px-2 py-1 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-colors cursor-pointer border ${
+                                    itemState.isChefSpecial
+                                      ? 'bg-amber-100 text-amber-950 border-amber-300'
+                                      : 'bg-stone-100 text-stone-500 border-stone-200 hover:bg-stone-200'
+                                  }`}
+                                  title="Toggle Chef's Special Signature for this outlet"
+                                >
+                                  <ChefHat className={`w-3 h-3 ${itemState.isChefSpecial ? 'text-amber-700' : 'text-stone-400'}`} />
+                                  <span>Chef's Special</span>
                                 </button>
                               </div>
                             ) : (
