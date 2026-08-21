@@ -371,7 +371,7 @@ export function getMinimumOrderValue(
 }
 
 /**
- * 12. checkPinCodeOnline - live API verification with rich error messages
+ * 12. checkPinCodeOnline - live database & API verification with rich error messages
  */
 export async function checkPinCodeOnline(pinCode: string): Promise<{
   available: boolean;
@@ -389,11 +389,53 @@ export async function checkPinCodeOnline(pinCode: string): Promise<{
     };
   }
 
+  // 1. Direct Supabase Database Check (if configured)
+  if (isSupabaseConfigured()) {
+    try {
+      const [supaZones, supaOutlets] = await Promise.all([
+        fetchSupabaseZones(true),
+        fetchSupabaseOutlets(true),
+      ]);
+
+      if (Array.isArray(supaZones) && supaZones.length > 0) {
+        updateLocalCache(supaOutlets, supaZones);
+
+        const matchingZone = supaZones.find(
+          (z) =>
+            z.isActive &&
+            Array.isArray(z.pinCodes) &&
+            z.pinCodes.some((p) => String(p).trim() === cleanPin)
+        );
+
+        if (matchingZone) {
+          const matchingOutlet = supaOutlets.find((o) => o.id === matchingZone.outletId);
+          if (matchingOutlet && matchingOutlet.isActive) {
+            return {
+              available: true,
+              outlet: matchingOutlet,
+              zone: matchingZone,
+              deliveryFee: matchingZone.deliveryFee ?? matchingOutlet.deliveryFee ?? 40,
+              minimumOrderValue: matchingOutlet.minimumOrderValue || 200,
+            };
+          } else if (matchingOutlet && !matchingOutlet.isActive) {
+            return {
+              available: false,
+              error: `Our kitchen outlet (${matchingOutlet.name}) serving PIN code ${cleanPin} is temporarily closed.`,
+            };
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Direct Supabase PIN check error, checking API/cache:', err);
+    }
+  }
+
+  // 2. Node Backend API check
   try {
     const res = await fetch(`/api/delivery-zones/check/${cleanPin}`);
     if (res.ok) {
       const data = await res.json();
-      if (data.available) {
+      if (data.available && data.outlet && data.zone) {
         return {
           available: true,
           outlet: data.outlet,
@@ -401,18 +443,13 @@ export async function checkPinCodeOnline(pinCode: string): Promise<{
           deliveryFee: data.zone?.deliveryFee ?? (data.outlet?.deliveryFee ?? 40),
           minimumOrderValue: data.outlet?.minimumOrderValue ?? 200,
         };
-      } else {
-        return {
-          available: false,
-          error: data.error || `We don't deliver to PIN code ${cleanPin} yet.`,
-        };
       }
     }
   } catch (e) {
     console.warn('Live PIN check API failed, checking local data:', e);
   }
 
-  // Fallback to local data
+  // 3. Fallback to local cached data
   const zone = getDeliveryZoneByPinCode(cleanPin, cachedZones);
   if (!zone) {
     return {

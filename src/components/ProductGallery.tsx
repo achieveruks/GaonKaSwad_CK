@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Sparkles, Flame, ZoomIn } from 'lucide-react';
+import { Flame, ChefHat, ZoomIn } from 'lucide-react';
 
 interface ProductGalleryProps {
   images: string[];
@@ -63,14 +63,15 @@ export const ProductGallery: React.FC<ProductGalleryProps> = ({
 
           {bestseller && (
             <span className="px-2 py-0.5 bg-orange-600 text-white font-bold text-[10px] uppercase tracking-wider rounded-md shadow-xs flex items-center gap-1">
-              <Sparkles className="w-3 h-3 fill-white" />
+              <Flame className="w-3 h-3 fill-white" />
               Bestseller
             </span>
           )}
 
           {chefSpecial && !bestseller && (
-            <span className="px-2 py-0.5 bg-gray-900 text-orange-300 font-bold text-[10px] uppercase tracking-wider rounded-md shadow-xs">
-              Chef Signature
+            <span className="px-2 py-0.5 bg-purple-700 text-white font-bold text-[10px] uppercase tracking-wider rounded-md shadow-xs flex items-center gap-1">
+              <ChefHat className="w-3 h-3 text-white" />
+              Chef Special
             </span>
           )}
         </div>

@@ -164,7 +164,7 @@ export const INITIAL_DELIVERY_ZONES: DeliveryZone[] = [
   {
     id: 'zone-bbsr-khandagiri',
     outletId: 'bbsr-khandagiri',
-    pinCodes: ['751030', '751019', '751003'],
+    pinCodes: ['751030', '751019', '751003', '752054'],
     deliveryFee: 35,
     minimumOrderValue: 149,
     isActive: true,
@@ -173,6 +173,7 @@ export const INITIAL_DELIVERY_ZONES: DeliveryZone[] = [
 
 // Pre-defined demo suggestions for fast testing
 export const POPULAR_PIN_SUGGESTIONS = [
+  { pin: '752054', area: 'Kendriya Vihar, Bhubaneswar', outlet: 'Gaon Ka Swad - Khandagiri' },
   { pin: '560102', area: 'HSR Layout, Bangalore', outlet: 'Gaon Ka Swad - HSR Layout' },
   { pin: '560066', area: 'Whitefield, Bangalore', outlet: 'Gaon Ka Swad - Whitefield' },
   { pin: '560038', area: 'Indiranagar, Bangalore', outlet: 'Gaon Ka Swad - Indiranagar' },

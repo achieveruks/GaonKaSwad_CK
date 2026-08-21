@@ -10,7 +10,7 @@ import {
   isProductBestsellerAtOutlet,
   isProductChefSpecialAtOutlet,
 } from '../lib/locationService';
-import { Star, Clock, Flame, Plus } from 'lucide-react';
+import { Star, Clock, Flame, Plus, Sparkles, ChefHat } from 'lucide-react';
 import { motion } from 'motion/react';
 
 interface ProductCardProps {
@@ -108,15 +108,18 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, viewMode = 'g
                   OUT OF STOCK
                 </span>
               ) : isBestsellerHere ? (
-                <span className="px-2 py-0.5 bg-emerald-600 text-white font-bold text-[10px] uppercase tracking-wider rounded shadow-2xs">
+                <span className="px-2 py-0.5 bg-orange-600 text-white font-bold text-[10px] uppercase tracking-wider rounded shadow-2xs flex items-center gap-1">
+                  <Flame className="w-2.5 h-2.5 fill-white" />
                   BESTSELLER
                 </span>
               ) : isFeaturedHere ? (
-                <span className="px-2 py-0.5 bg-amber-700 text-white font-bold text-[10px] uppercase tracking-wider rounded shadow-2xs">
+                <span className="px-2 py-0.5 bg-amber-600 text-white font-bold text-[10px] uppercase tracking-wider rounded shadow-2xs flex items-center gap-1">
+                  <Sparkles className="w-2.5 h-2.5 fill-white" />
                   FEATURED
                 </span>
               ) : isChefSpecialHere ? (
-                <span className="px-2 py-0.5 bg-stone-900 text-white font-bold text-[10px] uppercase tracking-wider rounded shadow-2xs">
+                <span className="px-2 py-0.5 bg-purple-700 text-white font-bold text-[10px] uppercase tracking-wider rounded shadow-2xs flex items-center gap-1">
+                  <ChefHat className="w-2.5 h-2.5 text-white" />
                   CHEF SPECIAL
                 </span>
               ) : product.spiceLevel === 'Spicy' || product.spiceLevel === 'Extra Spicy' ? (

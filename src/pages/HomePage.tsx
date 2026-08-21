@@ -15,6 +15,7 @@ import {
 } from '../lib/locationService';
 import {
   Flame,
+  ChefHat,
   ArrowRight,
   Sparkles,
   Star,
@@ -85,9 +86,7 @@ export const HomePage: React.FC = () => {
 
   // Composition rules for Hero Carousel:
   // Primary Selection: Up to 3 bestsellers + up to 2 featured (Max 5)
-  // Rule A: If bestseller + featured count < 5, show that many items (can be 4/3/2/1)
-  // Rule B: If bestseller + featured === 0, fallback to first 3 items
-  // Rule C: If total outlet items < 3, show all available items
+  // If carousel count < 3, pad with other in-stock items available at this outlet (up to 3, or whatever total in-stock items the outlet actually has)
   const carouselItems = useMemo(() => {
     const bestsellers = outletAvailableProducts.filter((p) =>
       outletId ? isProductBestsellerAtOutlet(p, outletId) : !!p.bestseller
@@ -103,18 +102,20 @@ export const HomePage: React.FC = () => {
     const chosenFeatured = featured.slice(0, 2);
     let items = [...chosenBestsellers, ...chosenFeatured];
 
-    // Rule B: fallback to first 3 items
-    if (items.length === 0) {
-      items = outletAvailableProducts.slice(0, 3);
-    }
-
-    // Rule C: fallback to all available products
-    if (items.length === 0 && activeProducts.length > 0) {
-      items = activeProducts.slice(0, 3);
+    // If carousel count < 3, pad with other available in-stock items strictly from this outlet
+    if (items.length < 3) {
+      const existingIds = new Set(items.map((i) => i.id));
+      for (const p of outletAvailableProducts) {
+        if (!existingIds.has(p.id)) {
+          items.push(p);
+          existingIds.add(p.id);
+          if (items.length >= 3) break;
+        }
+      }
     }
 
     return items;
-  }, [outletAvailableProducts, outletId, activeProducts]);
+  }, [outletAvailableProducts, outletId]);
 
   // Carousel state and rotation
   const [currentSlide, setCurrentSlide] = useState(0);
@@ -237,14 +238,23 @@ export const HomePage: React.FC = () => {
                 <div className="relative mx-auto max-w-md lg:max-w-none aspect-4/3 sm:aspect-square rounded-2xl overflow-hidden shadow-lg border border-gray-200 bg-gray-900 select-none">
                   <AnimatePresence mode="wait">
                     <motion.img
-                      key={activeItem.id}
+                      key={`${activeItem.id}-${currentSlide}`}
                       src={activeItem.image || activeItem.imageUrl || activeItem.galleryImages?.[0] || 'https://images.unsplash.com/photo-1563379091339-03b21ab4a4f8?q=80&w=1000&auto=format&fit=crop'}
                       alt={activeItem.name}
-                      initial={{ opacity: 0, scale: 1.05 }}
-                      animate={{ opacity: 1, scale: 1 }}
+                      initial={{
+                        opacity: 0,
+                        scale: currentSlide % 2 === 0 ? 1.0 : 1.15,
+                      }}
+                      animate={{
+                        opacity: 1,
+                        scale: currentSlide % 2 === 0 ? 1.15 : 1.0,
+                      }}
                       exit={{ opacity: 0 }}
-                      transition={{ duration: 0.45 }}
-                      className="w-full h-full object-cover"
+                      transition={{
+                        opacity: { duration: 0.5, ease: 'easeInOut' },
+                        scale: { duration: 4.5, ease: 'linear' },
+                      }}
+                      className="w-full h-full object-cover will-change-transform"
                       referrerPolicy="no-referrer"
                     />
                   </AnimatePresence>
@@ -278,22 +288,22 @@ export const HomePage: React.FC = () => {
                     {/* Bestseller Icon Badge */}
                     {(outletId ? isProductBestsellerAtOutlet(activeItem, outletId) : activeItem.bestseller) && (
                       <div
-                        className="w-6 h-6 sm:w-6.5 sm:h-6.5 lg:w-8 lg:h-8 rounded-md lg:rounded-lg bg-amber-500 flex items-center justify-center shadow-md shrink-0"
+                        className="w-6 h-6 sm:w-6.5 sm:h-6.5 lg:w-8 lg:h-8 rounded-md lg:rounded-lg bg-orange-600 flex items-center justify-center shadow-md shrink-0"
                         title="Bestseller"
                         aria-label="Bestseller"
                       >
-                        <Star className="w-3 h-3 sm:w-3.5 sm:h-3.5 lg:w-4 lg:h-4 text-stone-950 fill-stone-950" />
+                        <Flame className="w-3 h-3 sm:w-3.5 sm:h-3.5 lg:w-4 lg:h-4 text-white fill-white" />
                       </div>
                     )}
 
                     {/* Featured Dish Icon Badge */}
                     {(outletId ? isProductFeaturedAtOutlet(activeItem, outletId) : activeItem.featured) && (
                       <div
-                        className="w-6 h-6 sm:w-6.5 sm:h-6.5 lg:w-8 lg:h-8 rounded-md lg:rounded-lg bg-orange-600 flex items-center justify-center shadow-md shrink-0"
+                        className="w-6 h-6 sm:w-6.5 sm:h-6.5 lg:w-8 lg:h-8 rounded-md lg:rounded-lg bg-amber-500 flex items-center justify-center shadow-md shrink-0"
                         title="Featured Dish"
                         aria-label="Featured Dish"
                       >
-                        <Sparkles className="w-3 h-3 sm:w-3.5 sm:h-3.5 lg:w-4 lg:h-4 text-white fill-white" />
+                        <Sparkles className="w-3 h-3 sm:w-3.5 sm:h-3.5 lg:w-4 lg:h-4 text-stone-950 fill-stone-950" />
                       </div>
                     )}
 
@@ -304,7 +314,7 @@ export const HomePage: React.FC = () => {
                         title="Chef's Special"
                         aria-label="Chef's Special"
                       >
-                        <Flame className="w-3 h-3 sm:w-3.5 sm:h-3.5 lg:w-4 lg:h-4 text-white fill-white" />
+                        <ChefHat className="w-3 h-3 sm:w-3.5 sm:h-3.5 lg:w-4 lg:h-4 text-white" />
                       </div>
                     )}
 

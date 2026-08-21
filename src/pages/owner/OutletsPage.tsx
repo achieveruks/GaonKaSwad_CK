@@ -4,6 +4,7 @@ import { useNavigation } from '../../context/NavigationContext';
 import { useAuth } from '../../context/AuthContext';
 import { useProducts } from '../../context/ProductContext';
 import { Outlet, DeliveryZone, Product } from '../../types';
+import { CATEGORIES } from '../../data/products';
 import {
   getOutlets,
   getDeliveryZones,
@@ -167,6 +168,8 @@ export const OutletsPage: React.FC = () => {
   const handleOpenAddModal = () => {
     setEditingOutlet(null);
     setActiveModalTab('details');
+    setModalMenuSearch('');
+    setModalMenuCategory('all');
     setFormData({
       name: '',
       city: 'Bangalore',
@@ -196,6 +199,8 @@ export const OutletsPage: React.FC = () => {
   const handleOpenEditModal = (outlet: Outlet, initialTab: 'details' | 'menu' = 'details') => {
     setEditingOutlet(outlet);
     setActiveModalTab(initialTab);
+    setModalMenuSearch('');
+    setModalMenuCategory('all');
     setFormData({
       name: outlet.name || '',
       city: outlet.city || 'Bangalore',
@@ -335,12 +340,52 @@ export const OutletsPage: React.FC = () => {
   const activeCount = safeOutlets.filter((o) => o?.isActive).length;
   const totalPinsCovered = new Set(safeZones.flatMap((z) => z?.pinCodes || [])).size;
 
+  const getCategoryLabel = (catSlugOrId: string) => {
+    const found = CATEGORIES.find((c) => c.slug === catSlugOrId || c.id === catSlugOrId);
+    return found ? found.name : catSlugOrId.replace(/-/g, ' ');
+  };
+
+  // Derive unique categories available across catalog
+  const availableCategories = useMemo(() => {
+    const categoryMap = new Map<string, { slug: string; name: string }>();
+
+    // 1. Add standard categories
+    CATEGORIES.forEach((cat) => {
+      categoryMap.set(cat.slug, { slug: cat.slug, name: cat.name });
+    });
+
+    // 2. Detect any custom categories from products
+    allProducts.forEach((p) => {
+      if (p.category && !categoryMap.has(p.category)) {
+        const match = CATEGORIES.find((c) => c.id === p.category || c.slug === p.category);
+        if (match) {
+          categoryMap.set(match.slug, { slug: match.slug, name: match.name });
+        } else {
+          categoryMap.set(p.category, {
+            slug: p.category,
+            name: p.category.replace(/-/g, ' ').replace(/\b\w/g, (l) => l.toUpperCase()),
+          });
+        }
+      }
+    });
+
+    return Array.from(categoryMap.values());
+  }, [allProducts]);
+
   // Filter products inside modal Menu tab
   const modalFilteredProducts = useMemo(() => {
     return allProducts.filter((p) => {
-      const matchesCategory = modalMenuCategory === 'all' || p.category === modalMenuCategory;
+      let matchesCategory = modalMenuCategory === 'all';
+      if (!matchesCategory) {
+        const catObj = CATEGORIES.find(
+          (c) => c.slug === modalMenuCategory || c.id === modalMenuCategory
+        );
+        const matchSlugs = catObj ? [catObj.slug, catObj.id] : [modalMenuCategory];
+        matchesCategory = matchSlugs.includes(p.category);
+      }
+
       const q = modalMenuSearch.toLowerCase().trim();
-      const matchesSearch = !q || p.name.toLowerCase().includes(q) || p.slug.toLowerCase().includes(q);
+      const matchesSearch = !q || p.name.toLowerCase().includes(q) || (p.slug || '').toLowerCase().includes(q);
       return matchesCategory && matchesSearch;
     });
   }, [allProducts, modalMenuCategory, modalMenuSearch]);
@@ -1319,14 +1364,21 @@ export const OutletsPage: React.FC = () => {
                         onChange={(e) => setModalMenuCategory(e.target.value)}
                         className="px-3 py-1.5 bg-stone-50 border border-stone-200 rounded-xl text-xs text-stone-800 focus:outline-none focus:border-amber-700 font-semibold"
                       >
-                        <option value="all">All Categories</option>
-                        <option value="main-course">Main Course</option>
-                        <option value="dal-sabzi">Dal & Sabzi</option>
-                        <option value="rice-breads">Rice & Breads</option>
-                        <option value="thalis">Thalis & Combos</option>
-                        <option value="snacks">Snacks & Starters</option>
-                        <option value="sweets">Sweets & Desserts</option>
-                        <option value="beverages">Beverages</option>
+                        <option value="all">All Categories ({allProducts.length})</option>
+                        {availableCategories.map((cat) => {
+                          const count = allProducts.filter((p) => {
+                            const catObj = CATEGORIES.find(
+                              (c) => c.slug === cat.slug || c.id === cat.slug
+                            );
+                            const matchSlugs = catObj ? [catObj.slug, catObj.id] : [cat.slug];
+                            return matchSlugs.includes(p.category);
+                          }).length;
+                          return (
+                            <option key={cat.slug} value={cat.slug}>
+                              {cat.name} {count > 0 ? `(${count})` : ''}
+                            </option>
+                          );
+                        })}
                       </select>
                     </div>
 
@@ -1385,8 +1437,8 @@ export const OutletsPage: React.FC = () => {
                                     ₹{product.price}
                                   </span>
                                 </div>
-                                <p className="text-[10px] text-stone-500 capitalize">
-                                  {product.category}
+                                <p className="text-[10px] text-amber-900/70 font-medium">
+                                  {getCategoryLabel(product.category)}
                                 </p>
                               </div>
                             </div>
