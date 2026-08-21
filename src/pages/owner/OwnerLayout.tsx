@@ -40,16 +40,24 @@ export const OwnerLayout: React.FC<OwnerLayoutProps> = ({
     goToOwnerOutlets,
     goToOwnerDeliveryZones,
     goToOwnerLogin,
+    goToManagerDashboard,
     goToHome,
   } = useNavigation();
   const [mobileMenuOpen, setMobileMenuOpen] = React.useState(false);
 
-  // Protected Route Guard
+  // Protected Route Guard & Manager Redirect
   useEffect(() => {
-    if (!isLoading && !isAuthenticated) {
-      goToOwnerLogin();
+    if (!isLoading) {
+      if (!isAuthenticated) {
+        goToOwnerLogin();
+      } else {
+        const role = ownerUser?.role || profile?.role;
+        if (role === 'outlet_manager') {
+          goToManagerDashboard();
+        }
+      }
     }
-  }, [isAuthenticated, isLoading, goToOwnerLogin]);
+  }, [isAuthenticated, isLoading, ownerUser, profile, goToOwnerLogin, goToManagerDashboard]);
 
   if (isLoading) {
     return (

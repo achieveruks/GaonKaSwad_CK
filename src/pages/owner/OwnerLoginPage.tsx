@@ -21,8 +21,8 @@ import {
 } from 'lucide-react';
 
 export const OwnerLoginPage: React.FC = () => {
-  const { isAuthenticated, isLoading, login } = useAuth();
-  const { goToOwnerDashboard, goToHome } = useNavigation();
+  const { isAuthenticated, isLoading, login, ownerUser, profile } = useAuth();
+  const { goToOwnerDashboard, goToManagerDashboard, goToHome } = useNavigation();
 
   const [email, setEmail] = useState('achieveruks@gmail.com');
   const [password, setPassword] = useState('gaonkaswaD1!');
@@ -31,12 +31,17 @@ export const OwnerLoginPage: React.FC = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // If already authenticated and not loading, redirect to dashboard
+  // If already authenticated and not loading, redirect to dashboard based on role
   useEffect(() => {
     if (!isLoading && isAuthenticated) {
-      goToOwnerDashboard();
+      const role = ownerUser?.role || profile?.role;
+      if (role === 'outlet_manager') {
+        goToManagerDashboard();
+      } else {
+        goToOwnerDashboard();
+      }
     }
-  }, [isAuthenticated, isLoading, goToOwnerDashboard]);
+  }, [isAuthenticated, isLoading, ownerUser, profile, goToOwnerDashboard, goToManagerDashboard]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -51,7 +56,11 @@ export const OwnerLoginPage: React.FC = () => {
     try {
       const result = await login(email.trim(), password, selectedRole);
       if (result.success) {
-        goToOwnerDashboard();
+        if (selectedRole === 'outlet_manager') {
+          goToManagerDashboard();
+        } else {
+          goToOwnerDashboard();
+        }
       } else {
         setErrorMessage(result.error || 'Invalid credentials. Please verify your Supabase email and password.');
       }

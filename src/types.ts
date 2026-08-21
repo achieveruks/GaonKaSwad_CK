@@ -135,6 +135,7 @@ export interface Profile {
   id: string;
   role: UserRole;
   outletId?: string;
+  assignedOutletIds?: string[];
   fullName?: string;
   phone?: string;
   email?: string;
@@ -148,6 +149,7 @@ export interface OwnerUser {
   role: UserRole | 'admin';
   name?: string;
   outletId?: string;
+  assignedOutletIds?: string[];
   isSupabaseAuth?: boolean;
 }
 

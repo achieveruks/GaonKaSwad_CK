@@ -28,12 +28,23 @@ import { OwnerProductsPage } from './pages/owner/OwnerProductsPage';
 import { OwnerProductFormPage } from './pages/owner/OwnerProductFormPage';
 import { OutletsPage } from './pages/owner/OutletsPage';
 import { DeliveryZonesPage } from './pages/owner/DeliveryZonesPage';
+import { ManagerDashboardPage } from './pages/manager/ManagerDashboardPage';
 
 const AppContent: React.FC = () => {
   const { currentRoute } = useNavigation();
   const { isLocationModalOpen, setIsLocationModalOpen } = useLocation();
 
-  // 1. Owner Portal Routing (Self-contained layout)
+  // 1. Outlet Manager Portal Routing
+  if (currentRoute.path === '/manager/dashboard') {
+    return (
+      <>
+        <ManagerDashboardPage />
+        <Toast />
+      </>
+    );
+  }
+
+  // 2. Owner Portal Routing (Self-contained layout)
   if (currentRoute.path.startsWith('/owner')) {
     switch (currentRoute.path) {
       case '/owner':

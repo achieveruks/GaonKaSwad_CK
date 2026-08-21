@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigation } from '../context/NavigationContext';
 import { useCart } from '../context/CartContext';
 import { useProducts } from '../context/ProductContext';
@@ -77,6 +77,18 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
   const [newReviewComment, setNewReviewComment] = useState('');
   const [isAddingReview, setIsAddingReview] = useState(false);
 
+  // Sync state when switching between products
+  useEffect(() => {
+    if (product) {
+      setSelectedVariant(product.variants && product.variants.length > 0 ? product.variants[0] : undefined);
+      setSelectedSpiceLevel(product.spiceLevel || 'Medium');
+      setSelectedAddons([]);
+      setQuantity(1);
+      setReviews(product.reviewsList || []);
+      setIsAddingReview(false);
+    }
+  }, [product?.id, slug]);
+
   if (!product) {
     return (
       <div className="max-w-7xl mx-auto px-4 py-16 text-center space-y-4">
@@ -92,6 +104,16 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
       </div>
     );
   }
+
+  // Consistent rating and review count from database product
+  const baseReviewsCount = product.reviewsCount !== undefined && product.reviewsCount !== null
+    ? Number(product.reviewsCount)
+    : (product.reviewsList?.length || 0);
+
+  const initialListLen = product.reviewsList?.length || 0;
+  const userAddedReviewsCount = Math.max(0, reviews.length - initialListLen);
+  const totalReviewsCount = baseReviewsCount + userAddedReviewsCount;
+  const displayRating = product.rating !== undefined && product.rating !== null ? Number(product.rating) : 4.8;
 
   const currentOutletId = selectedLocation?.outletId;
   const isAvailableAtOutlet = isProductServedAtOutlet(product, currentOutletId);
@@ -283,9 +305,9 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
             <div className="flex flex-wrap items-center gap-2.5 text-xs text-gray-500 mt-2.5 pb-3 border-b border-gray-200">
               <div className="flex items-center gap-1 text-orange-600 font-bold bg-orange-50 px-2 py-0.5 rounded-lg border border-orange-200">
                 <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
-                <span>{product.rating}</span>
+                <span>{displayRating}</span>
                 <span className="text-gray-400 font-normal">
-                  ({reviews.length})
+                  ({totalReviewsCount})
                 </span>
               </div>
 
@@ -640,7 +662,7 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
                 : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
             }`}
           >
-            Reviews ({reviews.length})
+            Reviews ({totalReviewsCount})
           </button>
         </div>
 
@@ -753,7 +775,7 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
                   Customer Experiences
                 </h3>
                 <p className="text-xs text-gray-500">
-                  {reviews.length} verified ratings • {product.rating} out of 5 stars
+                  {totalReviewsCount} verified ratings • {displayRating} out of 5 stars
                 </p>
               </div>
               <button
