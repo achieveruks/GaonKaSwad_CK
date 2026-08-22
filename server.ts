@@ -1,6 +1,7 @@
 import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
+import { createClient } from '@supabase/supabase-js';
 import { productStorage } from './server/storage';
 import {
   createSessionToken,
@@ -9,6 +10,11 @@ import {
   requireOwnerAuth,
   AuthenticatedRequest,
 } from './server/auth';
+
+// Supabase Server Client
+const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || 'https://ifthfunawntmqjupafxp.supabase.co';
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlmdGhmdW5hd250bXFqdXBhZnhwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODcyMjc4NTQsImV4cCI6MjEwMjgwMzg1NH0.xS74LsNci-I_v-p13O3rzzhflOuOZaHLDcVLgEi9Yzw';
+const serverSupabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 async function startServer() {
   const app = express();
@@ -91,6 +97,504 @@ async function startServer() {
   // 3. Auth: Logout
   app.post('/api/auth/logout', (req, res) => {
     return res.json({ success: true, message: 'Logged out successfully' });
+  });
+
+  // 3b. Auth: Customer Send OTP
+  app.post('/api/auth/send-otp', async (req, res) => {
+    try {
+      const { phone } = req.body;
+      const rawPhone = String(phone || '').trim();
+      const normPhone = rawPhone.replace(/\D/g, '').slice(-10);
+
+      if (!normPhone || normPhone.length !== 10) {
+        return res.status(400).json({
+          success: false,
+          error: 'Please provide a valid 10-digit mobile number.',
+        });
+      }
+
+      // Check in Supabase first
+      let exists = false;
+      try {
+        const { data: supaCustomer } = await serverSupabase
+          .from('customers')
+          .select('id, phone, full_name')
+          .eq('phone', normPhone)
+          .maybeSingle();
+
+        if (supaCustomer) {
+          exists = true;
+        }
+      } catch (err) {
+        console.warn('Supabase customer check error:', err);
+      }
+
+      if (!exists) {
+        const memoryCustomer = productStorage.findCustomerByPhone(normPhone);
+        if (memoryCustomer) exists = true;
+      }
+
+      return res.json({
+        success: true,
+        exists,
+        phone: normPhone,
+        message: exists
+          ? 'Verification OTP sent to your mobile number.'
+          : 'Customer not registered. Please complete sign up.',
+      });
+    } catch (err: any) {
+      console.error('Send OTP error:', err);
+      return res.status(500).json({ success: false, error: 'Failed to send OTP' });
+    }
+  });
+
+  // 3c. Auth: Customer Verify OTP (Validated against 951753)
+  app.post('/api/auth/verify-otp', async (req, res) => {
+    try {
+      const { phone, otp, fullName, email } = req.body;
+      const rawPhone = String(phone || '').trim();
+      const normPhone = rawPhone.replace(/\D/g, '').slice(-10);
+
+      if (!normPhone || normPhone.length !== 10) {
+        return res.status(400).json({
+          success: false,
+          error: 'Please provide a valid 10-digit mobile number.',
+        });
+      }
+
+      const inputOtp = String(otp || '').trim();
+      const DEMO_VALID_OTP = '951753';
+
+      if (inputOtp !== DEMO_VALID_OTP) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid 6-digit OTP. Please enter the verification code sent to your phone.',
+        });
+      }
+
+      // 1. Sync or create customer in Supabase public.customers table
+      let finalCustomer: any = null;
+      let defaultAddress: any = null;
+      let isExistingCustomer = false;
+
+      try {
+        const { data: existingSupa } = await serverSupabase
+          .from('customers')
+          .select('*')
+          .eq('phone', normPhone)
+          .maybeSingle();
+
+        const now = new Date().toISOString();
+
+        if (existingSupa) {
+          isExistingCustomer = true;
+          const updatePayload: any = { updated_at: now };
+          if (fullName && fullName.trim() && existingSupa.full_name === 'Customer') {
+            updatePayload.full_name = fullName.trim();
+          }
+          if (email && email.trim() && !existingSupa.email) {
+            updatePayload.email = email.trim();
+          }
+
+          const { data: updated } = await serverSupabase
+            .from('customers')
+            .update(updatePayload)
+            .eq('id', existingSupa.id)
+            .select()
+            .single();
+
+          finalCustomer = updated || existingSupa;
+        } else {
+          const insertPayload: any = {
+            phone: normPhone,
+            full_name: (fullName && fullName.trim()) || 'Customer',
+            email: (email && email.trim()) || null,
+            is_phone_verified: true,
+            marketing_consent: false,
+            welcome_discount_used: false,
+            created_at: now,
+            updated_at: now,
+          };
+
+          const { data: inserted, error: insertErr } = await serverSupabase
+            .from('customers')
+            .insert(insertPayload)
+            .select()
+            .single();
+
+          if (!insertErr && inserted) {
+            finalCustomer = inserted;
+          }
+        }
+
+        if (finalCustomer) {
+          const { data: addrRow } = await serverSupabase
+            .from('customer_addresses')
+            .select('*')
+            .eq('customer_id', finalCustomer.id)
+            .order('is_default', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+
+          if (addrRow) {
+            defaultAddress = {
+              id: String(addrRow.id),
+              customerId: String(addrRow.customer_id),
+              addressLabel: addrRow.label || 'Home',
+              fullAddress: addrRow.address_line1 + (addrRow.address_line2 ? `, ${addrRow.address_line2}` : ''),
+              landmark: addrRow.landmark || undefined,
+              city: addrRow.city || 'Bangalore',
+              state: 'Karnataka',
+              pincode: addrRow.pincode || '',
+              isDefault: addrRow.is_default !== false,
+            };
+          }
+        }
+      } catch (dbErr) {
+        console.warn('Supabase verification save warning:', dbErr);
+      }
+
+      // Memory fallback sync
+      let memoryCustomer = productStorage.findCustomerByPhone(normPhone);
+      if (memoryCustomer) {
+        isExistingCustomer = true;
+      }
+      if (!memoryCustomer) {
+        memoryCustomer = productStorage.getOrCreateCustomer({
+          phone: normPhone,
+          fullName: (fullName && String(fullName).trim()) || (finalCustomer && finalCustomer.full_name) || 'Customer',
+          email: (email && String(email).trim()) || (finalCustomer && finalCustomer.email) || '',
+        });
+      } else if (fullName && memoryCustomer.fullName === 'Customer') {
+        memoryCustomer = productStorage.getOrCreateCustomer({
+          phone: normPhone,
+          fullName: String(fullName).trim(),
+          email: email ? String(email).trim() : memoryCustomer.email,
+        });
+      }
+
+      if (!defaultAddress && memoryCustomer) {
+        defaultAddress = productStorage.getCustomerDefaultAddress(memoryCustomer.id);
+      }
+
+      const mappedCustomer = {
+        id: finalCustomer?.id || memoryCustomer?.id || `cust-${Date.now().toString(36)}`,
+        phone: normPhone,
+        fullName: finalCustomer?.full_name || memoryCustomer?.fullName || fullName || 'Customer',
+        email: finalCustomer?.email || memoryCustomer?.email || email || undefined,
+        welcomeDiscountUsed: !!(finalCustomer?.welcome_discount_used ?? memoryCustomer?.welcomeDiscountUsed),
+        marketingConsent: !!(finalCustomer?.marketing_consent ?? memoryCustomer?.marketingConsent),
+      };
+
+      const isWelcomeEligible = !mappedCustomer.welcomeDiscountUsed;
+
+      return res.json({
+        success: true,
+        verified: true,
+        phone: normPhone,
+        customer: mappedCustomer,
+        defaultAddress: defaultAddress || null,
+        isNewCustomer: !isExistingCustomer,
+        welcomeDiscountEligible: isWelcomeEligible,
+        message: `Welcome back, ${mappedCustomer.fullName}!`,
+      });
+    } catch (err: any) {
+      console.error('Verify OTP error:', err);
+      return res.status(500).json({ success: false, error: 'Failed to verify OTP' });
+    }
+  });
+
+  // =====================
+  // CUSTOMER ENDPOINTS
+  // =====================
+
+  // Lookup customer by 10-digit phone
+  app.get('/api/customers/lookup', async (req, res) => {
+    try {
+      const phoneParam = typeof req.query.phone === 'string' ? req.query.phone : '';
+      const normPhone = phoneParam.replace(/\D/g, '').slice(-10);
+
+      if (!normPhone || normPhone.length !== 10) {
+        return res.json({ success: true, exists: false, customer: null, defaultAddress: null });
+      }
+
+      // Try Supabase first
+      try {
+        const { data: supaCust } = await serverSupabase
+          .from('customers')
+          .select('*')
+          .eq('phone', normPhone)
+          .maybeSingle();
+
+        if (supaCust) {
+          const { data: addrRow } = await serverSupabase
+            .from('customer_addresses')
+            .select('*')
+            .eq('customer_id', supaCust.id)
+            .order('is_default', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+
+          const defaultAddress = addrRow
+            ? {
+                id: String(addrRow.id),
+                customerId: String(addrRow.customer_id),
+                addressLabel: addrRow.label || 'Home',
+                fullAddress: addrRow.address_line1 + (addrRow.address_line2 ? `, ${addrRow.address_line2}` : ''),
+                landmark: addrRow.landmark || undefined,
+                city: addrRow.city || 'Bangalore',
+                state: 'Karnataka',
+                pincode: addrRow.pincode || '',
+                isDefault: addrRow.is_default !== false,
+              }
+            : null;
+
+          return res.json({
+            success: true,
+            exists: true,
+            customer: {
+              id: supaCust.id,
+              phone: supaCust.phone,
+              fullName: supaCust.full_name || 'Customer',
+              email: supaCust.email || undefined,
+              welcomeDiscountUsed: !!supaCust.welcome_discount_used,
+              marketingConsent: !!supaCust.marketing_consent,
+            },
+            defaultAddress,
+            welcomeDiscountEligible: !supaCust.welcome_discount_used,
+          });
+        }
+      } catch (err) {
+        console.warn('Supabase customer lookup error:', err);
+      }
+
+      const customer = productStorage.findCustomerByPhone(normPhone);
+      if (!customer) {
+        return res.json({
+          success: true,
+          exists: false,
+          customer: null,
+          defaultAddress: null,
+          welcomeDiscountEligible: true,
+        });
+      }
+
+      const defaultAddress = productStorage.getCustomerDefaultAddress(customer.id);
+      return res.json({
+        success: true,
+        exists: true,
+        customer: {
+          id: customer.id,
+          phone: customer.phone,
+          fullName: customer.fullName,
+          email: customer.email,
+          welcomeDiscountUsed: !!customer.welcomeDiscountUsed,
+          marketingConsent: !!customer.marketingConsent,
+        },
+        defaultAddress: defaultAddress || null,
+        welcomeDiscountEligible: !customer.welcomeDiscountUsed,
+      });
+    } catch (err: any) {
+      console.error('Customer lookup error:', err);
+      return res.status(500).json({ success: false, error: 'Failed to lookup customer' });
+    }
+  });
+
+  // Upsert customer profile & address
+  app.post('/api/customers/profile', async (req, res) => {
+    try {
+      const { phone, fullName, email, marketingConsent, address } = req.body;
+      const normPhone = String(phone || '').replace(/\D/g, '').slice(-10);
+      if (!normPhone || normPhone.length !== 10) {
+        return res.status(400).json({ success: false, error: 'Valid 10-digit phone number is required' });
+      }
+
+      let supaCustomer: any = null;
+      let supaAddress: any = null;
+
+      try {
+        const { data: existing } = await serverSupabase
+          .from('customers')
+          .select('*')
+          .eq('phone', normPhone)
+          .maybeSingle();
+
+        const now = new Date().toISOString();
+        if (existing) {
+          const updatePayload: any = { updated_at: now };
+          if (fullName) updatePayload.full_name = fullName.trim();
+          if (email !== undefined) updatePayload.email = email ? email.trim() : null;
+          if (marketingConsent !== undefined) updatePayload.marketing_consent = !!marketingConsent;
+
+          const { data: updated } = await serverSupabase
+            .from('customers')
+            .update(updatePayload)
+            .eq('id', existing.id)
+            .select()
+            .single();
+
+          supaCustomer = updated || existing;
+        } else {
+          const insertPayload: any = {
+            phone: normPhone,
+            full_name: (fullName && fullName.trim()) || 'Customer',
+            email: (email && email.trim()) || null,
+            is_phone_verified: true,
+            marketing_consent: !!marketingConsent,
+            welcome_discount_used: false,
+            created_at: now,
+            updated_at: now,
+          };
+
+          const { data: inserted } = await serverSupabase
+            .from('customers')
+            .insert(insertPayload)
+            .select()
+            .single();
+
+          supaCustomer = inserted;
+        }
+
+        if (supaCustomer && address && address.fullAddress) {
+          const { data: insAddr } = await serverSupabase
+            .from('customer_addresses')
+            .insert({
+              customer_id: supaCustomer.id,
+              label: address.addressLabel || 'Home',
+              address_line1: address.fullAddress,
+              city: address.city || 'Bangalore',
+              pincode: address.pincode || '',
+              landmark: address.landmark || null,
+              is_default: address.isDefault !== false,
+            })
+            .select()
+            .single();
+
+          if (insAddr) {
+            supaAddress = {
+              id: insAddr.id,
+              customerId: insAddr.customer_id,
+              addressLabel: insAddr.label || 'Home',
+              fullAddress: insAddr.address_line1,
+              landmark: insAddr.landmark || undefined,
+              city: insAddr.city || 'Bangalore',
+              state: 'Karnataka',
+              pincode: insAddr.pincode || '',
+              isDefault: insAddr.is_default !== false,
+            };
+          }
+        }
+      } catch (dbErr) {
+        console.warn('Supabase customer profile sync warning:', dbErr);
+      }
+
+      const customer = productStorage.getOrCreateCustomer({
+        phone: normPhone,
+        fullName: fullName || supaCustomer?.full_name,
+        email: email || supaCustomer?.email,
+        marketingConsent: !!marketingConsent,
+      });
+
+      let savedAddress = supaAddress;
+      if (!savedAddress && address && address.fullAddress) {
+        savedAddress = productStorage.saveCustomerAddress(customer.id, address);
+      }
+
+      return res.json({
+        success: true,
+        customer: supaCustomer
+          ? {
+              id: supaCustomer.id,
+              phone: supaCustomer.phone,
+              fullName: supaCustomer.full_name,
+              email: supaCustomer.email,
+              welcomeDiscountUsed: !!supaCustomer.welcome_discount_used,
+              marketingConsent: !!supaCustomer.marketing_consent,
+            }
+          : customer,
+        defaultAddress: savedAddress || productStorage.getCustomerDefaultAddress(customer.id) || null,
+      });
+    } catch (err: any) {
+      console.error('Customer profile save error:', err);
+      return res.status(400).json({ success: false, error: err.message || 'Failed to save customer profile' });
+    }
+  });
+
+  // =====================
+  // REVIEWS & VERIFICATION ENDPOINTS
+  // =====================
+
+  // Check review eligibility (Delivered order required)
+  app.get('/api/reviews/eligibility', (req, res) => {
+    try {
+      const productId = typeof req.query.productId === 'string' ? req.query.productId : '';
+      const phone = typeof req.query.phone === 'string' ? req.query.phone : '';
+      const customerId = typeof req.query.customerId === 'string' ? req.query.customerId : '';
+
+      if (!productId) {
+        return res.status(400).json({ success: false, error: 'Product ID is required' });
+      }
+
+      const identifier = customerId || phone;
+      if (!identifier) {
+        return res.json({
+          success: true,
+          eligible: false,
+          message: 'Please provide your customer phone or ID to check review eligibility.',
+        });
+      }
+
+      const check = productStorage.checkProductReviewEligibility(identifier, productId);
+      return res.json({ success: true, ...check });
+    } catch (err: any) {
+      console.error('Review eligibility check error:', err);
+      return res.status(500).json({ success: false, error: 'Failed to verify review eligibility' });
+    }
+  });
+
+  // Add verified review
+  app.post('/api/reviews', (req, res) => {
+    try {
+      const { productId, userName, userLocation, rating, comment, phone, customerId, orderId } = req.body;
+
+      if (!productId || !comment || !rating || !userName) {
+        return res.status(400).json({
+          success: false,
+          error: 'Product ID, reviewer name, rating, and comment are required.',
+        });
+      }
+
+      const identifier = customerId || phone;
+      if (identifier) {
+        const check = productStorage.checkProductReviewEligibility(identifier, productId);
+        if (!check.eligible) {
+          return res.status(403).json({
+            success: false,
+            error: 'Review submission is restricted to verified customers with delivered orders for this item.',
+          });
+        }
+      }
+
+      const result = productStorage.addVerifiedProductReview(productId, {
+        userName,
+        userLocation: userLocation || 'Verified Customer',
+        rating: Number(rating),
+        comment,
+        customerId,
+        phone,
+        orderId,
+      });
+
+      return res.status(201).json({
+        success: true,
+        message: 'Your verified culinary review has been published!',
+        product: result.product,
+        review: result.review,
+      });
+    } catch (err: any) {
+      console.error('Submit review error:', err);
+      return res.status(400).json({ success: false, error: err.message || 'Failed to submit review' });
+    }
   });
 
   // =====================
@@ -349,6 +853,30 @@ async function startServer() {
     }
   });
 
+  // 15e. Outlets: Get About Customization
+  app.get('/api/outlets/:id/about', (req, res) => {
+    try {
+      const { id: outletId } = req.params;
+      const about = productStorage.getAboutByOutletId(outletId);
+      return res.json({ success: true, about });
+    } catch (err: any) {
+      console.error('Fetch outlet about error:', err);
+      return res.status(500).json({ success: false, error: 'Failed to fetch outlet about configuration' });
+    }
+  });
+
+  // 15f. Outlets: Update About Customization (Protected)
+  app.put('/api/outlets/:id/about', requireOwnerAuth, (req: AuthenticatedRequest, res) => {
+    try {
+      const { id: outletId } = req.params;
+      const updated = productStorage.upsertAbout(outletId, req.body);
+      return res.json({ success: true, about: updated });
+    } catch (err: any) {
+      console.error('Update outlet about error:', err);
+      return res.status(400).json({ success: false, error: err.message || 'Failed to update outlet about customization' });
+    }
+  });
+
   // =====================
   // DELIVERY ZONES ENDPOINTS
   // =====================
@@ -475,10 +1003,39 @@ async function startServer() {
   // ORDERS ENDPOINTS
   // =====================
 
-  // 21. Orders: Create Order
+  // 21. Orders: Create Order (With server-side discount & totals recalculation)
   app.post('/api/orders', (req, res) => {
     try {
-      const order = productStorage.createOrder(req.body);
+      const payload = req.body;
+      const rawPhone = payload.customerDetails?.phone || '';
+      const normPhone = rawPhone.replace(/\D/g, '').slice(-10);
+
+      // Verify Welcome Discount server-side
+      let welcomeDiscountAmount = 0;
+      let isWelcomeDiscountApplied = false;
+
+      if (payload.isWelcomeDiscountApplied || payload.customerDetails?.createAccount) {
+        if (normPhone) {
+          const existingCustomer = productStorage.findCustomerByPhone(normPhone);
+          const isEligible = !existingCustomer || !existingCustomer.welcomeDiscountUsed;
+          if (isEligible) {
+            isWelcomeDiscountApplied = true;
+            const subtotal = Number(payload.subtotal) || 0;
+            const couponDiscount = Number(payload.discount) || 0;
+            const remainingSubtotal = Math.max(0, subtotal - couponDiscount);
+            // 10% capped at 50/-
+            welcomeDiscountAmount = Math.min(50, Math.round(remainingSubtotal * 0.10));
+          }
+        }
+      }
+
+      const orderData = {
+        ...payload,
+        welcomeDiscountAmount,
+        isWelcomeDiscountApplied,
+      };
+
+      const order = productStorage.createOrder(orderData);
       return res.status(201).json({ success: true, order });
     } catch (err: any) {
       console.error('Create order error:', err);
@@ -486,6 +1043,25 @@ async function startServer() {
         success: false,
         error: err.message || 'Failed to place order. Please check order details.',
       });
+    }
+  });
+
+  // 21b. Orders: Update Status (Protected or for delivery simulation)
+  app.patch('/api/orders/:orderId/status', (req, res) => {
+    try {
+      const { status } = req.body;
+      if (!status) {
+        return res.status(400).json({ success: false, error: 'Status is required' });
+      }
+
+      const updated = productStorage.updateOrderStatus(req.params.orderId, status);
+      if (!updated) {
+        return res.status(404).json({ success: false, error: 'Order not found' });
+      }
+      return res.json({ success: true, order: updated });
+    } catch (err: any) {
+      console.error('Update order status error:', err);
+      return res.status(500).json({ success: false, error: 'Failed to update order status' });
     }
   });
 

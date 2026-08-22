@@ -3,8 +3,9 @@ import { OwnerLayout } from './OwnerLayout';
 import { useNavigation } from '../../context/NavigationContext';
 import { useAuth } from '../../context/AuthContext';
 import { useProducts } from '../../context/ProductContext';
-import { Outlet, DeliveryZone, Product } from '../../types';
+import { Outlet, DeliveryZone, Product, OutletAbout } from '../../types';
 import { CATEGORIES } from '../../data/products';
+import { getAboutByOutletId, saveAboutByOutletId } from '../../lib/aboutService';
 import {
   getOutlets,
   getDeliveryZones,
@@ -44,6 +45,10 @@ import {
   PackageX,
   SlidersHorizontal,
   Check,
+  Palette,
+  BookOpen,
+  Image as ImageIcon,
+  RotateCcw,
 } from 'lucide-react';
 
 interface OutletProductItemState {
@@ -68,12 +73,12 @@ export const OutletsPage: React.FC = () => {
 
   // Modal State for Add / Edit
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [activeModalTab, setActiveModalTab] = useState<'details' | 'menu'>('details');
+  const [activeModalTab, setActiveModalTab] = useState<'details' | 'customisation' | 'menu'>('details');
   const [editingOutlet, setEditingOutlet] = useState<Outlet | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [feedbackMsg, setFeedbackMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  // Form State
+  // Form State for Outlet
   const [formData, setFormData] = useState<Omit<Outlet, 'id' | 'createdAt' | 'updatedAt'>>({
     name: '',
     city: 'Bangalore',
@@ -91,6 +96,22 @@ export const OutletsPage: React.FC = () => {
     heroHeader: 'Authentic Indian Flavors, Slow-Cooked to Perfection',
     heroDescription:
       'Experience royal dum biryanis, 24-hour slow-simmered dal makhani, and smoky clay-oven tandoori grills, delivered piping hot to your doorstep in sealed eco-handis.',
+  });
+
+  // Form State for About Page Customization (1:1 with Outlets, persisted to Supabase)
+  const [aboutFormData, setAboutFormData] = useState<OutletAbout>({
+    outletId: '',
+    heroFireLine: '',
+    heroHeader: '',
+    heroDescription: '',
+    storyLine: '',
+    storyTitle: '',
+    storyDescription: '',
+    storyHighlight1Title: '',
+    storyHighlight1Description: '',
+    storyHighlight2Title: '',
+    storyHighlight2Description: '',
+    outletImage: '',
   });
 
   // Per-outlet menu item states in modal
@@ -192,11 +213,25 @@ export const OutletsPage: React.FC = () => {
       trustBadgeUsp: '100% Pure',
       trustBadgeUspSub: 'Desi Ghee Recipe',
     });
+    setAboutFormData({
+      outletId: '',
+      heroFireLine: '',
+      heroHeader: '',
+      heroDescription: '',
+      storyLine: '',
+      storyTitle: '',
+      storyDescription: '',
+      storyHighlight1Title: '',
+      storyHighlight1Description: '',
+      storyHighlight2Title: '',
+      storyHighlight2Description: '',
+      outletImage: '',
+    });
     initOutletItemStates(null);
     setIsModalOpen(true);
   };
 
-  const handleOpenEditModal = (outlet: Outlet, initialTab: 'details' | 'menu' = 'details') => {
+  const handleOpenEditModal = (outlet: Outlet, initialTab: 'details' | 'customisation' | 'menu' = 'details') => {
     setEditingOutlet(outlet);
     setActiveModalTab(initialTab);
     setModalMenuSearch('');
@@ -225,6 +260,32 @@ export const OutletsPage: React.FC = () => {
       trustBadgeUspSub: outlet.trustBadgeUspSub || 'Desi Ghee Recipe',
       assignedProductIds: outlet.assignedProductIds || [],
     });
+
+    // Populate about page form data from Supabase DB
+    setAboutFormData({
+      outletId: outlet.id,
+      heroFireLine: '',
+      heroHeader: '',
+      heroDescription: '',
+      storyLine: '',
+      storyTitle: '',
+      storyDescription: '',
+      storyHighlight1Title: '',
+      storyHighlight1Description: '',
+      storyHighlight2Title: '',
+      storyHighlight2Description: '',
+      outletImage: '',
+    });
+    getAboutByOutletId(outlet.id)
+      .then((ab) => {
+        if (ab) {
+          setAboutFormData(ab);
+        }
+      })
+      .catch((err) => {
+        console.warn('Error loading about data from database:', err);
+      });
+
     initOutletItemStates(outlet);
     setIsModalOpen(true);
   };
@@ -249,10 +310,24 @@ export const OutletsPage: React.FC = () => {
       let savedOutlet: Outlet;
       if (editingOutlet) {
         savedOutlet = await updateOutletApi(editingOutlet.id, outletPayload, token || '');
-        showFeedback('success', `Outlet "${formData.name}" and menu catalog updated successfully!`);
+        showFeedback('success', `Outlet "${formData.name}" and page customizations updated successfully!`);
       } else {
         savedOutlet = await createOutletApi(outletPayload, token || '');
-        showFeedback('success', `New kitchen outlet "${formData.name}" and menu catalog created!`);
+        showFeedback('success', `New kitchen outlet "${formData.name}" and page customizations created!`);
+      }
+
+      // Save About Page customization to Supabase
+      try {
+        await saveAboutByOutletId(
+          savedOutlet.id,
+          {
+            ...aboutFormData,
+            outletId: savedOutlet.id,
+          },
+          token || ''
+        );
+      } catch (aboutErr) {
+        console.warn('Failed to save about configuration:', aboutErr);
       }
 
       // Save dish merchandising & stock configurations if updated
@@ -904,11 +979,11 @@ export const OutletsPage: React.FC = () => {
               </div>
 
               {/* Tab Navigation */}
-              <div className="flex items-center gap-2 px-5 pt-3 border-b border-stone-200 bg-stone-50 shrink-0">
+              <div className="flex items-center gap-2 px-5 pt-3 border-b border-stone-200 bg-stone-50 shrink-0 overflow-x-auto">
                 <button
                   type="button"
                   onClick={() => setActiveModalTab('details')}
-                  className={`pb-2.5 px-3 text-xs font-bold border-b-2 transition-colors flex items-center gap-1.5 cursor-pointer ${
+                  className={`pb-2.5 px-3 text-xs font-bold border-b-2 transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
                     activeModalTab === 'details'
                       ? 'border-amber-800 text-amber-900'
                       : 'border-transparent text-stone-500 hover:text-stone-800'
@@ -920,8 +995,21 @@ export const OutletsPage: React.FC = () => {
 
                 <button
                   type="button"
+                  onClick={() => setActiveModalTab('customisation')}
+                  className={`pb-2.5 px-3 text-xs font-bold border-b-2 transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
+                    activeModalTab === 'customisation'
+                      ? 'border-amber-800 text-amber-900'
+                      : 'border-transparent text-stone-500 hover:text-stone-800'
+                  }`}
+                >
+                  <Palette className="w-3.5 h-3.5" />
+                  <span>Page Customisation</span>
+                </button>
+
+                <button
+                  type="button"
                   onClick={() => setActiveModalTab('menu')}
-                  className={`pb-2.5 px-3 text-xs font-bold border-b-2 transition-colors flex items-center gap-1.5 cursor-pointer ${
+                  className={`pb-2.5 px-3 text-xs font-bold border-b-2 transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
                     activeModalTab === 'menu'
                       ? 'border-amber-800 text-amber-900'
                       : 'border-transparent text-stone-500 hover:text-stone-800'
@@ -1129,134 +1217,6 @@ export const OutletsPage: React.FC = () => {
                       </div>
                     </div>
 
-                    {/* 3. Homepage Hero Section Customization */}
-                    <div className="space-y-3 pt-3 border-t border-stone-100">
-                      <div className="flex items-center gap-1.5">
-                        <Flame className="w-3.5 h-3.5 text-orange-600" />
-                        <h3 className="font-bold text-xs text-stone-900 uppercase tracking-wider">
-                          3. Homepage Hero Section Customization
-                        </h3>
-                      </div>
-                      <p className="text-[11px] text-stone-500">
-                        Customise the hero header, flame pill tag, and description shown to customers when this outlet is selected.
-                      </p>
-
-                      <div className="space-y-3">
-                        <div>
-                          <label className="block text-xs font-semibold text-stone-700 mb-1">
-                            Hero Flame Tagline (Always uppercase)
-                          </label>
-                          <input
-                            type="text"
-                            value={formData.heroFireLine || ''}
-                            onChange={(e) =>
-                              setFormData({ ...formData, heroFireLine: e.target.value.toUpperCase() })
-                            }
-                            placeholder="e.g. ARTISANAL CLOUD KITCHEN • SLOW-COOKED DUM"
-                            className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700 focus:bg-white"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-xs font-semibold text-stone-700 mb-1">
-                            Hero Main Headline
-                          </label>
-                          <input
-                            type="text"
-                            value={formData.heroHeader || ''}
-                            onChange={(e) =>
-                              setFormData({ ...formData, heroHeader: e.target.value })
-                            }
-                            placeholder="e.g. Authentic Indian Flavors, Slow-Cooked to Perfection"
-                            className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700 focus:bg-white"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-xs font-semibold text-stone-700 mb-1">
-                            Hero Subtitle / Description
-                          </label>
-                          <textarea
-                            rows={2}
-                            value={formData.heroDescription || ''}
-                            onChange={(e) =>
-                              setFormData({ ...formData, heroDescription: e.target.value })
-                            }
-                            placeholder="e.g. Experience royal dum biryanis, 24-hour slow-simmered dal makhani, and smoky clay-oven tandoori grills..."
-                            className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700 focus:bg-white resize-none"
-                          />
-                        </div>
-
-                        {/* Trust Badges Configuration */}
-                        <div className="pt-3 border-t border-stone-100/80 space-y-2">
-                          <p className="text-[11px] font-bold text-stone-800 uppercase tracking-wide">
-                            Trust Badges Bar Customization
-                          </p>
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                            <div>
-                              <label className="block text-[11px] font-semibold text-stone-700 mb-1">
-                                Badge 1: Rating Headline
-                              </label>
-                              <input
-                                type="text"
-                                value={formData.trustBadgeRating || ''}
-                                onChange={(e) =>
-                                  setFormData({ ...formData, trustBadgeRating: e.target.value })
-                                }
-                                placeholder="e.g. 4.9 ★ (2.8k+)"
-                                className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700 focus:bg-white"
-                              />
-                            </div>
-
-                            <div>
-                              <label className="block text-[11px] font-semibold text-stone-700 mb-1">
-                                Badge 1: Rating Source / Subtext
-                              </label>
-                              <input
-                                type="text"
-                                value={formData.trustBadgeRatingSub || ''}
-                                onChange={(e) =>
-                                  setFormData({ ...formData, trustBadgeRatingSub: e.target.value })
-                                }
-                                placeholder="e.g. Google & Zomato"
-                                className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700 focus:bg-white"
-                              />
-                            </div>
-
-                            <div>
-                              <label className="block text-[11px] font-semibold text-stone-700 mb-1">
-                                Badge 3: Quality USP Title
-                              </label>
-                              <input
-                                type="text"
-                                value={formData.trustBadgeUsp || ''}
-                                onChange={(e) =>
-                                  setFormData({ ...formData, trustBadgeUsp: e.target.value })
-                                }
-                                placeholder="e.g. 100% Pure"
-                                className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700 focus:bg-white"
-                              />
-                            </div>
-
-                            <div>
-                              <label className="block text-[11px] font-semibold text-stone-700 mb-1">
-                                Badge 3: Quality USP Subtext
-                              </label>
-                              <input
-                                type="text"
-                                value={formData.trustBadgeUspSub || ''}
-                                onChange={(e) =>
-                                  setFormData({ ...formData, trustBadgeUspSub: e.target.value })
-                                }
-                                placeholder="e.g. Desi Ghee Recipe"
-                                className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700 focus:bg-white"
-                              />
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
                     {/* Outlet Status */}
                     <div className="pt-3 border-t border-stone-100 flex items-center justify-between">
                       <div>
@@ -1276,8 +1236,454 @@ export const OutletsPage: React.FC = () => {
                       />
                     </div>
                   </div>
+                ) : activeModalTab === 'customisation' ? (
+                  /* Tab 2: Page Customisation (Homepage Hero + About Page Customization) */
+                  <div className="p-5 space-y-6">
+                    {/* First Section: Homepage Hero Section Customization */}
+                    <div className="bg-stone-50/80 border border-stone-200 rounded-2xl p-4 sm:p-5 space-y-4">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className="w-7 h-7 rounded-lg bg-orange-100 border border-orange-200 flex items-center justify-center text-orange-700 shrink-0">
+                            <Flame className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <h3 className="font-bold text-xs text-stone-900 uppercase tracking-wider">
+                              1. Homepage Hero Section Customization
+                            </h3>
+                            <p className="text-[11px] text-stone-500">
+                              Customise the hero header, flame pill tag, and trust badges shown on the homepage for this outlet.
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="space-y-3 pt-1">
+                        <div>
+                          <label className="block text-xs font-semibold text-stone-700 mb-1">
+                            Hero Flame Tagline (Always uppercase)
+                          </label>
+                          <input
+                            type="text"
+                            value={formData.heroFireLine || ''}
+                            onChange={(e) =>
+                              setFormData({ ...formData, heroFireLine: e.target.value.toUpperCase() })
+                            }
+                            placeholder="e.g. ARTISANAL CLOUD KITCHEN • SLOW-COOKED DUM"
+                            className="w-full px-3 py-2 bg-white border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-semibold text-stone-700 mb-1">
+                            Hero Main Headline
+                          </label>
+                          <input
+                            type="text"
+                            value={formData.heroHeader || ''}
+                            onChange={(e) =>
+                              setFormData({ ...formData, heroHeader: e.target.value })
+                            }
+                            placeholder="e.g. Authentic Indian Flavors, Slow-Cooked to Perfection"
+                            className="w-full px-3 py-2 bg-white border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-semibold text-stone-700 mb-1">
+                            Hero Subtitle / Description
+                          </label>
+                          <textarea
+                            rows={2}
+                            value={formData.heroDescription || ''}
+                            onChange={(e) =>
+                              setFormData({ ...formData, heroDescription: e.target.value })
+                            }
+                            placeholder="e.g. Experience royal dum biryanis, 24-hour slow-simmered dal makhani, and smoky clay-oven tandoori grills..."
+                            className="w-full px-3 py-2 bg-white border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700 resize-none"
+                          />
+                        </div>
+
+                        {/* Trust Badges Configuration */}
+                        <div className="pt-3 border-t border-stone-200/80 space-y-2">
+                          <p className="text-[11px] font-bold text-stone-800 uppercase tracking-wide">
+                            Trust Badges Bar Customization
+                          </p>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div>
+                              <label className="block text-[11px] font-semibold text-stone-700 mb-1">
+                                Badge 1: Rating Headline
+                              </label>
+                              <input
+                                type="text"
+                                value={formData.trustBadgeRating || ''}
+                                onChange={(e) =>
+                                  setFormData({ ...formData, trustBadgeRating: e.target.value })
+                                }
+                                placeholder="e.g. 4.9 ★ (2.8k+)"
+                                className="w-full px-3 py-2 bg-white border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="block text-[11px] font-semibold text-stone-700 mb-1">
+                                Badge 1: Rating Source / Subtext
+                              </label>
+                              <input
+                                type="text"
+                                value={formData.trustBadgeRatingSub || ''}
+                                onChange={(e) =>
+                                  setFormData({ ...formData, trustBadgeRatingSub: e.target.value })
+                                }
+                                placeholder="e.g. Google & Zomato"
+                                className="w-full px-3 py-2 bg-white border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="block text-[11px] font-semibold text-stone-700 mb-1">
+                                Badge 3: Quality USP Title
+                              </label>
+                              <input
+                                type="text"
+                                value={formData.trustBadgeUsp || ''}
+                                onChange={(e) =>
+                                  setFormData({ ...formData, trustBadgeUsp: e.target.value })
+                                }
+                                placeholder="e.g. 100% Pure"
+                                className="w-full px-3 py-2 bg-white border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="block text-[11px] font-semibold text-stone-700 mb-1">
+                                Badge 3: Quality USP Subtext
+                              </label>
+                              <input
+                                type="text"
+                                value={formData.trustBadgeUspSub || ''}
+                                onChange={(e) =>
+                                  setFormData({ ...formData, trustBadgeUspSub: e.target.value })
+                                }
+                                placeholder="e.g. Desi Ghee Recipe"
+                                className="w-full px-3 py-2 bg-white border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Second Section: About Page Customization (Saved to Supabase DB 'abouts' table) */}
+                    <div className="bg-stone-50/80 border border-stone-200 rounded-2xl p-4 sm:p-5 space-y-4">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <div className="w-7 h-7 rounded-lg bg-amber-100 border border-amber-200 flex items-center justify-center text-amber-800 shrink-0">
+                            <BookOpen className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <h3 className="font-bold text-xs text-stone-900 uppercase tracking-wider">
+                              2. About Page Customization
+                            </h3>
+                            <p className="text-[11px] text-stone-500">
+                              Customise the first 2 sections of the /#/about page when this outlet is selected. Saved to Supabase DB.
+                            </p>
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setAboutFormData({
+                              outletId: editingOutlet?.id || '',
+                              heroFireLine: `THE HERITAGE BEHIND GAON KA SWAD • ${(editingOutlet?.name || 'OUTLET').toUpperCase()}`,
+                              heroHeader: `Crafting Authentic Culinary Memories in ${editingOutlet?.city || 'Bangalore'}`,
+                              heroDescription: `Born out of a deep reverence for forgotten village recipes and slow-cooking traditions, our ${editingOutlet?.name || 'kitchen'} brings soulful tastes straight to modern dining tables.`,
+                              storyLine: 'WHO WE ARE',
+                              storyTitle: 'A Modern Cloud Kitchen with Heirloom Roots',
+                              storyDescription: 'Gaon Ka Swad was founded with a singular conviction: genuine taste cannot be rushed. We slow-simmer handis, use 24-hour charcoal embers, whole stone-ground spices, and 100% pure cow desi ghee.',
+                              storyHighlight1Title: '100% Pure Desi Ghee',
+                              storyHighlight1Description: 'Pure Desi Ghee & Raw Spices',
+                              storyHighlight2Title: '24 Hrs Slow-Simmered',
+                              storyHighlight2Description: 'Slow-Simmered Dal Bukhara',
+                              outletImage: 'https://images.unsplash.com/photo-1556910103-1c02745aae4d?q=80&w=1000&auto=format&fit=crop',
+                            });
+                          }}
+                          className="px-2.5 py-1 text-[11px] font-semibold text-stone-600 hover:text-amber-900 bg-white border border-stone-200 rounded-lg hover:bg-stone-100 flex items-center gap-1 self-start sm:self-auto cursor-pointer"
+                          title="Reset to template defaults"
+                        >
+                          <RotateCcw className="w-3 h-3" />
+                          <span>Reset Defaults</span>
+                        </button>
+                      </div>
+
+                      {/* Section 1: Hero Section Inputs */}
+                      <div className="bg-white border border-stone-200 rounded-xl p-3.5 space-y-3">
+                        <p className="text-[11px] font-bold text-stone-800 uppercase tracking-wide flex items-center gap-1.5">
+                          <Flame className="w-3.5 h-3.5 text-orange-600" />
+                          <span>About Page Hero Section</span>
+                        </p>
+
+                        <div>
+                          <label className="block text-xs font-semibold text-stone-700 mb-1">
+                            Hero Fire Line (Tagline Pill)
+                          </label>
+                          <input
+                            type="text"
+                            value={aboutFormData.heroFireLine || ''}
+                            onChange={(e) =>
+                              setAboutFormData({ ...aboutFormData, heroFireLine: e.target.value.toUpperCase() })
+                            }
+                            placeholder="e.g. THE HERITAGE BEHIND GAON KA SWAD"
+                            className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700 focus:bg-white"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-semibold text-stone-700 mb-1">
+                            Hero Header (Main Title)
+                          </label>
+                          <input
+                            type="text"
+                            value={aboutFormData.heroHeader || ''}
+                            onChange={(e) =>
+                              setAboutFormData({ ...aboutFormData, heroHeader: e.target.value })
+                            }
+                            placeholder="e.g. Crafting Authentic Culinary Memories, One Handi at a Time"
+                            className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700 focus:bg-white"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-semibold text-stone-700 mb-1">
+                            Hero Description
+                          </label>
+                          <textarea
+                            rows={2}
+                            value={aboutFormData.heroDescription || ''}
+                            onChange={(e) =>
+                              setAboutFormData({ ...aboutFormData, heroDescription: e.target.value })
+                            }
+                            placeholder="e.g. Born out of a deep reverence for forgotten village recipes and slow-cooking traditions..."
+                            className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700 focus:bg-white resize-none"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Section 2: Story & Heritage Inputs */}
+                      <div className="bg-white border border-stone-200 rounded-xl p-3.5 space-y-3">
+                        <p className="text-[11px] font-bold text-stone-800 uppercase tracking-wide flex items-center gap-1.5">
+                          <Sparkles className="w-3.5 h-3.5 text-amber-700" />
+                          <span>About Page Story & Highlights Section</span>
+                        </p>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-xs font-semibold text-stone-700 mb-1">
+                              Story Line (Small Tag)
+                            </label>
+                            <input
+                              type="text"
+                              value={aboutFormData.storyLine || ''}
+                              onChange={(e) =>
+                                setAboutFormData({ ...aboutFormData, storyLine: e.target.value.toUpperCase() })
+                              }
+                              placeholder="e.g. WHO WE ARE"
+                              className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700 focus:bg-white"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-xs font-semibold text-stone-700 mb-1">
+                              Story Title
+                            </label>
+                            <input
+                              type="text"
+                              value={aboutFormData.storyTitle || ''}
+                              onChange={(e) =>
+                                setAboutFormData({ ...aboutFormData, storyTitle: e.target.value })
+                              }
+                              placeholder="e.g. A Modern Cloud Kitchen with Heirloom Roots"
+                              className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700 focus:bg-white"
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-semibold text-stone-700 mb-1">
+                            Story Description (Separate paragraphs with empty line)
+                          </label>
+                          <textarea
+                            rows={3}
+                            value={aboutFormData.storyDescription || ''}
+                            onChange={(e) =>
+                              setAboutFormData({ ...aboutFormData, storyDescription: e.target.value })
+                            }
+                            placeholder="Detailed story of the kitchen, chef traditions, and preparation methods..."
+                            className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700 focus:bg-white resize-none"
+                          />
+                        </div>
+
+                        {/* Story Highlights (Cards) */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                          <div className="p-3 bg-stone-50 rounded-xl border border-stone-200 space-y-2">
+                            <span className="text-[10px] font-bold text-amber-800 uppercase tracking-wide">
+                              Story Highlight 1
+                            </span>
+                            <div>
+                              <label className="block text-[11px] font-semibold text-stone-700 mb-0.5">
+                                Title (e.g. 100%)
+                              </label>
+                              <input
+                                type="text"
+                                value={aboutFormData.storyHighlight1Title || ''}
+                                onChange={(e) =>
+                                  setAboutFormData({
+                                    ...aboutFormData,
+                                    storyHighlight1Title: e.target.value,
+                                  })
+                                }
+                                placeholder="e.g. 100%"
+                                className="w-full px-2.5 py-1.5 bg-white border border-stone-200 rounded-lg text-xs text-stone-900 focus:outline-none focus:border-amber-700"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[11px] font-semibold text-stone-700 mb-0.5">
+                                Description
+                              </label>
+                              <input
+                                type="text"
+                                value={aboutFormData.storyHighlight1Description || ''}
+                                onChange={(e) =>
+                                  setAboutFormData({
+                                    ...aboutFormData,
+                                    storyHighlight1Description: e.target.value,
+                                  })
+                                }
+                                placeholder="e.g. Pure Desi Ghee & Raw Spices"
+                                className="w-full px-2.5 py-1.5 bg-white border border-stone-200 rounded-lg text-xs text-stone-900 focus:outline-none focus:border-amber-700"
+                              />
+                            </div>
+                          </div>
+
+                          <div className="p-3 bg-stone-50 rounded-xl border border-stone-200 space-y-2">
+                            <span className="text-[10px] font-bold text-amber-800 uppercase tracking-wide">
+                              Story Highlight 2
+                            </span>
+                            <div>
+                              <label className="block text-[11px] font-semibold text-stone-700 mb-0.5">
+                                Title (e.g. 24 Hrs)
+                              </label>
+                              <input
+                                type="text"
+                                value={aboutFormData.storyHighlight2Title || ''}
+                                onChange={(e) =>
+                                  setAboutFormData({
+                                    ...aboutFormData,
+                                    storyHighlight2Title: e.target.value,
+                                  })
+                                }
+                                placeholder="e.g. 24 Hrs"
+                                className="w-full px-2.5 py-1.5 bg-white border border-stone-200 rounded-lg text-xs text-stone-900 focus:outline-none focus:border-amber-700"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[11px] font-semibold text-stone-700 mb-0.5">
+                                Description
+                              </label>
+                              <input
+                                type="text"
+                                value={aboutFormData.storyHighlight2Description || ''}
+                                onChange={(e) =>
+                                  setAboutFormData({
+                                    ...aboutFormData,
+                                    storyHighlight2Description: e.target.value,
+                                  })
+                                }
+                                placeholder="e.g. Slow-Simmered Dal Bukhara"
+                                className="w-full px-2.5 py-1.5 bg-white border border-stone-200 rounded-lg text-xs text-stone-900 focus:outline-none focus:border-amber-700"
+                              />
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Outlet Image URL with Thumbnail Preview */}
+                        <div className="pt-2">
+                          <label className="block text-xs font-semibold text-stone-700 mb-1 flex items-center gap-1.5">
+                            <ImageIcon className="w-3.5 h-3.5 text-stone-500" />
+                            <span>Kitchen / Outlet Image URL</span>
+                          </label>
+                          <input
+                            type="url"
+                            value={aboutFormData.outletImage || ''}
+                            onChange={(e) =>
+                              setAboutFormData({ ...aboutFormData, outletImage: e.target.value })
+                            }
+                            placeholder="https://images.unsplash.com/photo-..."
+                            className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700 focus:bg-white"
+                          />
+
+                          {/* Image preview & presets */}
+                          <div className="flex items-center gap-3 mt-2">
+                            <div className="w-16 h-12 rounded-lg bg-stone-200 border border-stone-300 overflow-hidden shrink-0">
+                              <img
+                                src={aboutFormData.outletImage || 'https://images.unsplash.com/photo-1556910103-1c02745aae4d?q=80&w=1000&auto=format&fit=crop'}
+                                alt="Preview"
+                                className="w-full h-full object-cover"
+                                referrerPolicy="no-referrer"
+                                onError={(e) => {
+                                  (e.target as HTMLImageElement).src =
+                                    'https://images.unsplash.com/photo-1556910103-1c02745aae4d?q=80&w=1000&auto=format&fit=crop';
+                                }}
+                              />
+                            </div>
+                            <div className="flex-1 flex flex-wrap gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setAboutFormData({
+                                    ...aboutFormData,
+                                    outletImage:
+                                      'https://images.unsplash.com/photo-1556910103-1c02745aae4d?q=80&w=1000&auto=format&fit=crop',
+                                  })
+                                }
+                                className="px-2 py-0.5 text-[10px] bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-md font-medium cursor-pointer"
+                              >
+                                Heritage Spices
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setAboutFormData({
+                                    ...aboutFormData,
+                                    outletImage:
+                                      'https://images.unsplash.com/photo-1589301760014-d929f3979dbc?q=80&w=1000&auto=format&fit=crop',
+                                  })
+                                }
+                                className="px-2 py-0.5 text-[10px] bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-md font-medium cursor-pointer"
+                              >
+                                Dum Handi
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setAboutFormData({
+                                    ...aboutFormData,
+                                    outletImage:
+                                      'https://images.unsplash.com/photo-1601050690597-df0568f70950?q=80&w=1000&auto=format&fit=crop',
+                                  })
+                                }
+                                className="px-2 py-0.5 text-[10px] bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-md font-medium cursor-pointer"
+                              >
+                                Clay Oven & Breads
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
                 ) : (
-                  /* Tab 2: Menu & Stock Configuration */
+                  /* Tab 3: Menu & Stock Configuration */
                   <div className="p-5 space-y-4">
                     {/* Header & Quick Action Toolbar */}
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-stone-50 p-3.5 rounded-xl border border-stone-200">

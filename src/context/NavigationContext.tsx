@@ -184,7 +184,7 @@ export const NavigationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     if (typeof window !== 'undefined' && window.location.hash) {
       return parseHash(window.location.hash);
     }
-    return { path: '/' };
+    return { path: '/contact' };
   });
 
   useEffect(() => {

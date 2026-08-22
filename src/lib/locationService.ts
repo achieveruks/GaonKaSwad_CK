@@ -15,53 +15,24 @@ import {
 } from './supabaseService';
 import { isSupabaseConfigured } from './supabase';
 
-const OUTLETS_CACHE_KEY = 'gaonkaswad_outlets_cache_v1';
-const ZONES_CACHE_KEY = 'gaonkaswad_zones_cache_v1';
+// In-memory runtime cache initialized from data constants
+let cachedOutlets: Outlet[] = [...INITIAL_OUTLETS];
+let cachedZones: DeliveryZone[] = [...INITIAL_DELIVERY_ZONES];
 
-let cachedOutlets: Outlet[] = [];
-let cachedZones: DeliveryZone[] = [];
-
-// Initialize memory cache from localStorage if available, or fallback to INITIAL
-function initLocalCache() {
+// Clean up any legacy localStorage keys to avoid confusion
+if (typeof window !== 'undefined') {
   try {
-    if (typeof window !== 'undefined') {
-      const savedOutlets = localStorage.getItem(OUTLETS_CACHE_KEY);
-      if (savedOutlets) {
-        cachedOutlets = JSON.parse(savedOutlets);
-      } else {
-        cachedOutlets = [...INITIAL_OUTLETS];
-      }
-
-      const savedZones = localStorage.getItem(ZONES_CACHE_KEY);
-      if (savedZones) {
-        cachedZones = JSON.parse(savedZones);
-      } else {
-        cachedZones = [...INITIAL_DELIVERY_ZONES];
-      }
-    } else {
-      cachedOutlets = [...INITIAL_OUTLETS];
-      cachedZones = [...INITIAL_DELIVERY_ZONES];
-    }
-  } catch (e) {
-    cachedOutlets = [...INITIAL_OUTLETS];
-    cachedZones = [...INITIAL_DELIVERY_ZONES];
-  }
+    localStorage.removeItem('gaonkaswad_outlets_cache_v1');
+    localStorage.removeItem('gaonkaswad_zones_cache_v1');
+  } catch {}
 }
-
-initLocalCache();
 
 function updateLocalCache(outlets?: Outlet[], zones?: DeliveryZone[]) {
   if (outlets) {
     cachedOutlets = outlets;
-    try {
-      localStorage.setItem(OUTLETS_CACHE_KEY, JSON.stringify(outlets));
-    } catch {}
   }
   if (zones) {
     cachedZones = zones;
-    try {
-      localStorage.setItem(ZONES_CACHE_KEY, JSON.stringify(zones));
-    } catch {}
   }
 }
 

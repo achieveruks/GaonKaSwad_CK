@@ -28,6 +28,24 @@ export interface Outlet {
   updatedAt?: string;
 }
 
+export interface OutletAbout {
+  id?: string;
+  outletId: string;
+  heroFireLine?: string;
+  heroHeader?: string;
+  heroDescription?: string;
+  storyLine?: string;
+  storyTitle?: string;
+  storyDescription?: string;
+  storyHighlight1Title?: string;
+  storyHighlight1Description?: string;
+  storyHighlight2Title?: string;
+  storyHighlight2Description?: string;
+  outletImage?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface DeliveryZone {
   id: string;
   name?: string;
@@ -192,6 +210,34 @@ export interface Coupon {
   description: string;
 }
 
+export interface Customer {
+  id: string;
+  phone: string;
+  fullName: string;
+  email?: string;
+  isActive?: boolean;
+  marketingConsent?: boolean;
+  welcomeDiscountUsed?: boolean;
+  welcomeDiscountUsedAt?: string;
+  lastOrderAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface CustomerAddress {
+  id: string;
+  customerId: string;
+  addressLabel?: string;
+  fullAddress: string;
+  landmark?: string;
+  city: string;
+  state: string;
+  pincode: string;
+  isDefault?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface CheckoutFormData {
   fullName: string;
   email: string;
@@ -205,11 +251,16 @@ export interface CheckoutFormData {
   deliveryNotes?: string;
   paymentMethod: 'cod' | 'upi' | 'card' | 'netbanking';
   includeCutlery: boolean;
+  createAccount?: boolean;
+  marketingConsent?: boolean;
+  isOtpVerified?: boolean;
 }
 
 export interface Order {
   id?: string;
   orderId: string;
+  customerId?: string;
+  isGuestCheckout?: boolean;
   outletId: string;
   outletName?: string;
   deliveryPinCode: string;
@@ -217,12 +268,21 @@ export interface Order {
   items: CartItem[];
   subtotal: number;
   discount: number;
+  welcomeDiscountAmount?: number;
+  isWelcomeDiscountApplied?: boolean;
   deliveryFee: number;
   packagingFee: number;
   gst: number;
   total: number;
   couponCode?: string;
   customerDetails: CheckoutFormData;
+  deliveryAddressSnapshot?: {
+    fullAddress: string;
+    landmark?: string;
+    city: string;
+    state: string;
+    pincode: string;
+  };
   status:
     | 'pending'
     | 'confirmed'

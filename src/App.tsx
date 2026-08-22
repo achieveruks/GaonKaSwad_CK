@@ -4,12 +4,14 @@ import { CartProvider, useCart } from './context/CartContext';
 import { AuthProvider } from './context/AuthContext';
 import { ProductProvider } from './context/ProductContext';
 import { LocationProvider, useLocation } from './context/LocationContext';
+import { CustomerProvider, useCustomer } from './context/CustomerContext';
 import { Navbar } from './components/Navbar';
 import { Footer } from './components/Footer';
 import { CartDrawer } from './components/CartDrawer';
 import { Toast } from './components/Toast';
 import { LocationModal } from './components/LocationModal';
 import { LocationSwitchModal } from './components/LocationSwitchModal';
+import { OtpModal } from './components/OtpModal';
 
 // Customer Pages
 import { HomePage } from './pages/HomePage';
@@ -33,6 +35,7 @@ import { ManagerDashboardPage } from './pages/manager/ManagerDashboardPage';
 const AppContent: React.FC = () => {
   const { currentRoute } = useNavigation();
   const { isLocationModalOpen, setIsLocationModalOpen } = useLocation();
+  const { isOtpModalOpen, closeOtpModal, otpModalPhone, otpModalMode, verifyOtp, otpModalOnSuccess } = useCustomer();
 
   // 1. Outlet Manager Portal Routing
   if (currentRoute.path === '/manager/dashboard') {
@@ -161,6 +164,16 @@ const AppContent: React.FC = () => {
       {/* Location Switch / Cart Conflict Modal */}
       <LocationSwitchModal />
 
+      {/* OTP Verification Modal for Customers */}
+      <OtpModal
+        isOpen={isOtpModalOpen}
+        onClose={closeOtpModal}
+        phone={otpModalPhone}
+        mode={otpModalMode}
+        onVerify={verifyOtp}
+        onSuccess={otpModalOnSuccess}
+      />
+
       {/* Dynamic Toast Notifications */}
       <Toast />
     </div>
@@ -174,7 +187,9 @@ export default function App() {
         <LocationProvider>
           <ProductProvider>
             <CartProvider>
-              <AppContent />
+              <CustomerProvider>
+                <AppContent />
+              </CustomerProvider>
             </CartProvider>
           </ProductProvider>
         </LocationProvider>

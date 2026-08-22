@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useCart } from '../context/CartContext';
 import { useNavigation } from '../context/NavigationContext';
 import { useLocation } from '../context/LocationContext';
+import { useCustomer } from '../context/CustomerContext';
 import { CheckoutFormData, Order } from '../types';
 import confetti from 'canvas-confetti';
 import {
@@ -23,8 +24,15 @@ import {
   Utensils,
   Store,
   AlertCircle,
+  UserCheck,
+  Lock,
+  Gift,
+  Check,
+  UserPlus,
+  RefreshCw,
+  Tag,
 } from 'lucide-react';
-import { motion } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
 
 export const CheckoutPage: React.FC = () => {
   const {
@@ -34,7 +42,6 @@ export const CheckoutPage: React.FC = () => {
     deliveryFee,
     packagingFee,
     gst,
-    total,
     appliedCoupon,
     includeCutlery,
     specialInstructions,
@@ -43,38 +50,124 @@ export const CheckoutPage: React.FC = () => {
 
   const { goToHome, goToShop } = useNavigation();
   const { selectedLocation, setIsLocationModalOpen } = useLocation();
+  const {
+    customer,
+    defaultAddress,
+    isCustomerLoggedIn,
+    isWelcomeDiscountEligible,
+    lookupCustomer,
+    openOtpModal,
+  } = useCustomer();
 
   // Form State
   const [formData, setFormData] = useState<CheckoutFormData>({
-    fullName: '',
-    email: '',
-    phone: '',
-    address: '',
-    landmark: '',
-    city: selectedLocation?.cityName || '',
-    state: selectedLocation?.stateName || '',
-    pincode: selectedLocation ? selectedLocation.pinCode : '',
+    fullName: customer?.fullName || '',
+    email: customer?.email || '',
+    phone: customer?.phone || '',
+    address: defaultAddress?.fullAddress || '',
+    landmark: defaultAddress?.landmark || '',
+    city: defaultAddress?.city || selectedLocation?.cityName || 'Bangalore',
+    state: defaultAddress?.state || selectedLocation?.stateName || 'Karnataka',
+    pincode: defaultAddress?.pincode || (selectedLocation ? selectedLocation.pinCode : ''),
     deliverySlot: 'immediate',
     deliveryNotes: specialInstructions || '',
     paymentMethod: 'upi',
     includeCutlery,
+    createAccount: !isCustomerLoggedIn, // default checked for new users to get 10% welcome discount
+    marketingConsent: true,
+    isPhoneVerified: !!isCustomerLoggedIn,
   });
+
+  // Returning customer detection state
+  const [returningCustomerFound, setReturningCustomerFound] = useState<{
+    name: string;
+    phone: string;
+    hasAddress: boolean;
+    addressData?: any;
+    welcomeEligible: boolean;
+  } | null>(null);
+  const [isLookingUpPhone, setIsLookingUpPhone] = useState(false);
 
   // Validation State
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [touched, setTouched] = useState<Record<string, boolean>>({});
+
+  // Sync if customer logs in or changes
+  useEffect(() => {
+    if (customer) {
+      setFormData((prev) => ({
+        ...prev,
+        fullName: prev.fullName || customer.fullName || '',
+        email: prev.email || customer.email || '',
+        phone: customer.phone || prev.phone,
+        address: prev.address || defaultAddress?.fullAddress || '',
+        landmark: prev.landmark || defaultAddress?.landmark || '',
+        city: prev.city || defaultAddress?.city || selectedLocation?.cityName || 'Bangalore',
+        state: prev.state || defaultAddress?.state || selectedLocation?.stateName || 'Karnataka',
+        pincode: prev.pincode || defaultAddress?.pincode || selectedLocation?.pinCode || '',
+        createAccount: false,
+        isPhoneVerified: true,
+      }));
+    }
+  }, [customer, defaultAddress, selectedLocation]);
 
   // Sync with selected location
   useEffect(() => {
     if (selectedLocation) {
       setFormData((prev) => ({
         ...prev,
-        pincode: selectedLocation.pinCode || prev.pincode,
-        city: selectedLocation.cityName || prev.city,
-        state: selectedLocation.stateName || prev.state,
+        pincode: prev.pincode || selectedLocation.pinCode,
+        city: prev.city || selectedLocation.cityName,
+        state: prev.state || selectedLocation.stateName,
       }));
     }
   }, [selectedLocation]);
+
+  // Dynamic Returning Customer Phone Lookup
+  useEffect(() => {
+    const cleanPhone = formData.phone.replace(/\D/g, '').slice(0, 10);
+    if (cleanPhone.length === 10 && !isCustomerLoggedIn) {
+      let isMounted = true;
+      setIsLookingUpPhone(true);
+      lookupCustomer(cleanPhone).then((res) => {
+        if (!isMounted) return;
+        setIsLookingUpPhone(false);
+        if (res.exists && res.customer) {
+          setReturningCustomerFound({
+            name: res.customer.fullName,
+            phone: res.customer.phone,
+            hasAddress: !!res.defaultAddress,
+            addressData: res.defaultAddress,
+            welcomeEligible: !!res.welcomeDiscountEligible,
+          });
+        } else {
+          setReturningCustomerFound(null);
+        }
+      });
+      return () => {
+        isMounted = false;
+      };
+    } else {
+      setReturningCustomerFound(null);
+    }
+  }, [formData.phone, isCustomerLoggedIn]);
+
+  // 10% Welcome Discount Calculation
+  // 10% extra discount (capping 50/-) after all discounts
+  const remainingSubtotalAfterCoupon = Math.max(0, subtotal - discount);
+  const willApplyWelcomeDiscount =
+    (formData.createAccount || isCustomerLoggedIn) &&
+    isWelcomeDiscountEligible &&
+    (!returningCustomerFound || returningCustomerFound.welcomeEligible);
+
+  const welcomeDiscountAmount = willApplyWelcomeDiscount
+    ? Math.min(50, Math.round(remainingSubtotalAfterCoupon * 0.1))
+    : 0;
+
+  const effectiveTotal = Math.max(
+    0,
+    subtotal - discount - welcomeDiscountAmount + packagingFee + gst + deliveryFee
+  );
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [placedOrder, setPlacedOrder] = useState<Order | null>(null);
@@ -138,7 +231,7 @@ export const CheckoutPage: React.FC = () => {
   const validateAll = (data: CheckoutFormData): Record<string, string> => {
     const errs: Record<string, string> = {};
     const fieldsToValidate = ['fullName', 'phone', 'email', 'address', 'city', 'state', 'pincode'];
-    
+
     for (const f of fieldsToValidate) {
       const err = validateField(f, (data as any)[f]);
       if (err) errs[f] = err;
@@ -152,10 +245,9 @@ export const CheckoutPage: React.FC = () => {
       confetti({
         particleCount: 100,
         spread: 70,
-        origin: { y: 0.6 }
+        origin: { y: 0.6 },
       });
 
-      // Advance stage simulator every 6 seconds for delightful live feedback
       const timer1 = setTimeout(() => setOrderStage('Preparing in Kitchen'), 3500);
       const timer2 = setTimeout(() => setOrderStage('Out for Delivery'), 9000);
 
@@ -194,6 +286,47 @@ export const CheckoutPage: React.FC = () => {
     setErrors((prev) => ({ ...prev, [field]: err }));
   };
 
+  const handlePrefillReturningCustomer = () => {
+    if (!returningCustomerFound) return;
+    setFormData((prev) => ({
+      ...prev,
+      fullName: returningCustomerFound.name || prev.fullName,
+      address: returningCustomerFound.addressData?.fullAddress || prev.address,
+      landmark: returningCustomerFound.addressData?.landmark || prev.landmark,
+      city: returningCustomerFound.addressData?.city || prev.city,
+      state: returningCustomerFound.addressData?.state || prev.state,
+      pincode: returningCustomerFound.addressData?.pincode || prev.pincode,
+    }));
+  };
+
+  const handleTriggerOtpVerification = () => {
+    const cleanPhone = formData.phone.replace(/\D/g, '').slice(0, 10);
+    if (!cleanPhone || cleanPhone.length !== 10) {
+      setTouched((prev) => ({ ...prev, phone: true }));
+      setErrors((prev) => ({ ...prev, phone: 'Please enter 10-digit mobile number first' }));
+      return;
+    }
+    openOtpModal(cleanPhone, formData.createAccount ? 'create_account' : 'signin', (cust, addr) => {
+      if (cust) {
+        setFormData((prev) => ({
+          ...prev,
+          fullName: prev.fullName || cust.fullName,
+          email: prev.email || cust.email || '',
+          phone: cust.phone,
+          address: prev.address || addr?.fullAddress || '',
+          landmark: prev.landmark || addr?.landmark || '',
+          city: prev.city || addr?.city || prev.city,
+          state: prev.state || addr?.state || prev.state,
+          pincode: prev.pincode || addr?.pincode || prev.pincode,
+          isPhoneVerified: true,
+          createAccount: false,
+        }));
+      } else {
+        setFormData((prev) => ({ ...prev, isPhoneVerified: true }));
+      }
+    });
+  };
+
   const handleSubmitOrder = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -226,6 +359,8 @@ export const CheckoutPage: React.FC = () => {
     const randomOrderNum = Math.floor(100000 + Math.random() * 900000);
     const newOrder: Order = {
       orderId: `GKSWAD-${randomOrderNum}`,
+      customerId: customer?.id,
+      isGuestCheckout: !isCustomerLoggedIn && !formData.createAccount,
       outletId: selectedLocation?.outletId || 'outlet-1',
       outletName: selectedLocation?.outletName || 'Gaon Ka Swad - Bangalore Indiranagar',
       deliveryPinCode: selectedLocation?.pinCode || formData.pincode,
@@ -233,27 +368,41 @@ export const CheckoutPage: React.FC = () => {
       items: [...cart],
       subtotal,
       discount,
+      welcomeDiscountAmount,
+      isWelcomeDiscountApplied: willApplyWelcomeDiscount && welcomeDiscountAmount > 0,
       deliveryFee,
       packagingFee,
       gst,
-      total,
+      total: effectiveTotal,
       couponCode: appliedCoupon ? appliedCoupon.code : undefined,
       customerDetails: { ...formData },
+      deliveryAddressSnapshot: {
+        fullAddress: formData.address,
+        landmark: formData.landmark,
+        city: formData.city,
+        state: formData.state,
+        pincode: formData.pincode,
+      },
       status: 'Received',
       estimatedDeliveryMinutes: 35,
     };
 
     try {
-      await fetch('/api/orders', {
+      const res = await fetch('/api/orders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newOrder),
       });
+      const data = await res.json();
+      if (data.success && data.order) {
+        setPlacedOrder(data.order);
+      } else {
+        setPlacedOrder(newOrder);
+      }
     } catch {
-      // Continue gracefully in demo
+      setPlacedOrder(newOrder);
     }
 
-    setPlacedOrder(newOrder);
     setIsSubmitting(false);
     clearCart();
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -294,12 +443,20 @@ export const CheckoutPage: React.FC = () => {
             </span>
           </div>
 
+          {/* Account Creation Status Banner */}
+          {placedOrder.customerDetails?.createAccount && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 max-w-md mx-auto text-xs text-amber-900 flex items-center gap-2 text-left">
+              <Sparkles className="w-4 h-4 text-amber-700 shrink-0" />
+              <span>
+                <strong>Account Created!</strong> Your profile is saved for 1-click reorders and 10% welcome discount was applied.
+              </span>
+            </div>
+          )}
+
           {/* Live Order Tracker Stepper */}
           <div className="pt-6 border-t border-gray-100 max-w-2xl mx-auto">
             <div className="text-left mb-3">
-              <h3 className="font-bold text-sm text-gray-900">
-                Live Kitchen Tracker
-              </h3>
+              <h3 className="font-bold text-sm text-gray-900">Live Kitchen Tracker</h3>
               <p className="text-xs text-gray-500">
                 Estimated Delivery: ~{placedOrder.estimatedDeliveryMinutes} mins
               </p>
@@ -368,9 +525,7 @@ export const CheckoutPage: React.FC = () => {
         {/* Invoice & Order Summary Details */}
         <div className="bg-white rounded-2xl border border-gray-200 p-5 sm:p-6 shadow-xs space-y-4">
           <div className="flex items-center justify-between pb-3 border-b border-gray-200">
-            <h3 className="font-bold text-sm text-gray-900">
-              Delivery Invoice Summary
-            </h3>
+            <h3 className="font-bold text-sm text-gray-900">Delivery Invoice Summary</h3>
             <button
               type="button"
               onClick={() => window.print()}
@@ -384,7 +539,9 @@ export const CheckoutPage: React.FC = () => {
           {/* Delivery Address Details */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs text-stone-600 bg-stone-50 rounded-xl p-3.5 border border-stone-200">
             <div>
-              <p className="font-bold text-stone-900 mb-1">Delivering To:</p>
+              <p className="font-bold text-stone-900 mb-1">
+                Delivering To (Immutable Snapshot):
+              </p>
               <p className="font-semibold text-stone-800">{placedOrder.customerDetails.fullName}</p>
               <p>{placedOrder.customerDetails.address}</p>
               {placedOrder.customerDetails.landmark && (
@@ -410,10 +567,8 @@ export const CheckoutPage: React.FC = () => {
                 Slot: <strong>{placedOrder.customerDetails.deliverySlot}</strong>
               </p>
               <p>
-                Cutlery:{' '}
-                <strong>
-                  {placedOrder.customerDetails.includeCutlery ? 'Included' : 'Eco Friendly (No Cutlery)'}
-                </strong>
+                Customer Type:{' '}
+                <strong>{placedOrder.isGuestCheckout ? 'Guest Checkout' : 'Registered Member'}</strong>
               </p>
             </div>
           </div>
@@ -440,9 +595,7 @@ export const CheckoutPage: React.FC = () => {
                       </p>
                     </div>
                   </div>
-                  <span className="font-bold text-gray-900">
-                    ₹{item.unitPrice * item.quantity}
-                  </span>
+                  <span className="font-bold text-gray-900">₹{item.unitPrice * item.quantity}</span>
                 </div>
               ))}
             </div>
@@ -456,8 +609,14 @@ export const CheckoutPage: React.FC = () => {
             </div>
             {placedOrder.discount > 0 && (
               <div className="flex justify-between text-emerald-600 font-semibold">
-                <span>Discount ({placedOrder.couponCode})</span>
+                <span>Coupon Discount ({placedOrder.couponCode})</span>
                 <span>- ₹{placedOrder.discount}</span>
+              </div>
+            )}
+            {(placedOrder.welcomeDiscountAmount || 0) > 0 && (
+              <div className="flex justify-between text-emerald-700 font-bold bg-emerald-50 px-2 py-1 rounded">
+                <span>🎉 10% Welcome Discount</span>
+                <span>- ₹{placedOrder.welcomeDiscountAmount}</span>
               </div>
             )}
             <div className="flex justify-between">
@@ -480,9 +639,7 @@ export const CheckoutPage: React.FC = () => {
             </div>
             <div className="pt-2 border-t border-gray-200 flex justify-between font-bold text-gray-900 text-xs">
               <span>Total Paid</span>
-              <span className="font-extrabold text-orange-600 text-sm">
-                ₹{placedOrder.total}
-              </span>
+              <span className="font-extrabold text-orange-600 text-sm">₹{placedOrder.total}</span>
             </div>
           </div>
 
@@ -512,9 +669,7 @@ export const CheckoutPage: React.FC = () => {
   if (cart.length === 0) {
     return (
       <div className="max-w-xl mx-auto px-4 py-16 text-center space-y-3">
-        <h2 className="font-bold text-lg text-gray-900">
-          Your Cart is Empty
-        </h2>
+        <h2 className="font-bold text-lg text-gray-900">Your Cart is Empty</h2>
         <p className="text-xs text-gray-500">
           Please add items to your cart before proceeding to checkout.
         </p>
@@ -538,7 +693,7 @@ export const CheckoutPage: React.FC = () => {
             Complete Your Order
           </h1>
           <p className="text-xs text-stone-500 mt-0.5">
-            Review your delivery details and choose payment method for hot & fresh delivery.
+            Guest checkout is enabled by default. Create an account for 10% welcome discount & saved addresses.
           </p>
         </div>
 
@@ -547,7 +702,9 @@ export const CheckoutPage: React.FC = () => {
             <Store className="w-4 h-4 text-amber-800 shrink-0" />
             <div>
               <span className="font-bold text-stone-900 block">{selectedLocation.outletName}</span>
-              <span className="text-[11px] text-stone-500">Delivering to PIN {selectedLocation.pinCode}</span>
+              <span className="text-[11px] text-stone-500">
+                Delivering to PIN {selectedLocation.pinCode}
+              </span>
             </div>
             <button
               type="button"
@@ -560,20 +717,119 @@ export const CheckoutPage: React.FC = () => {
         )}
       </div>
 
+      {/* Returning Customer Recognition Banner */}
+      {returningCustomerFound && !isCustomerLoggedIn && (
+        <motion.div
+          initial={{ opacity: 0, y: -8 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-amber-50 border border-amber-300/80 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs"
+        >
+          <div className="flex items-start gap-3">
+            <div className="w-9 h-9 rounded-xl bg-amber-800 text-white flex items-center justify-center shrink-0">
+              <UserCheck className="w-5 h-5" />
+            </div>
+            <div>
+              <h4 className="font-bold text-sm text-stone-900 flex items-center gap-1.5">
+                <span>Welcome back, {returningCustomerFound.name}!</span>
+                <span className="bg-amber-200/80 text-amber-900 text-[10px] font-bold px-2 py-0.5 rounded">
+                  Saved Account Found
+                </span>
+              </h4>
+              <p className="text-xs text-stone-600 mt-0.5">
+                We found your saved profile. Would you like to prefill your delivery address?
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handlePrefillReturningCustomer}
+              className="px-3.5 py-1.5 bg-amber-800 hover:bg-amber-900 text-white text-xs font-bold rounded-xl transition-colors shadow-xs"
+            >
+              Prefill Saved Address
+            </button>
+            <button
+              type="button"
+              onClick={handleTriggerOtpVerification}
+              className="px-3.5 py-1.5 bg-white border border-stone-200 hover:bg-stone-50 text-stone-700 text-xs font-bold rounded-xl transition-colors"
+            >
+              Sign In (OTP)
+            </button>
+          </div>
+        </motion.div>
+      )}
+
+      {/* Logged in Customer Welcome Pill */}
+      {isCustomerLoggedIn && customer && (
+        <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-3.5 flex items-center justify-between text-xs text-emerald-900">
+          <div className="flex items-center gap-2.5">
+            <UserCheck className="w-4 h-4 text-emerald-700" />
+            <span>
+              Signed in as <strong>{customer.fullName}</strong> (+91 {customer.phone})
+            </span>
+          </div>
+          <span className="bg-emerald-100 text-emerald-800 font-bold px-2.5 py-0.5 rounded-full text-[11px]">
+            Saved Profile Active
+          </span>
+        </div>
+      )}
+
       <form onSubmit={handleSubmitOrder} noValidate id="checkout-form">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
           {/* Left Column: Form Details (7 cols) */}
           <div className="lg:col-span-7 space-y-4">
             {/* 1. Customer Contact Details */}
             <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-xs space-y-3">
-              <h3 className="font-bold text-sm text-gray-900 flex items-center gap-1.5">
-                <span className="w-5 h-5 rounded-full bg-orange-600 text-white text-[10px] flex items-center justify-center">
-                  1
-                </span>
-                <span>Contact Details</span>
-              </h3>
+              <div className="flex items-center justify-between">
+                <h3 className="font-bold text-sm text-gray-900 flex items-center gap-1.5">
+                  <span className="w-5 h-5 rounded-full bg-orange-600 text-white text-[10px] flex items-center justify-center">
+                    1
+                  </span>
+                  <span>Contact Information</span>
+                </h3>
+                {!isCustomerLoggedIn && (
+                  <span className="text-[11px] font-semibold text-stone-500">
+                    Guest Checkout Enabled
+                  </span>
+                )}
+              </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-700 mb-1">
+                    Phone Number <span className="text-rose-600">*</span>
+                  </label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-gray-500">
+                      +91
+                    </span>
+                    <input
+                      type="tel"
+                      name="phone"
+                      maxLength={10}
+                      value={formData.phone}
+                      onChange={handleChange}
+                      onBlur={() => handleBlur('phone')}
+                      placeholder="10-digit mobile number"
+                      className={`w-full pl-10 pr-9 py-2 bg-gray-50 border rounded-xl text-xs sm:text-sm focus:outline-none transition-colors ${
+                        touched.phone && errors.phone
+                          ? 'border-rose-500 bg-rose-50/40 focus:border-rose-600 text-rose-950'
+                          : 'border-gray-200 focus:border-orange-500 focus:bg-white text-gray-900'
+                      }`}
+                    />
+                    {isLookingUpPhone && (
+                      <RefreshCw className="w-3.5 h-3.5 text-stone-400 animate-spin absolute right-3 top-1/2 -translate-y-1/2" />
+                    )}
+                  </div>
+                  {touched.phone && errors.phone && (
+                    <p className="mt-1 text-[11px] text-rose-600 font-medium flex items-center gap-1">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                      <span>{errors.phone}</span>
+                    </p>
+                  )}
+                </div>
+
                 <div>
                   <label className="block text-xs font-semibold text-gray-700 mb-1">
                     Full Name <span className="text-rose-600">*</span>
@@ -599,43 +855,14 @@ export const CheckoutPage: React.FC = () => {
                   )}
                 </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">
-                    Phone Number <span className="text-rose-600">*</span>
-                  </label>
-                  <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-gray-500">
-                      +91
-                    </span>
-                    <input
-                      type="tel"
-                      name="phone"
-                      maxLength={10}
-                      value={formData.phone}
-                      onChange={handleChange}
-                      onBlur={() => handleBlur('phone')}
-                      placeholder="10-digit mobile number"
-                      className={`w-full pl-10 pr-3 py-2 bg-gray-50 border rounded-xl text-xs sm:text-sm focus:outline-none transition-colors ${
-                        touched.phone && errors.phone
-                          ? 'border-rose-500 bg-rose-50/40 focus:border-rose-600 text-rose-950'
-                          : 'border-gray-200 focus:border-orange-500 focus:bg-white text-gray-900'
-                      }`}
-                    />
-                  </div>
-                  {touched.phone && errors.phone && (
-                    <p className="mt-1 text-[11px] text-rose-600 font-medium flex items-center gap-1">
-                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                      <span>{errors.phone}</span>
-                    </p>
-                  )}
-                </div>
-
                 <div className="sm:col-span-2">
                   <div className="flex items-center justify-between mb-1">
                     <label className="block text-xs font-semibold text-gray-700">
                       Email Address <span className="text-stone-400 font-normal">(Optional)</span>
                     </label>
-                    <span className="text-[10px] text-stone-400">For digital invoice & order tracking</span>
+                    <span className="text-[10px] text-stone-400">
+                      For digital tax invoice & live updates
+                    </span>
                   </div>
                   <input
                     type="email"
@@ -658,6 +885,71 @@ export const CheckoutPage: React.FC = () => {
                   )}
                 </div>
               </div>
+
+              {/* Optional Account Creation & Welcome Discount Box */}
+              {!isCustomerLoggedIn && (
+                <div className="mt-3 pt-3 border-t border-gray-100 space-y-2.5">
+                  <label className="flex items-start gap-2.5 p-3 rounded-xl border border-amber-200/90 bg-amber-50/60 hover:bg-amber-50 cursor-pointer transition-colors">
+                    <input
+                      type="checkbox"
+                      name="createAccount"
+                      checked={!!formData.createAccount}
+                      onChange={handleChange}
+                      className="accent-amber-800 w-4 h-4 mt-0.5 rounded"
+                    />
+                    <div className="text-xs">
+                      <p className="font-bold text-stone-900 flex items-center gap-1.5">
+                        <Gift className="w-4 h-4 text-amber-800 shrink-0" />
+                        <span>Create account & apply 10% Welcome Discount (Save up to ₹50)</span>
+                      </p>
+                      <p className="text-[11px] text-stone-600 mt-0.5 leading-relaxed">
+                        Saves your address for 1-click reorders and unlocks verified food reviews.
+                      </p>
+                    </div>
+                  </label>
+
+                  {/* Phone OTP Verification Helper */}
+                  {formData.createAccount && (
+                    <div className="flex items-center justify-between bg-white border border-stone-200 rounded-xl p-2.5 px-3 text-xs">
+                      <div className="flex items-center gap-2">
+                        {formData.isPhoneVerified ? (
+                          <span className="inline-flex items-center gap-1 text-emerald-700 font-bold text-[11px]">
+                            <CheckCircle2 className="w-3.5 h-3.5" /> Mobile Number Verified
+                          </span>
+                        ) : (
+                          <span className="text-stone-600 text-[11px]">
+                            Verify mobile number to confirm account
+                          </span>
+                        )}
+                      </div>
+
+                      {!formData.isPhoneVerified && (
+                        <button
+                          type="button"
+                          onClick={handleTriggerOtpVerification}
+                          className="px-2.5 py-1 bg-amber-800 hover:bg-amber-900 text-white font-bold text-[11px] rounded-lg transition-colors flex items-center gap-1"
+                        >
+                          <span>Verify via OTP (951753)</span>
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Marketing Consent */}
+                  <label className="flex items-center gap-2 px-1 text-[11px] text-stone-600 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      name="marketingConsent"
+                      checked={!!formData.marketingConsent}
+                      onChange={handleChange}
+                      className="accent-amber-800 w-3.5 h-3.5 rounded"
+                    />
+                    <span>
+                      Send me weekend handi chef specials & festive discount coupons on SMS/WhatsApp.
+                    </span>
+                  </label>
+                </div>
+              )}
             </div>
 
             {/* 2. Delivery Address */}
@@ -993,8 +1285,19 @@ export const CheckoutPage: React.FC = () => {
 
                 {discount > 0 && (
                   <div className="flex justify-between text-emerald-600 font-semibold">
-                    <span>Discount ({appliedCoupon?.code})</span>
+                    <span>Coupon Discount ({appliedCoupon?.code})</span>
                     <span>- ₹{discount}</span>
+                  </div>
+                )}
+
+                {/* 10% Welcome Discount Row */}
+                {welcomeDiscountAmount > 0 && (
+                  <div className="flex justify-between text-emerald-700 font-bold bg-emerald-50/80 px-2 py-1 rounded-lg border border-emerald-200">
+                    <span className="flex items-center gap-1">
+                      <Tag className="w-3 h-3 text-emerald-600" />
+                      <span>10% Welcome Discount (Max ₹50)</span>
+                    </span>
+                    <span>- ₹{welcomeDiscountAmount}</span>
                   </div>
                 )}
 
@@ -1022,7 +1325,7 @@ export const CheckoutPage: React.FC = () => {
                 <div className="pt-2.5 border-t border-gray-200 flex justify-between items-baseline text-xs font-bold text-gray-900">
                   <span>Final Amount</span>
                   <span className="font-extrabold text-xl text-orange-600">
-                    ₹{total}
+                    ₹{effectiveTotal}
                   </span>
                 </div>
               </div>
@@ -1038,7 +1341,7 @@ export const CheckoutPage: React.FC = () => {
                   <span>Sending to Kitchen...</span>
                 ) : (
                   <>
-                    <span>Place Order (₹{total})</span>
+                    <span>Place Order (₹{effectiveTotal})</span>
                     <ArrowRight className="w-3.5 h-3.5" />
                   </>
                 )}

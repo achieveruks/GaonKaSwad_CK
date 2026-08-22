@@ -1,14 +1,23 @@
 import fs from 'fs';
 import path from 'path';
-import { Product, Outlet, DeliveryZone, Order, DashboardStats } from '../src/types';
+import { Product, Outlet, OutletAbout, DeliveryZone, Order, DashboardStats, Customer, CustomerAddress } from '../src/types';
 import { PRODUCTS as INITIAL_PRODUCTS } from '../src/data/products';
 import { INITIAL_OUTLETS, INITIAL_DELIVERY_ZONES } from '../src/data/outlets';
+import { INITIAL_OUTLET_ABOUTS, DEFAULT_OUTLET_ABOUT } from '../src/data/abouts';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const PRODUCTS_FILE = path.join(DATA_DIR, 'products_store.json');
 const OUTLETS_FILE = path.join(DATA_DIR, 'outlets_store.json');
 const ZONES_FILE = path.join(DATA_DIR, 'zones_store.json');
 const ORDERS_FILE = path.join(DATA_DIR, 'orders_store.json');
+const CUSTOMERS_FILE = path.join(DATA_DIR, 'customers_store.json');
+const CUSTOMER_ADDRESSES_FILE = path.join(DATA_DIR, 'customer_addresses_store.json');
+
+export function normalizePhone(rawPhone?: string): string {
+  if (!rawPhone) return '';
+  const digits = rawPhone.replace(/\D/g, '');
+  return digits.length >= 10 ? digits.slice(-10) : digits;
+}
 
 const ALL_INITIAL_OUTLET_IDS = INITIAL_OUTLETS.map((o) => o.id);
 
@@ -28,8 +37,11 @@ function safeReadJson<T>(filePath: string, fallback: T): T {
 class AppStorage {
   private products: Product[] = [];
   private outlets: Outlet[] = [];
+  private abouts: OutletAbout[] = [];
   private zones: DeliveryZone[] = [];
   private orders: Order[] = [];
+  private customers: Customer[] = [];
+  private customerAddresses: CustomerAddress[] = [];
   private isInitialized = false;
 
   constructor() {
@@ -39,159 +51,67 @@ class AppStorage {
   private init() {
     if (this.isInitialized) return;
 
-    try {
-      if (!fs.existsSync(DATA_DIR)) {
-        fs.mkdirSync(DATA_DIR, { recursive: true });
-      }
+    this.outlets = INITIAL_OUTLETS.map((o: any) => ({
+      ...o,
+      packagingFee: o.packagingFee !== undefined ? Number(o.packagingFee) : 25,
+      avgCookingTime: o.avgCookingTime || o.estimatedDeliveryTime || '25-35 mins',
+      heroFireLine: o.heroFireLine || 'ARTISANAL CLOUD KITCHEN • SLOW-COOKED DUM',
+      heroHeader: o.heroHeader || 'Authentic Indian Flavors, Slow-Cooked to Perfection',
+      heroDescription:
+        o.heroDescription ||
+        'Experience royal dum biryanis, 24-hour slow-simmered dal makhani, and smoky clay-oven tandoori grills, delivered piping hot to your doorstep in sealed eco-handis.',
+      trustBadgeRating: o.trustBadgeRating || '4.9 ★ (2.8k+)',
+      trustBadgeRatingSub: o.trustBadgeRatingSub || 'Google & Zomato',
+      trustBadgeUsp: o.trustBadgeUsp || '100% Pure',
+      trustBadgeUspSub: o.trustBadgeUspSub || 'Desi Ghee Recipe',
+    }));
 
-      // 1. Initialize Outlets
-      const parsedOutlets = safeReadJson<any[]>(OUTLETS_FILE, []);
-      if (Array.isArray(parsedOutlets) && parsedOutlets.length > 0) {
-        this.outlets = parsedOutlets.map((o: any) => ({
-          ...o,
-          packagingFee: o.packagingFee !== undefined ? Number(o.packagingFee) : 25,
-          avgCookingTime: o.avgCookingTime || o.estimatedDeliveryTime || '25-35 mins',
-          heroFireLine: o.heroFireLine || 'ARTISANAL CLOUD KITCHEN • SLOW-COOKED DUM',
-          heroHeader: o.heroHeader || 'Authentic Indian Flavors, Slow-Cooked to Perfection',
-          heroDescription:
-            o.heroDescription ||
-            'Experience royal dum biryanis, 24-hour slow-simmered dal makhani, and smoky clay-oven tandoori grills, delivered piping hot to your doorstep in sealed eco-handis.',
-          trustBadgeRating: o.trustBadgeRating || '4.9 ★ (2.8k+)',
-          trustBadgeRatingSub: o.trustBadgeRatingSub || 'Google & Zomato',
-          trustBadgeUsp: o.trustBadgeUsp || '100% Pure',
-          trustBadgeUspSub: o.trustBadgeUspSub || 'Desi Ghee Recipe',
-        }));
+    this.zones = [...INITIAL_DELIVERY_ZONES];
+    this.abouts = [...INITIAL_OUTLET_ABOUTS];
+
+    const activeOutletIds = this.outlets.map((o) => o.id);
+    this.products = INITIAL_PRODUCTS.map((p: any) => {
+      let outlets: any[] = [];
+      if (Array.isArray(p.outlets)) {
+        outlets = p.outlets.map((o: any) =>
+          typeof o === 'string'
+            ? { outletId: o, inStock: p.inStock !== false, isFeatured: !!p.featured, isBestseller: !!p.bestseller }
+            : {
+                outletId: o.outletId || o.id,
+                inStock: o.inStock !== false,
+                isFeatured: !!o.isFeatured,
+                isBestseller: !!o.isBestseller,
+              }
+        );
       } else {
-        this.outlets = [...INITIAL_OUTLETS];
-        this.saveOutlets();
-      }
-
-      // 2. Initialize Delivery Zones
-      const parsedZones = safeReadJson<any[]>(ZONES_FILE, []);
-      if (Array.isArray(parsedZones) && parsedZones.length > 0) {
-        this.zones = parsedZones;
-      } else {
-        this.zones = [...INITIAL_DELIVERY_ZONES];
-        this.saveZones();
-      }
-
-      // 3. Initialize Products
-      const activeOutletIds = this.outlets.map((o) => o.id);
-      const normalizeProductOutlets = (p: any): Product => {
-        let outlets: any[] = [];
-        if (Array.isArray(p.outlets)) {
-          outlets = p.outlets.map((o: any) =>
-            typeof o === 'string'
-              ? { outletId: o, inStock: p.inStock !== false, isFeatured: !!p.featured, isBestseller: !!p.bestseller }
-              : {
-                  outletId: o.outletId || o.id,
-                  inStock: o.inStock !== false,
-                  isFeatured: !!o.isFeatured,
-                  isBestseller: !!o.isBestseller,
-                }
-          );
-        } else if (Array.isArray(p.outletIds)) {
-          outlets = p.outletIds.map((oid: string) => ({
-            outletId: oid,
-            inStock: p.inStock !== false,
-            isFeatured: !!p.featured,
-            isBestseller: !!p.bestseller,
-          }));
-        } else {
-          outlets = activeOutletIds.map((oid) => ({
-            outletId: oid,
-            inStock: p.inStock !== false,
-            isFeatured: !!p.featured,
-            isBestseller: !!p.bestseller,
-          }));
-        }
-
-        const outletIds = outlets.map((o) => o.outletId);
-
-        return {
-          ...p,
-          active: p.active !== false,
+        outlets = activeOutletIds.map((oid) => ({
+          outletId: oid,
           inStock: p.inStock !== false,
-          outlets,
-          outletIds,
-        };
-      };
-
-      const parsedProducts = safeReadJson<any[]>(PRODUCTS_FILE, []);
-      if (Array.isArray(parsedProducts) && parsedProducts.length > 0) {
-        this.products = parsedProducts.map(normalizeProductOutlets);
-      } else {
-        this.products = INITIAL_PRODUCTS.map(normalizeProductOutlets);
-        this.saveProducts();
+          isFeatured: !!p.featured,
+          isBestseller: !!p.bestseller,
+        }));
       }
-
-      // 4. Initialize Orders
-      const parsedOrders = safeReadJson<any[]>(ORDERS_FILE, []);
-      if (Array.isArray(parsedOrders)) {
-        this.orders = parsedOrders;
-      } else {
-        this.orders = [];
-        this.saveOrders();
-      }
-
-      this.isInitialized = true;
-    } catch (err) {
-      console.warn('Storage init fallback:', err);
-      this.outlets = [...INITIAL_OUTLETS];
-      this.zones = [...INITIAL_DELIVERY_ZONES];
-      const activeIds = ALL_INITIAL_OUTLET_IDS;
-      this.products = INITIAL_PRODUCTS.map((p) => ({
+      return {
         ...p,
         active: p.active !== false,
         inStock: p.inStock !== false,
-        outlets: activeIds.map((oid) => ({
-          outletId: oid,
-          inStock: true,
-          isFeatured: !!p.featured,
-          isBestseller: !!p.bestseller,
-        })),
-        outletIds: activeIds,
-      }));
-      this.orders = [];
-      this.isInitialized = true;
-    }
+        outlets,
+        outletIds: outlets.map((o) => o.outletId),
+      };
+    });
+
+    this.orders = [];
+    this.customers = [];
+    this.customerAddresses = [];
+    this.isInitialized = true;
   }
 
-  private saveProducts() {
-    try {
-      if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-      fs.writeFileSync(PRODUCTS_FILE, JSON.stringify(this.products, null, 2), 'utf-8');
-    } catch (err) {
-      console.error('Failed to write products to disk:', err);
-    }
-  }
-
-  private saveOutlets() {
-    try {
-      if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-      fs.writeFileSync(OUTLETS_FILE, JSON.stringify(this.outlets, null, 2), 'utf-8');
-    } catch (err) {
-      console.error('Failed to write outlets to disk:', err);
-    }
-  }
-
-  private saveZones() {
-    try {
-      if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-      fs.writeFileSync(ZONES_FILE, JSON.stringify(this.zones, null, 2), 'utf-8');
-    } catch (err) {
-      console.error('Failed to write delivery zones to disk:', err);
-    }
-  }
-
-  private saveOrders() {
-    try {
-      if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-      fs.writeFileSync(ORDERS_FILE, JSON.stringify(this.orders, null, 2), 'utf-8');
-    } catch (err) {
-      console.error('Failed to write orders to disk:', err);
-    }
-  }
+  private saveCustomers() {}
+  private saveCustomerAddresses() {}
+  private saveProducts() {}
+  private saveOutlets() {}
+  private saveZones() {}
+  private saveOrders() {}
 
   // =====================
   // PRODUCTS METHODS
@@ -697,6 +617,47 @@ class AppStorage {
   }
 
   // =====================
+  // ABOUTS (1:1 with Outlets) METHODS
+  // =====================
+
+  public getAboutByOutletId(outletId: string): OutletAbout {
+    this.init();
+    const existing = this.abouts.find((a) => a.outletId === outletId);
+    if (existing) return existing;
+
+    const outlet = this.getOutletById(outletId);
+    const fallback: OutletAbout = {
+      ...DEFAULT_OUTLET_ABOUT,
+      outletId,
+      heroFireLine: outlet?.heroFireLine || DEFAULT_OUTLET_ABOUT.heroFireLine,
+      heroHeader: outlet?.heroHeader || DEFAULT_OUTLET_ABOUT.heroHeader,
+      heroDescription: outlet?.heroDescription || DEFAULT_OUTLET_ABOUT.heroDescription,
+    };
+    return fallback;
+  }
+
+  public upsertAbout(outletId: string, data: Partial<OutletAbout>): OutletAbout {
+    this.init();
+    const existingIndex = this.abouts.findIndex((a) => a.outletId === outletId);
+    const existing = existingIndex >= 0 ? this.abouts[existingIndex] : this.getAboutByOutletId(outletId);
+
+    const updated: OutletAbout = {
+      ...existing,
+      ...data,
+      outletId,
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (existingIndex >= 0) {
+      this.abouts[existingIndex] = updated;
+    } else {
+      this.abouts.push(updated);
+    }
+
+    return updated;
+  }
+
+  // =====================
   // DELIVERY ZONES METHODS
   // =====================
 
@@ -934,9 +895,67 @@ class AppStorage {
     }
 
     const outlet = this.getOutletById(orderData.outletId);
+    const rawPhone = orderData.customerDetails?.phone || '';
+    const normPhone = normalizePhone(rawPhone);
+
+    let customerId = orderData.customerId;
+    const isGuest = !orderData.customerDetails?.createAccount && !customerId;
+
+    // Address snapshot object
+    const addressSnapshot = {
+      fullAddress: orderData.customerDetails?.address || '',
+      landmark: orderData.customerDetails?.landmark || '',
+      city: orderData.customerDetails?.city || outlet?.city || 'Bangalore',
+      state: orderData.customerDetails?.state || outlet?.state || 'Karnataka',
+      pincode: orderData.deliveryPinCode || orderData.customerDetails?.pincode || '',
+    };
+
+    // If customer account requested or customer already exists
+    let customer: Customer | null = null;
+    if (normPhone) {
+      customer = this.findCustomerByPhone(normPhone) || null;
+      if (!customer && orderData.customerDetails?.createAccount) {
+        customer = this.getOrCreateCustomer({
+          phone: normPhone,
+          fullName: orderData.customerDetails.fullName || 'Valued Customer',
+          email: orderData.customerDetails.email || undefined,
+          marketingConsent: !!orderData.customerDetails.marketingConsent,
+        });
+      }
+
+      if (customer) {
+        customerId = customer.id;
+        // Update customer profile & default address
+        this.updateCustomer(customer.id, {
+          fullName: orderData.customerDetails?.fullName || customer.fullName,
+          email: orderData.customerDetails?.email || customer.email,
+          lastOrderAt: new Date().toISOString(),
+          marketingConsent: orderData.customerDetails?.marketingConsent !== undefined
+            ? !!orderData.customerDetails.marketingConsent
+            : customer.marketingConsent,
+        });
+
+        // Save / update default address for future prefill
+        this.saveCustomerAddress(customer.id, {
+          fullAddress: addressSnapshot.fullAddress,
+          landmark: addressSnapshot.landmark,
+          city: addressSnapshot.city,
+          state: addressSnapshot.state,
+          pincode: addressSnapshot.pincode,
+          isDefault: true,
+        });
+
+        // If welcome discount was used in this order, mark it used on the customer
+        if (orderData.isWelcomeDiscountApplied) {
+          this.markWelcomeDiscountUsed(customer.id);
+        }
+      }
+    }
 
     const newOrder: Order = {
       orderId: orderData.orderId || `GKS-${Date.now().toString().slice(-6)}`,
+      customerId: customerId || undefined,
+      isGuestCheckout: isGuest,
       outletId: orderData.outletId,
       outletName: outlet?.name || 'Gaon Ka Swad Kitchen',
       deliveryPinCode: orderData.deliveryPinCode,
@@ -944,6 +963,8 @@ class AppStorage {
       items: orderData.items || [],
       subtotal: orderData.subtotal || 0,
       discount: orderData.discount || 0,
+      welcomeDiscountAmount: orderData.welcomeDiscountAmount || 0,
+      isWelcomeDiscountApplied: !!orderData.isWelcomeDiscountApplied,
       deliveryFee: orderData.deliveryFee || 0,
       packagingFee: orderData.packagingFee || 0,
       gst: orderData.gst || 0,
@@ -952,15 +973,16 @@ class AppStorage {
       customerDetails: orderData.customerDetails || {
         fullName: 'Customer',
         email: '',
-        phone: '',
-        address: '',
-        city: outlet?.city || 'Bangalore',
-        state: outlet?.state || 'Karnataka',
-        pincode: orderData.deliveryPinCode,
+        phone: normPhone,
+        address: addressSnapshot.fullAddress,
+        city: addressSnapshot.city,
+        state: addressSnapshot.state,
+        pincode: addressSnapshot.pincode,
         deliverySlot: 'immediate',
         paymentMethod: 'cod',
         includeCutlery: true,
       },
+      deliveryAddressSnapshot: addressSnapshot,
       status: orderData.status || 'Received',
       estimatedDeliveryMinutes: orderData.estimatedDeliveryMinutes || 35,
     };
@@ -968,6 +990,231 @@ class AppStorage {
     this.orders.unshift(newOrder);
     this.saveOrders();
     return newOrder;
+  }
+
+  public updateOrderStatus(orderId: string, status: Order['status']): Order | null {
+    this.init();
+    const order = this.getOrderById(orderId);
+    if (!order) return null;
+    order.status = status;
+    this.saveOrders();
+    return order;
+  }
+
+  // =====================
+  // CUSTOMER METHODS
+  // =====================
+
+  public findCustomerByPhone(rawPhone?: string): Customer | undefined {
+    this.init();
+    const norm = normalizePhone(rawPhone);
+    if (!norm) return undefined;
+    return this.customers.find((c) => normalizePhone(c.phone) === norm);
+  }
+
+  public findCustomerById(id: string): Customer | undefined {
+    this.init();
+    return this.customers.find((c) => c.id === id);
+  }
+
+  public getOrCreateCustomer(data: { phone: string; fullName?: string; email?: string; marketingConsent?: boolean }): Customer {
+    this.init();
+    const norm = normalizePhone(data.phone);
+    if (!norm) throw new Error('Valid 10-digit phone number is required');
+
+    let existing = this.customers.find((c) => normalizePhone(c.phone) === norm);
+    if (existing) {
+      if (data.fullName && data.fullName.trim() && data.fullName !== existing.fullName) {
+        existing.fullName = data.fullName.trim();
+      }
+      if (data.email && data.email.trim()) {
+        existing.email = data.email.trim();
+      }
+      if (data.marketingConsent !== undefined) {
+        existing.marketingConsent = !!data.marketingConsent;
+      }
+      existing.updatedAt = new Date().toISOString();
+      this.saveCustomers();
+      return existing;
+    }
+
+    const newCustomer: Customer = {
+      id: `cust-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+      phone: norm,
+      fullName: data.fullName?.trim() || 'Valued Customer',
+      email: data.email?.trim() || undefined,
+      isActive: true,
+      marketingConsent: !!data.marketingConsent,
+      welcomeDiscountUsed: false,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    this.customers.push(newCustomer);
+    this.saveCustomers();
+    return newCustomer;
+  }
+
+  public updateCustomer(id: string, data: Partial<Customer>): Customer | null {
+    this.init();
+    const index = this.customers.findIndex((c) => c.id === id);
+    if (index === -1) return null;
+
+    const existing = this.customers[index];
+    const updated: Customer = {
+      ...existing,
+      ...data,
+      id: existing.id,
+      phone: data.phone ? normalizePhone(data.phone) : existing.phone,
+      updatedAt: new Date().toISOString(),
+    };
+
+    this.customers[index] = updated;
+    this.saveCustomers();
+    return updated;
+  }
+
+  public markWelcomeDiscountUsed(customerIdOrPhone: string): void {
+    this.init();
+    const norm = normalizePhone(customerIdOrPhone);
+    const customer = this.customers.find((c) => c.id === customerIdOrPhone || normalizePhone(c.phone) === norm);
+    if (customer) {
+      customer.welcomeDiscountUsed = true;
+      customer.welcomeDiscountUsedAt = new Date().toISOString();
+      customer.updatedAt = new Date().toISOString();
+      this.saveCustomers();
+    }
+  }
+
+  public getCustomerDefaultAddress(customerId: string): CustomerAddress | undefined {
+    this.init();
+    return this.customerAddresses.find((a) => a.customerId === customerId && a.isDefault) ||
+      this.customerAddresses.find((a) => a.customerId === customerId);
+  }
+
+  public saveCustomerAddress(customerId: string, addressData: Partial<CustomerAddress>): CustomerAddress {
+    this.init();
+    let existingIndex = this.customerAddresses.findIndex((a) => a.customerId === customerId);
+    if (existingIndex >= 0) {
+      const updated: CustomerAddress = {
+        ...this.customerAddresses[existingIndex],
+        ...addressData,
+        customerId,
+        fullAddress: addressData.fullAddress || this.customerAddresses[existingIndex].fullAddress,
+        landmark: addressData.landmark !== undefined ? addressData.landmark : this.customerAddresses[existingIndex].landmark,
+        city: addressData.city || this.customerAddresses[existingIndex].city,
+        state: addressData.state || this.customerAddresses[existingIndex].state,
+        pincode: addressData.pincode || this.customerAddresses[existingIndex].pincode,
+        isDefault: true,
+        updatedAt: new Date().toISOString(),
+      };
+      this.customerAddresses[existingIndex] = updated;
+      this.saveCustomerAddresses();
+      return updated;
+    }
+
+    const newAddress: CustomerAddress = {
+      id: `addr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+      customerId,
+      addressLabel: addressData.addressLabel || 'Home',
+      fullAddress: addressData.fullAddress || '',
+      landmark: addressData.landmark || '',
+      city: addressData.city || 'Bangalore',
+      state: addressData.state || 'Karnataka',
+      pincode: addressData.pincode || '',
+      isDefault: true,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    this.customerAddresses.push(newAddress);
+    this.saveCustomerAddresses();
+    return newAddress;
+  }
+
+  // =====================
+  // REVIEWS & VERIFIED PURCHASE ELIGIBILITY
+  // =====================
+
+  public checkProductReviewEligibility(phoneOrCustomerId: string, productId: string | number): {
+    eligible: boolean;
+    orderId?: string;
+    deliveredAt?: string;
+    message?: string;
+  } {
+    this.init();
+    const norm = normalizePhone(phoneOrCustomerId);
+    const prodIdStr = String(productId);
+
+    // Find any delivered order belonging to this customer/phone that contains the product
+    const deliveredOrder = this.orders.find((ord) => {
+      const isMatchUser =
+        (ord.customerId && ord.customerId === phoneOrCustomerId) ||
+        (ord.customerDetails?.phone && normalizePhone(ord.customerDetails.phone) === norm);
+
+      if (!isMatchUser) return false;
+
+      // Status check: delivered
+      const statusLower = (ord.status || '').toLowerCase();
+      const isDelivered = statusLower === 'delivered';
+      if (!isDelivered) return false;
+
+      // Check items
+      return ord.items && ord.items.some((it) => String(it.id) === prodIdStr);
+    });
+
+    if (deliveredOrder) {
+      return {
+        eligible: true,
+        orderId: deliveredOrder.orderId,
+        deliveredAt: deliveredOrder.createdAt,
+        message: 'Verified Purchase: You are eligible to review this authentic delicacy.',
+      };
+    }
+
+    return {
+      eligible: false,
+      message: 'Review eligibility requires at least one delivered order containing this dish.',
+    };
+  }
+
+  public addVerifiedProductReview(productId: string | number, reviewData: {
+    userName: string;
+    userLocation?: string;
+    rating: number;
+    comment: string;
+    customerId?: string;
+    phone?: string;
+    orderId?: string;
+  }): { product: Product; review: any } {
+    this.init();
+    const prod = this.getProductById(productId);
+    if (!prod) throw new Error(`Product ${productId} not found`);
+
+    const newReview = {
+      id: `rev-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`,
+      userName: reviewData.userName.trim(),
+      userLocation: reviewData.userLocation?.trim() || 'Verified Customer',
+      rating: Math.min(5, Math.max(1, Number(reviewData.rating) || 5)),
+      comment: reviewData.comment.trim(),
+      date: new Date().toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
+      verified: true,
+      orderId: reviewData.orderId,
+    };
+
+    const currentReviews = Array.isArray(prod.reviewsList) ? [...prod.reviewsList] : [];
+    currentReviews.unshift(newReview);
+
+    const totalRatings = currentReviews.reduce((sum, r) => sum + (Number(r.rating) || 5), 0);
+    const avgRating = Number((totalRatings / currentReviews.length).toFixed(1));
+
+    const updated = this.updateProduct(prod.id, {
+      reviewsList: currentReviews,
+      reviewsCount: currentReviews.length,
+      rating: avgRating,
+    });
+
+    return { product: updated || prod, review: newReview };
   }
 
   // =====================

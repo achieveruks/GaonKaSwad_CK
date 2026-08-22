@@ -1,7 +1,8 @@
 import { supabase, isSupabaseConfigured } from './supabase';
-import { Product, Outlet, DeliveryZone, Order, Category, DashboardStats, Profile, UserRole } from '../types';
+import { Product, Outlet, OutletAbout, DeliveryZone, Order, Category, DashboardStats, Profile, UserRole, Customer, CustomerAddress } from '../types';
 import { PRODUCTS as INITIAL_PRODUCTS, CATEGORIES as INITIAL_CATEGORIES } from '../data/products';
 import { INITIAL_OUTLETS, INITIAL_DELIVERY_ZONES } from '../data/outlets';
+import { INITIAL_OUTLET_ABOUTS, DEFAULT_OUTLET_ABOUT } from '../data/abouts';
 
 // ============================================================================
 // DATA MAPPERS (Database Snake_case <-> TypeScript CamelCase)
@@ -172,6 +173,45 @@ export function mapZoneToDbZone(z: Partial<DeliveryZone>): any {
   if (z.deliveryFee !== undefined) dbObj.delivery_fee = Number(z.deliveryFee);
   if (z.estimatedDeliveryTime !== undefined) dbObj.estimated_delivery_time = z.estimatedDeliveryTime || null;
   if (z.isActive !== undefined) dbObj.is_active = !!z.isActive;
+  dbObj.updated_at = new Date().toISOString();
+  return dbObj;
+}
+
+export function mapDbAboutToAbout(row: any): OutletAbout {
+  return {
+    id: row.id,
+    outletId: row.outlet_id,
+    heroFireLine: row.hero_fire_line || undefined,
+    heroHeader: row.hero_header || undefined,
+    heroDescription: row.hero_description || undefined,
+    storyLine: row.story_line || undefined,
+    storyTitle: row.story_title || undefined,
+    storyDescription: row.story_description || undefined,
+    storyHighlight1Title: row.story_highlight1_title || undefined,
+    storyHighlight1Description: row.story_highlight1_description || undefined,
+    storyHighlight2Title: row.story_highlight2_title || undefined,
+    storyHighlight2Description: row.story_highlight2_description || undefined,
+    outletImage: row.outlet_image || undefined,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export function mapAboutToDbAbout(a: Partial<OutletAbout>): any {
+  const dbObj: any = {};
+  if (a.id !== undefined) dbObj.id = a.id;
+  if (a.outletId !== undefined) dbObj.outlet_id = a.outletId;
+  if (a.heroFireLine !== undefined) dbObj.hero_fire_line = a.heroFireLine;
+  if (a.heroHeader !== undefined) dbObj.hero_header = a.heroHeader;
+  if (a.heroDescription !== undefined) dbObj.hero_description = a.heroDescription;
+  if (a.storyLine !== undefined) dbObj.story_line = a.storyLine;
+  if (a.storyTitle !== undefined) dbObj.story_title = a.storyTitle;
+  if (a.storyDescription !== undefined) dbObj.story_description = a.storyDescription;
+  if (a.storyHighlight1Title !== undefined) dbObj.story_highlight1_title = a.storyHighlight1Title;
+  if (a.storyHighlight1Description !== undefined) dbObj.story_highlight1_description = a.storyHighlight1Description;
+  if (a.storyHighlight2Title !== undefined) dbObj.story_highlight2_title = a.storyHighlight2Title;
+  if (a.storyHighlight2Description !== undefined) dbObj.story_highlight2_description = a.storyHighlight2Description;
+  if (a.outletImage !== undefined) dbObj.outlet_image = a.outletImage;
   dbObj.updated_at = new Date().toISOString();
   return dbObj;
 }
@@ -587,8 +627,254 @@ export async function deleteSupabaseZone(id: string): Promise<boolean> {
 }
 
 // ============================================================================
+// SUPABASE ABOUTS API (1:1 with Outlets)
+// ============================================================================
+
+export async function fetchSupabaseAboutByOutletId(outletId: string): Promise<OutletAbout | null> {
+  if (!isSupabaseConfigured() || !outletId) return null;
+
+  try {
+    const { data, error } = await supabase
+      .from('abouts')
+      .select('*')
+      .eq('outlet_id', outletId)
+      .maybeSingle();
+
+    if (error) {
+      console.warn('fetchSupabaseAboutByOutletId error:', error);
+      return null;
+    }
+    if (!data) return null;
+    return mapDbAboutToAbout(data);
+  } catch (err) {
+    console.warn('fetchSupabaseAboutByOutletId exception:', err);
+    return null;
+  }
+}
+
+export async function fetchAllSupabaseAbouts(): Promise<OutletAbout[]> {
+  if (!isSupabaseConfigured()) return [];
+
+  try {
+    const { data, error } = await supabase
+      .from('abouts')
+      .select('*');
+
+    if (error) {
+      console.warn('fetchAllSupabaseAbouts error:', error);
+      return [];
+    }
+    if (!data || data.length === 0) return [];
+    return data.map(mapDbAboutToAbout);
+  } catch (err) {
+    console.warn('fetchAllSupabaseAbouts exception:', err);
+    return [];
+  }
+}
+
+export async function upsertSupabaseAbout(aboutData: Partial<OutletAbout>): Promise<OutletAbout> {
+  if (!isSupabaseConfigured()) throw new Error('Supabase not configured');
+  if (!aboutData.outletId) throw new Error('outletId is required for about customization');
+
+  const payload = mapAboutToDbAbout(aboutData);
+  delete payload.id;
+
+  const { data, error } = await supabase
+    .from('abouts')
+    .upsert(payload, { onConflict: 'outlet_id' })
+    .select()
+    .single();
+
+  if (error) throw error;
+  return mapDbAboutToAbout(data);
+}
+
+// ============================================================================
+// ============================================================================
 // SUPABASE ORDERS API
 // ============================================================================
+
+export function mapDbCustomerToCustomer(row: any): Customer {
+  return {
+    id: String(row.id),
+    phone: String(row.phone || '').replace(/\D/g, '').slice(-10),
+    fullName: row.full_name || 'Customer',
+    email: row.email || undefined,
+    isActive: row.is_phone_verified !== false,
+    marketingConsent: !!row.marketing_consent,
+    welcomeDiscountUsed: !!row.welcome_discount_used,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export function mapDbAddressToCustomerAddress(row: any): CustomerAddress {
+  return {
+    id: String(row.id),
+    customerId: String(row.customer_id),
+    addressLabel: row.label || 'Home',
+    fullAddress: row.address_line1 + (row.address_line2 ? `, ${row.address_line2}` : ''),
+    landmark: row.landmark || undefined,
+    city: row.city || 'Bangalore',
+    state: 'Karnataka',
+    pincode: row.pincode || '',
+    isDefault: row.is_default !== false,
+    createdAt: row.created_at,
+  };
+}
+
+/**
+ * Lookup customer in Supabase public.customers by 10-digit phone
+ */
+export async function fetchSupabaseCustomerByPhone(phone: string): Promise<{
+  customer: Customer | null;
+  defaultAddress: CustomerAddress | null;
+}> {
+  if (!isSupabaseConfigured()) return { customer: null, defaultAddress: null };
+
+  const normPhone = String(phone || '').replace(/\D/g, '').slice(-10);
+  if (!normPhone || normPhone.length !== 10) return { customer: null, defaultAddress: null };
+
+  try {
+    const { data: customerRow, error } = await supabase
+      .from('customers')
+      .select('*')
+      .eq('phone', normPhone)
+      .maybeSingle();
+
+    if (error) {
+      console.warn('Supabase customer lookup warning:', error.message);
+      return { customer: null, defaultAddress: null };
+    }
+
+    if (!customerRow) {
+      return { customer: null, defaultAddress: null };
+    }
+
+    const customer = mapDbCustomerToCustomer(customerRow);
+
+    // Fetch default address
+    let defaultAddress: CustomerAddress | null = null;
+    try {
+      const { data: addrRow } = await supabase
+        .from('customer_addresses')
+        .select('*')
+        .eq('customer_id', customerRow.id)
+        .order('is_default', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (addrRow) {
+        defaultAddress = mapDbAddressToCustomerAddress(addrRow);
+      }
+    } catch {}
+
+    return { customer, defaultAddress };
+  } catch (err) {
+    console.error('fetchSupabaseCustomerByPhone exception:', err);
+    return { customer: null, defaultAddress: null };
+  }
+}
+
+/**
+ * Upsert customer into Supabase public.customers table
+ */
+export async function upsertSupabaseCustomer(customerData: {
+  phone: string;
+  fullName?: string;
+  email?: string;
+  marketingConsent?: boolean;
+  welcomeDiscountUsed?: boolean;
+}): Promise<Customer> {
+  if (!isSupabaseConfigured()) throw new Error('Supabase not configured');
+
+  const normPhone = String(customerData.phone || '').replace(/\D/g, '').slice(-10);
+  if (!normPhone || normPhone.length !== 10) {
+    throw new Error('Valid 10-digit phone number is required');
+  }
+
+  // Check if customer already exists
+  const { data: existing } = await supabase
+    .from('customers')
+    .select('*')
+    .eq('phone', normPhone)
+    .maybeSingle();
+
+  const now = new Date().toISOString();
+
+  if (existing) {
+    const updatePayload: any = {
+      updated_at: now,
+    };
+    if (customerData.fullName) updatePayload.full_name = customerData.fullName.trim();
+    if (customerData.email !== undefined) updatePayload.email = customerData.email ? customerData.email.trim() : null;
+    if (customerData.marketingConsent !== undefined) updatePayload.marketing_consent = !!customerData.marketingConsent;
+    if (customerData.welcomeDiscountUsed !== undefined) updatePayload.welcome_discount_used = !!customerData.welcomeDiscountUsed;
+
+    const { data: updated, error } = await supabase
+      .from('customers')
+      .update(updatePayload)
+      .eq('id', existing.id)
+      .select()
+      .single();
+
+    if (error) throw error;
+    return mapDbCustomerToCustomer(updated);
+  } else {
+    // Insert new customer
+    const insertPayload: any = {
+      phone: normPhone,
+      full_name: customerData.fullName?.trim() || 'Customer',
+      email: customerData.email?.trim() || null,
+      is_phone_verified: true,
+      marketing_consent: !!customerData.marketingConsent,
+      welcome_discount_used: !!customerData.welcomeDiscountUsed,
+      created_at: now,
+      updated_at: now,
+    };
+
+    const { data: inserted, error } = await supabase
+      .from('customers')
+      .insert(insertPayload)
+      .select()
+      .single();
+
+    if (error) throw error;
+    return mapDbCustomerToCustomer(inserted);
+  }
+}
+
+/**
+ * Upsert customer delivery address to Supabase public.customer_addresses table
+ */
+export async function upsertSupabaseCustomerAddress(
+  customerId: string,
+  addressData: Partial<CustomerAddress>
+): Promise<CustomerAddress> {
+  if (!isSupabaseConfigured()) throw new Error('Supabase not configured');
+
+  const now = new Date().toISOString();
+  const payload: any = {
+    customer_id: customerId,
+    label: addressData.addressLabel || 'Home',
+    address_line1: addressData.fullAddress || '',
+    address_line2: null,
+    landmark: addressData.landmark || null,
+    city: addressData.city || 'Bangalore',
+    pincode: addressData.pincode || '',
+    is_default: addressData.isDefault !== false,
+    created_at: now,
+  };
+
+  const { data, error } = await supabase
+    .from('customer_addresses')
+    .insert(payload)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return mapDbAddressToCustomerAddress(data);
+}
 
 export async function createSupabaseOrder(orderData: Partial<Order>): Promise<Order> {
   if (!isSupabaseConfigured()) throw new Error('Supabase not configured');
@@ -651,6 +937,7 @@ export interface SupabaseHealthStatus {
     zones: number;
     categories: number;
     orders: number;
+    abouts?: number;
   };
   error?: string;
 }
@@ -660,18 +947,19 @@ export async function checkSupabaseHealth(): Promise<SupabaseHealthStatus> {
     return {
       isConfigured: false,
       isConnected: false,
-      tableCounts: { products: 0, outlets: 0, zones: 0, categories: 0, orders: 0 },
+      tableCounts: { products: 0, outlets: 0, zones: 0, categories: 0, orders: 0, abouts: 0 },
       error: 'Supabase credentials not configured in environment',
     };
   }
 
   try {
-    const [pRes, oRes, zRes, cRes, ordRes] = await Promise.all([
+    const [pRes, oRes, zRes, cRes, ordRes, abRes] = await Promise.all([
       supabase.from('products').select('*', { count: 'exact', head: true }),
       supabase.from('outlets').select('*', { count: 'exact', head: true }),
       supabase.from('delivery_zones').select('*', { count: 'exact', head: true }),
       supabase.from('categories').select('*', { count: 'exact', head: true }),
       supabase.from('orders').select('*', { count: 'exact', head: true }),
+      supabase.from('abouts').select('*', { count: 'exact', head: true }),
     ]);
 
     if (pRes.error || oRes.error || zRes.error) {
@@ -679,7 +967,7 @@ export async function checkSupabaseHealth(): Promise<SupabaseHealthStatus> {
       return {
         isConfigured: true,
         isConnected: false,
-        tableCounts: { products: 0, outlets: 0, zones: 0, categories: 0, orders: 0 },
+        tableCounts: { products: 0, outlets: 0, zones: 0, categories: 0, orders: 0, abouts: 0 },
         error: `Supabase error: ${errMessage}. (Note: Have you run supabase/schema.sql in your Supabase SQL Editor?)`,
       };
     }
@@ -693,13 +981,14 @@ export async function checkSupabaseHealth(): Promise<SupabaseHealthStatus> {
         zones: zRes.count || 0,
         categories: cRes.count || 0,
         orders: ordRes.count || 0,
+        abouts: abRes?.count || 0,
       },
     };
   } catch (err: any) {
     return {
       isConfigured: true,
       isConnected: false,
-      tableCounts: { products: 0, outlets: 0, zones: 0, categories: 0, orders: 0 },
+      tableCounts: { products: 0, outlets: 0, zones: 0, categories: 0, orders: 0, abouts: 0 },
       error: err.message || 'Failed to connect to Supabase',
     };
   }
@@ -715,6 +1004,7 @@ export async function seedSupabaseDatabase(force = false): Promise<{
   insertedOutlets: number;
   insertedZones: number;
   insertedCategories: number;
+  insertedAbouts: number;
   message: string;
 }> {
   if (!isSupabaseConfigured()) {
@@ -733,6 +1023,7 @@ export async function seedSupabaseDatabase(force = false): Promise<{
   let insertedOutlets = 0;
   let insertedZones = 0;
   let insertedProducts = 0;
+  let insertedAbouts = 0;
 
   // 2. Seed Categories
   if (health.tableCounts.categories === 0 || force) {
@@ -766,7 +1057,15 @@ export async function seedSupabaseDatabase(force = false): Promise<{
     else insertedZones = zonePayloads.length;
   }
 
-  // 5. Seed Products
+  // 5. Seed Abouts
+  if ((health.tableCounts.abouts || 0) === 0 || force) {
+    const aboutPayloads = INITIAL_OUTLET_ABOUTS.map(mapAboutToDbAbout);
+    const { error: aboutErr } = await supabase.from('abouts').upsert(aboutPayloads, { onConflict: 'outlet_id' });
+    if (aboutErr) console.warn('Abouts seed warning:', aboutErr);
+    else insertedAbouts = aboutPayloads.length;
+  }
+
+  // 6. Seed Products
   if (health.tableCounts.products === 0 || force) {
     const productPayloads = INITIAL_PRODUCTS.map((p) =>
       mapProductToDbProduct({
@@ -795,7 +1094,8 @@ export async function seedSupabaseDatabase(force = false): Promise<{
     insertedOutlets,
     insertedZones,
     insertedCategories,
-    message: `Successfully seeded ${insertedProducts} products, ${insertedOutlets} outlets, and ${insertedZones} delivery zones to Supabase PostgreSQL.`,
+    insertedAbouts,
+    message: `Successfully seeded ${insertedProducts} products, ${insertedOutlets} outlets, ${insertedAbouts} about pages, and ${insertedZones} delivery zones to Supabase PostgreSQL.`,
   };
 }
 

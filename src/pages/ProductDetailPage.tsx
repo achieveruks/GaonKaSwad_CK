@@ -3,6 +3,7 @@ import { useNavigation } from '../context/NavigationContext';
 import { useCart } from '../context/CartContext';
 import { useProducts } from '../context/ProductContext';
 import { useLocation } from '../context/LocationContext';
+import { useCustomer } from '../context/CustomerContext';
 import {
   isProductAvailableAtOutlet,
   isProductServedAtOutlet,
@@ -36,6 +37,10 @@ import {
   AlertTriangle,
   MapPin,
   Store,
+  CheckCircle2,
+  Lock,
+  UserCheck,
+  RefreshCw,
 } from 'lucide-react';
 
 interface ProductDetailPageProps {
@@ -45,8 +50,9 @@ interface ProductDetailPageProps {
 export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) => {
   const { goToHome, goToShop, goToCheckout } = useNavigation();
   const { addToCart, setIsCartDrawerOpen, showToast } = useCart();
-  const { allProducts, activeProducts } = useProducts();
+  const { allProducts, activeProducts, refreshProducts } = useProducts();
   const { selectedLocation, setIsLocationModalOpen } = useLocation();
+  const { customer, isCustomerLoggedIn, checkReviewEligibility, submitVerifiedReview, openOtpModal } = useCustomer();
 
   const product =
     allProducts.find((p) => p.slug === slug) ||
@@ -70,12 +76,24 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
   // Active info tab: 'details' | 'ingredients' | 'reheating' | 'reviews'
   const [activeTab, setActiveTab] = useState<'details' | 'ingredients' | 'reheating' | 'reviews'>('details');
 
-  // Customer Reviews state (allows adding new simulator review)
+  // Customer Reviews state
   const [reviews, setReviews] = useState<Review[]>(product?.reviewsList || []);
-  const [newReviewerName, setNewReviewerName] = useState('');
+  const [newReviewerName, setNewReviewerName] = useState(customer?.fullName || '');
+  const [newReviewerLocation, setNewReviewerLocation] = useState('Bangalore');
   const [newReviewRating, setNewReviewRating] = useState(5);
   const [newReviewComment, setNewReviewComment] = useState('');
   const [isAddingReview, setIsAddingReview] = useState(false);
+  const [isSubmittingReview, setIsSubmittingReview] = useState(false);
+
+  // Review eligibility state
+  const [checkPhone, setCheckPhone] = useState(customer?.phone || '');
+  const [isCheckingEligibility, setIsCheckingEligibility] = useState(false);
+  const [eligibilityResult, setEligibilityResult] = useState<{
+    checked: boolean;
+    eligible: boolean;
+    orderId?: string;
+    message?: string;
+  }>({ checked: false, eligible: false });
 
   // Sync state when switching between products
   useEffect(() => {
@@ -86,8 +104,25 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
       setQuantity(1);
       setReviews(product.reviewsList || []);
       setIsAddingReview(false);
+      setEligibilityResult({ checked: false, eligible: false });
     }
   }, [product?.id, slug]);
+
+  // Check eligibility if user is logged in
+  useEffect(() => {
+    if (isCustomerLoggedIn && customer && product) {
+      setNewReviewerName(customer.fullName || '');
+      setCheckPhone(customer.phone || '');
+      checkReviewEligibility(product.id, customer.phone).then((res) => {
+        setEligibilityResult({
+          checked: true,
+          eligible: res.eligible,
+          orderId: res.orderId,
+          message: res.message,
+        });
+      });
+    }
+  }, [isCustomerLoggedIn, customer?.id, product?.id]);
 
   if (!product) {
     return (
@@ -177,25 +212,55 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
     }
   };
 
-  const handleSubmitReview = (e: React.FormEvent) => {
+  const handleVerifyPhoneEligibility = async () => {
+    const clean = checkPhone.replace(/\D/g, '').slice(0, 10);
+    if (clean.length !== 10) {
+      showToast('Invalid Phone', 'Please enter a 10-digit mobile number', 'error');
+      return;
+    }
+
+    setIsCheckingEligibility(true);
+    const res = await checkReviewEligibility(product.id, clean);
+    setIsCheckingEligibility(false);
+    setEligibilityResult({
+      checked: true,
+      eligible: res.eligible,
+      orderId: res.orderId,
+      message: res.message,
+    });
+  };
+
+  const handleSubmitReview = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newReviewerName.trim() || !newReviewComment.trim()) return;
 
-    const newRev: Review = {
-      id: `rev-${Date.now()}`,
-      userName: newReviewerName.trim(),
-      userLocation: 'Verified Customer',
-      rating: newReviewRating,
-      date: 'Just now',
-      comment: newReviewComment.trim(),
-      verified: true
-    };
+    setIsSubmittingReview(true);
+    const phoneToUse = checkPhone.replace(/\D/g, '').slice(0, 10) || customer?.phone;
 
-    setReviews([newRev, ...reviews]);
-    setNewReviewerName('');
+    const result = await submitVerifiedReview({
+      productId: product.id,
+      userName: newReviewerName.trim(),
+      userLocation: newReviewerLocation.trim() || 'Verified Customer',
+      rating: newReviewRating,
+      comment: newReviewComment.trim(),
+      phone: phoneToUse,
+      customerId: customer?.id,
+      orderId: eligibilityResult.orderId,
+    });
+
+    setIsSubmittingReview(false);
+
+    if (!result.success) {
+      showToast('Review Eligibility', result.error || 'Only delivered orders can be reviewed.', 'error');
+      return;
+    }
+
+    if (result.review) {
+      setReviews((prev) => [result.review, ...prev]);
+    }
     setNewReviewComment('');
     setIsAddingReview(false);
-    showToast('Review Submitted', 'Thank you for sharing your experience!', 'success');
+    showToast('Review Published', 'Your verified dining experience has been published!', 'success');
   };
 
   // Related Delicacies
@@ -769,81 +834,193 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
         {/* Tab 4: Reviews */}
         {activeTab === 'reviews' && (
           <div className="space-y-4 max-w-3xl">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-2 border-b border-gray-100">
               <div>
-                <h3 className="font-bold text-sm text-gray-900">
-                  Customer Experiences
+                <h3 className="font-bold text-sm text-gray-900 flex items-center gap-2">
+                  <span>Customer Experiences</span>
+                  <span className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded-full border border-emerald-200">
+                    <ShieldCheck className="w-3 h-3 text-emerald-600" />
+                    Verified Purchases Only
+                  </span>
                 </h3>
-                <p className="text-xs text-gray-500">
+                <p className="text-xs text-gray-500 mt-0.5">
                   {totalReviewsCount} verified ratings • {displayRating} out of 5 stars
                 </p>
               </div>
+
               <button
                 type="button"
                 onClick={() => setIsAddingReview(!isAddingReview)}
-                className="px-3 py-1.5 bg-gray-900 hover:bg-black text-white text-xs font-semibold rounded-xl transition-colors"
+                className="px-3.5 py-1.5 bg-amber-800 hover:bg-amber-900 text-white text-xs font-semibold rounded-xl transition-colors shadow-xs self-start sm:self-auto flex items-center gap-1.5"
               >
-                {isAddingReview ? 'Cancel' : 'Write a Review'}
+                <MessageSquare className="w-3.5 h-3.5" />
+                <span>{isAddingReview ? 'Close Review Form' : 'Write a Verified Review'}</span>
               </button>
             </div>
 
-            {/* Write review form simulator */}
+            {/* Write review form with Verified Purchase Verification */}
             {isAddingReview && (
-              <form
-                onSubmit={handleSubmitReview}
-                className="p-3.5 bg-gray-50 rounded-xl border border-gray-200 space-y-2.5"
-              >
-                <h4 className="font-bold text-xs text-gray-900">Share Your Food Experience</h4>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  <input
-                    type="text"
-                    required
-                    placeholder="Your Name"
-                    value={newReviewerName}
-                    onChange={(e) => setNewReviewerName(e.target.value)}
-                    className="px-2.5 py-1.5 bg-white border border-gray-200 rounded-lg text-xs focus:outline-none focus:border-orange-500"
-                  />
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-gray-600 font-medium">Rating:</span>
-                    <select
-                      value={newReviewRating}
-                      onChange={(e) => setNewReviewRating(Number(e.target.value))}
-                      className="px-2.5 py-1.5 bg-white border border-gray-200 rounded-lg text-xs focus:outline-none focus:border-orange-500"
-                    >
-                      <option value={5}>⭐⭐⭐⭐⭐ (5 - Outstanding)</option>
-                      <option value={4}>⭐⭐⭐⭐ (4 - Great)</option>
-                      <option value={3}>⭐⭐⭐ (3 - Good)</option>
-                    </select>
-                  </div>
+              <div className="p-4 bg-stone-50 rounded-2xl border border-stone-200 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="font-bold text-xs text-stone-900 uppercase tracking-wider flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-amber-700" />
+                    <span>Share Your Tasting Experience</span>
+                  </h4>
+                  <span className="text-[10px] text-stone-500">Delivered Order Required</span>
                 </div>
-                <textarea
-                  required
-                  rows={2}
-                  placeholder="How was the aroma, spice level, and tenderness?"
-                  value={newReviewComment}
-                  onChange={(e) => setNewReviewComment(e.target.value)}
-                  className="w-full px-2.5 py-1.5 bg-white border border-gray-200 rounded-lg text-xs focus:outline-none focus:border-orange-500 resize-none"
-                />
-                <button
-                  type="submit"
-                  className="px-4 py-1.5 bg-orange-600 hover:bg-orange-700 text-white rounded-lg text-xs font-bold transition-colors"
-                >
-                  Submit Review
-                </button>
-              </form>
+
+                {/* Eligibility Verification Check */}
+                {!eligibilityResult.eligible ? (
+                  <div className="bg-white p-3.5 rounded-xl border border-stone-200 space-y-2.5">
+                    <p className="text-xs text-stone-700 leading-relaxed">
+                      To ensure genuine feedback, reviews can only be submitted by customers who have received a delivered order of <strong>{product.name}</strong>.
+                    </p>
+
+                    <div className="flex flex-col sm:flex-row items-center gap-2">
+                      <div className="relative flex-1 w-full">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-stone-500">
+                          +91
+                        </span>
+                        <input
+                          type="tel"
+                          maxLength={10}
+                          value={checkPhone}
+                          onChange={(e) => setCheckPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
+                          placeholder="Enter your order mobile number"
+                          className="w-full pl-10 pr-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs focus:outline-none focus:border-amber-600 focus:bg-white text-stone-900"
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleVerifyPhoneEligibility}
+                        disabled={isCheckingEligibility}
+                        className="w-full sm:w-auto px-4 py-2 bg-amber-800 hover:bg-amber-900 text-white font-bold text-xs rounded-xl transition-colors shrink-0 flex items-center justify-center gap-1.5"
+                      >
+                        {isCheckingEligibility ? (
+                          <>
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                            <span>Checking...</span>
+                          </>
+                        ) : (
+                          <>
+                            <ShieldCheck className="w-3.5 h-3.5" />
+                            <span>Verify Order</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+
+                    {eligibilityResult.checked && !eligibilityResult.eligible && (
+                      <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-950 flex items-start gap-2">
+                        <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                        <div className="leading-relaxed">
+                          <span>{eligibilityResult.message || 'No delivered orders found containing this dish for this mobile number.'}</span>
+                          <button
+                            type="button"
+                            onClick={handleAddToCart}
+                            className="block font-bold text-amber-900 underline mt-1"
+                          >
+                            Order this dish now to unlock verified review
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  /* Form for Verified Eligible User */
+                  <form onSubmit={handleSubmitReview} className="space-y-3">
+                    <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-2.5 px-3 flex items-center justify-between text-xs text-emerald-900">
+                      <div className="flex items-center gap-2">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-700" />
+                        <span className="font-semibold">
+                          Verified Purchase (Order #{eligibilityResult.orderId || 'DELIVERED'})
+                        </span>
+                      </div>
+                      <span className="text-[10px] font-bold uppercase tracking-wider bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded">
+                        Eligible
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      <div>
+                        <label className="block text-[11px] font-bold text-stone-700 mb-1">
+                          Your Name
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          placeholder="Your Name"
+                          value={newReviewerName}
+                          onChange={(e) => setNewReviewerName(e.target.value)}
+                          className="w-full px-3 py-2 bg-white border border-stone-200 rounded-xl text-xs focus:outline-none focus:border-amber-600"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-[11px] font-bold text-stone-700 mb-1">
+                          Star Rating
+                        </label>
+                        <select
+                          value={newReviewRating}
+                          onChange={(e) => setNewReviewRating(Number(e.target.value))}
+                          className="w-full px-3 py-2 bg-white border border-stone-200 rounded-xl text-xs focus:outline-none focus:border-amber-600"
+                        >
+                          <option value={5}>⭐⭐⭐⭐⭐ (5 - Exceptional Dum & Aroma)</option>
+                          <option value={4}>⭐⭐⭐⭐ (4 - Very Delicious)</option>
+                          <option value={3}>⭐⭐⭐ (3 - Good Flavors)</option>
+                          <option value={2}>⭐⭐ (2 - Average)</option>
+                          <option value={1}>⭐ (1 - Needs Improvement)</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-stone-700 mb-1">
+                        Your Detailed Culinary Feedback
+                      </label>
+                      <textarea
+                        required
+                        rows={3}
+                        placeholder="Tell us about the flavor depth, spices, warmth upon arrival, and overall authenticity..."
+                        value={newReviewComment}
+                        onChange={(e) => setNewReviewComment(e.target.value)}
+                        className="w-full px-3 py-2 bg-white border border-stone-200 rounded-xl text-xs focus:outline-none focus:border-amber-600 resize-none"
+                      />
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={isSubmittingReview}
+                      className="px-5 py-2.5 bg-amber-800 hover:bg-amber-900 text-white rounded-xl text-xs font-bold transition-colors shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-60"
+                    >
+                      {isSubmittingReview ? (
+                        <>
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                          <span>Publishing...</span>
+                        </>
+                      ) : (
+                        <>
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          <span>Publish Verified Review</span>
+                        </>
+                      )}
+                    </button>
+                  </form>
+                )}
+              </div>
             )}
 
             {/* Reviews List */}
-            <div className="divide-y divide-gray-100 space-y-3">
+            <div className="divide-y divide-gray-100 space-y-3 pt-2">
               {reviews.map((rev) => (
                 <div key={rev.id} className="pt-3 first:pt-0 space-y-1">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-1.5">
                       <span className="font-bold text-xs text-gray-900">{rev.userName}</span>
-                      <span className="text-[10px] text-gray-400">({rev.userLocation})</span>
+                      <span className="text-[10px] text-gray-400">({rev.userLocation || 'Verified'})</span>
                       {rev.verified && (
-                        <span className="text-[10px] bg-emerald-50 text-emerald-700 px-1.5 py-0.2 rounded font-semibold border border-emerald-200">
-                          Verified
+                        <span className="inline-flex items-center gap-0.5 text-[10px] bg-emerald-50 text-emerald-700 px-1.5 py-0.2 rounded font-semibold border border-emerald-200">
+                          <Check className="w-2.5 h-2.5" /> Verified Purchase
                         </span>
                       )}
                     </div>

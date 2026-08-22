@@ -3,6 +3,7 @@ import { useNavigation } from '../context/NavigationContext';
 import { useCart } from '../context/CartContext';
 import { useLocation } from '../context/LocationContext';
 import { useProducts } from '../context/ProductContext';
+import { useCustomer } from '../context/CustomerContext';
 import { SearchBar } from './SearchBar';
 import {
   ShoppingBag,
@@ -14,6 +15,8 @@ import {
   Clock,
   Sparkles,
   PhoneCall,
+  User,
+  LogOut,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { CATEGORIES } from '../data/products';
@@ -24,10 +27,12 @@ export const Navbar: React.FC = () => {
   const { totalItemsCount, setIsCartDrawerOpen } = useCart();
   const { selectedLocation, setIsLocationModalOpen, currentOutlet, currentZone } = useLocation();
   const { activeProducts } = useProducts();
+  const { customer, isCustomerLoggedIn, openOtpModal, logoutCustomer } = useCustomer();
 
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSearchExpanded, setIsSearchExpanded] = useState(false);
   const [isCategoriesDropdownOpen, setIsCategoriesDropdownOpen] = useState(false);
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
 
   const isActive = (path: string) => currentRoute.path === path;
 
@@ -40,6 +45,11 @@ export const Navbar: React.FC = () => {
     currentOutlet?.estimatedDeliveryTime ||
     currentOutlet?.avgCookingTime ||
     '30-40 min';
+
+  // Extract first name only for compact welcome display
+  const customerFirstName = customer?.fullName?.trim()
+    ? customer.fullName.trim().split(/\s+/)[0]
+    : 'Customer';
 
   // Format second line outlet name beside "G"
   const getOutletSecondLine = () => {
@@ -62,7 +72,7 @@ export const Navbar: React.FC = () => {
   return (
     <header className="sticky top-0 z-40 bg-white border-b border-stone-200 shadow-xs">
       {/* Top micro-announcement banner */}
-      <div className="bg-stone-900 text-stone-300 text-[11px] sm:text-xs py-1.5 px-4">
+      <div className="bg-stone-900 text-stone-300 text-[11px] sm:text-xs py-1.5 px-3 sm:px-4">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-2 overflow-hidden whitespace-nowrap">
             <span className="inline-flex items-center gap-1 bg-amber-700 text-white px-1.5 py-0.5 rounded font-bold uppercase tracking-wider text-[10px]">
@@ -87,35 +97,53 @@ export const Navbar: React.FC = () => {
       </div>
 
       {/* Main Nav Container */}
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between h-16 gap-3">
-          {/* Brand Logo - 2-liner */}
-          <div
-            onClick={goToHome}
-            className="flex items-center gap-2.5 cursor-pointer select-none group shrink-0"
-          >
-            <div className="w-8 h-8 sm:w-9 sm:h-9 bg-amber-800 rounded-lg flex items-center justify-center text-white font-bold text-lg sm:text-xl shadow-xs group-hover:scale-105 transition-transform shrink-0">
+      <div className="max-w-7xl mx-auto px-2.5 sm:px-6 lg:px-8">
+        <div className="flex items-center justify-between h-16 gap-1.5 sm:gap-3">
+          {/* Brand Logo & Outlet / Mobile Pin Header Area */}
+          <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0 min-w-0">
+            <div
+              onClick={goToHome}
+              className="w-7 h-7 sm:w-9 sm:h-9 bg-amber-800 rounded-lg flex items-center justify-center text-white font-bold text-sm sm:text-xl shadow-xs hover:scale-105 transition-transform shrink-0 cursor-pointer select-none"
+            >
               G
             </div>
-            <div className="flex flex-col justify-center leading-tight text-left">
-              <span className="font-heading font-bold text-base sm:text-lg text-stone-900 tracking-tight">
-                Gaon Ka <span className="text-amber-800">Swad</span>
-              </span>
-              <span
-                style={{ fontFamily: "'Playfair Display', Georgia, serif" }}
-                className="text-[12px] sm:text-[13px] italic font-semibold text-amber-700 tracking-wide max-w-[130px] sm:max-w-[200px] truncate block group-hover:text-amber-800 transition-colors"
+            <div className="flex flex-col justify-center leading-tight text-left min-w-0">
+              <div
+                onClick={goToHome}
+                className="cursor-pointer select-none"
               >
-                {outletSecondLine}
-              </span>
+                <span className="font-heading font-bold text-sm sm:text-base md:text-lg text-stone-900 tracking-tight whitespace-nowrap block">
+                  Gaon Ka <span className="text-amber-800">Swad</span>
+                </span>
+                <span
+                  style={{ fontFamily: "'Playfair Display', Georgia, serif" }}
+                  className="text-[10px] sm:text-[13px] italic font-semibold text-amber-700 tracking-wide max-w-[95px] sm:max-w-[200px] truncate block hover:text-amber-800 transition-colors leading-none"
+                >
+                  {outletSecondLine}
+                </span>
+              </div>
+
+              {/* Only for Mobile Portrait (< sm): Show PIN icon just below the outlet name */}
+              <button
+                type="button"
+                onClick={() => setIsLocationModalOpen(true)}
+                className="sm:hidden mt-0.5 flex items-center gap-1 text-[10px] text-amber-900 hover:text-amber-950 font-bold transition-colors w-fit leading-none"
+                title="Change delivery PIN code"
+              >
+                <MapPin className="w-2.5 h-2.5 text-amber-800 shrink-0" />
+                <span className="font-bold underline decoration-amber-300 underline-offset-2">
+                  {selectedLocation ? `PIN ${selectedLocation.pinCode}` : 'Select PIN'}
+                </span>
+              </button>
             </div>
           </div>
 
-          {/* Location Selector Badge */}
+          {/* Location Selector Badge (Tablet & Desktop: sm+) */}
           <button
             type="button"
             id="header-location-button"
             onClick={() => setIsLocationModalOpen(true)}
-            className={`flex items-center gap-1.5 px-2 sm:px-3 py-1.5 rounded-full border text-xs font-medium transition-all shrink-0 max-w-[130px] sm:max-w-[220px] ${
+            className={`hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-medium transition-all shrink-0 max-w-[220px] ${
               selectedLocation
                 ? 'bg-amber-50/80 hover:bg-amber-100/90 border-amber-200/80 text-stone-900 shadow-2xs'
                 : 'bg-amber-100/80 hover:bg-amber-200 border-amber-400 text-amber-950 ring-2 ring-amber-400/30'
@@ -129,7 +157,7 @@ export const Navbar: React.FC = () => {
                   <span className="font-bold text-stone-900 text-xs shrink-0">
                     PIN {selectedLocation.pinCode}
                   </span>
-                  <span className="text-stone-500 text-[10px] sm:text-[11px] truncate hidden sm:inline max-w-[110px]">
+                  <span className="text-stone-500 text-[11px] truncate hidden md:inline max-w-[110px]">
                     · {selectedLocation.outletName.replace(/^Gaon\s+Ka\s+Swad\s*[-–:]\s*/i, '')}
                   </span>
                 </div>
@@ -139,7 +167,7 @@ export const Navbar: React.FC = () => {
                 </span>
               )}
             </div>
-            <span className="text-[10px] text-amber-800 underline font-semibold shrink-0 hidden sm:inline">
+            <span className="text-[10px] text-amber-800 underline font-semibold shrink-0">
               Change
             </span>
           </button>
@@ -270,26 +298,99 @@ export const Navbar: React.FC = () => {
           </nav>
 
           {/* Right Action Icons */}
-          <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
+          <div className="flex items-center gap-1 sm:gap-2.5 shrink-0">
             {/* Mobile/Tablet Search Toggle */}
             <button
               type="button"
               onClick={() => setIsSearchExpanded(!isSearchExpanded)}
-              className="lg:hidden p-2 text-stone-700 hover:text-stone-900 rounded-full hover:bg-stone-100 transition-colors"
+              className="lg:hidden p-1.5 sm:p-2 text-stone-700 hover:text-stone-900 rounded-full hover:bg-stone-100 transition-colors"
               aria-label="Search"
             >
-              <Search className="w-5 h-5" />
+              <Search className="w-4 h-4 sm:w-5 sm:h-5" />
             </button>
+
+            {/* Customer Account / Sign In Widget */}
+            <div className="relative">
+              {isCustomerLoggedIn && customer ? (
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
+                    className="flex items-center gap-1 sm:gap-1.5 py-1 px-1.5 sm:px-2.5 bg-amber-50/90 hover:bg-amber-100/90 text-stone-800 rounded-full text-xs font-semibold transition-all border border-amber-300 shadow-xs max-w-[110px] sm:max-w-[160px]"
+                    title={`Logged in as ${customer.fullName || 'Customer'}`}
+                  >
+                    <div className="w-5 h-5 sm:w-6 sm:h-6 rounded-full bg-amber-900 text-amber-50 flex items-center justify-center text-[10px] sm:text-[11px] font-black shrink-0">
+                      {customerFirstName.charAt(0).toUpperCase()}
+                    </div>
+                    <div className="flex flex-col text-left leading-none min-w-0">
+                      <span className="text-[8px] uppercase tracking-wider text-amber-700 font-bold leading-none mb-0.5">
+                        Welcome
+                      </span>
+                      <span className="text-[11px] sm:text-xs font-black text-amber-950 truncate block max-w-[50px] sm:max-w-[90px] leading-tight">
+                        {customerFirstName}
+                      </span>
+                    </div>
+                    <ChevronDown className="w-3 h-3 text-amber-800 shrink-0 hidden sm:inline" />
+                  </button>
+
+                  <AnimatePresence>
+                    {isUserMenuOpen && (
+                      <motion.div
+                        initial={{ opacity: 0, y: 6 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: 6 }}
+                        className="absolute right-0 top-full mt-1.5 w-56 bg-white rounded-xl shadow-xl border border-stone-200 py-2 z-50 overflow-hidden"
+                      >
+                        <div className="px-3.5 py-2.5 border-b border-stone-100 bg-amber-50/50">
+                          <p className="text-[10px] uppercase tracking-wider text-amber-700 font-bold leading-none">
+                            Welcome
+                          </p>
+                          <p className="text-sm font-black text-amber-950 truncate mt-1">
+                            {customerFirstName}
+                          </p>
+                          <p className="text-xs text-stone-600 truncate">
+                            {customer.fullName}
+                          </p>
+                          <p className="text-[11px] text-stone-500 font-mono mt-0.5">
+                            +91 {customer.phone}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsUserMenuOpen(false);
+                            logoutCustomer();
+                          }}
+                          className="w-full text-left px-3.5 py-2.5 text-xs font-bold text-rose-600 hover:bg-rose-50 flex items-center gap-2 transition-colors"
+                        >
+                          <LogOut className="w-3.5 h-3.5" />
+                          <span>Sign Out</span>
+                        </button>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => openOtpModal('', 'signin')}
+                  className="flex items-center gap-1 sm:gap-1.5 py-1.5 px-2 sm:px-3 bg-stone-100 hover:bg-stone-200 text-stone-800 rounded-full text-xs font-bold transition-colors border border-stone-200"
+                >
+                  <User className="w-3.5 h-3.5 text-stone-600" />
+                  <span className="hidden sm:inline">Sign In</span>
+                </button>
+              )}
+            </div>
 
             {/* Cart Button */}
             <button
               type="button"
               id="header-cart-button"
               onClick={() => setIsCartDrawerOpen(true)}
-              className="relative p-2 bg-stone-100 hover:bg-stone-200 text-stone-900 rounded-full transition-colors flex items-center justify-center select-none"
+              className="relative p-1.5 sm:p-2 bg-stone-100 hover:bg-stone-200 text-stone-900 rounded-full transition-colors flex items-center justify-center select-none"
               aria-label={`Open shopping cart with ${totalItemsCount} items`}
             >
-              <ShoppingBag className="w-5 h-5 text-stone-700" />
+              <ShoppingBag className="w-4 h-4 sm:w-5 sm:h-5 text-stone-700" />
               {totalItemsCount > 0 && (
                 <span className="absolute -top-1 -right-1 w-4 h-4 bg-amber-800 text-white text-[10px] flex items-center justify-center rounded-full font-bold">
                   {totalItemsCount}
@@ -301,10 +402,10 @@ export const Navbar: React.FC = () => {
             <button
               type="button"
               onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-              className="lg:hidden p-2 text-stone-700 hover:text-stone-900 rounded-lg hover:bg-stone-100 transition-colors"
+              className="lg:hidden p-1.5 sm:p-2 text-stone-700 hover:text-stone-900 rounded-lg hover:bg-stone-100 transition-colors"
               aria-label="Toggle navigation menu"
             >
-              {isMobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
+              {isMobileMenuOpen ? <X className="w-5 h-5 sm:w-6 sm:h-6" /> : <Menu className="w-5 h-5 sm:w-6 sm:h-6" />}
             </button>
           </div>
         </div>
@@ -422,6 +523,52 @@ export const Navbar: React.FC = () => {
               >
                 Contact
               </button>
+
+              {/* Mobile customer sign-in or account row */}
+              <div className="pt-2 pb-1">
+                {isCustomerLoggedIn && customer ? (
+                  <div className="p-3.5 bg-amber-50/80 rounded-xl border border-amber-200 flex items-center justify-between">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-8 h-8 rounded-full bg-amber-900 text-amber-50 flex items-center justify-center text-xs font-black shrink-0">
+                        {customer.fullName ? customer.fullName.charAt(0).toUpperCase() : 'C'}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-[10px] uppercase tracking-wider font-bold text-amber-700 leading-none">
+                          Welcome
+                        </div>
+                        <div className="text-sm font-black text-amber-950 truncate">
+                          {customerFirstName}
+                        </div>
+                        <div className="text-[11px] text-stone-500 font-mono">
+                          +91 {customer.phone}
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsMobileMenuOpen(false);
+                        logoutCustomer();
+                      }}
+                      className="text-xs font-bold text-rose-600 hover:text-rose-700 underline px-2 py-1 shrink-0"
+                    >
+                      Sign Out
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsMobileMenuOpen(false);
+                      openOtpModal('', 'signin');
+                    }}
+                    className="w-full py-2.5 px-3 bg-amber-800 hover:bg-amber-900 text-white rounded-xl text-xs font-bold transition-colors flex items-center justify-center gap-2"
+                  >
+                    <User className="w-4 h-4" />
+                    <span>Customer Sign In / Sign Up</span>
+                  </button>
+                )}
+              </div>
 
               <div className="pt-3 mt-2 border-t border-stone-100 flex items-center justify-between text-xs text-stone-500 px-2">
                 <span>Kitchen Hotline</span>
