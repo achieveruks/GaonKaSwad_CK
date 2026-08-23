@@ -3,7 +3,6 @@ import path from 'path';
 import { Product, Outlet, OutletAbout, DeliveryZone, Order, DashboardStats, Customer, CustomerAddress } from '../src/types';
 import { PRODUCTS as INITIAL_PRODUCTS } from '../src/data/products';
 import { INITIAL_OUTLETS, INITIAL_DELIVERY_ZONES } from '../src/data/outlets';
-import { INITIAL_OUTLET_ABOUTS, DEFAULT_OUTLET_ABOUT } from '../src/data/abouts';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const PRODUCTS_FILE = path.join(DATA_DIR, 'products_store.json');
@@ -67,7 +66,20 @@ class AppStorage {
     }));
 
     this.zones = [...INITIAL_DELIVERY_ZONES];
-    this.abouts = [...INITIAL_OUTLET_ABOUTS];
+    this.abouts = this.outlets.map((o) => ({
+      outletId: o.id,
+      heroFireLine: `THE HERITAGE BEHIND GAON KA SWAD • ${o.name.replace(/^Gaon Ka Swad - /i, '').toUpperCase()}`,
+      heroHeader: o.heroHeader || `Crafting Authentic Culinary Memories in ${o.city}`,
+      heroDescription: o.heroDescription || `Born out of a deep reverence for forgotten village recipes and slow-cooking traditions, our ${o.name} kitchen brings soulful tastes straight to dining tables.`,
+      storyLine: `WHO WE ARE • ${o.name.replace(/^Gaon Ka Swad - /i, '').toUpperCase()}`,
+      storyTitle: 'A Modern Cloud Kitchen with Heirloom Roots',
+      storyDescription: 'Gaon Ka Swad was founded with a singular conviction: genuine taste cannot be rushed. In a world of 10-minute industrial microwave prep, we chose the path of slow-simmered handis, 24-hour charcoal embers, whole stone-ground spices, and pure cow desi ghee.\n\nEvery recipe in our menu traces back to traditional culinary masters. We do not use chemical preservatives, artificial food coloring, or pre-packaged spice pastes.',
+      storyHighlight1Title: '100% Pure Desi Ghee',
+      storyHighlight1Description: 'Pure Desi Ghee & Raw Spices',
+      storyHighlight2Title: '24 Hrs Slow-Simmered',
+      storyHighlight2Description: 'Slow-Simmered Dal Bukhara',
+      outletImage: 'https://images.unsplash.com/photo-1556910103-1c02745aae4d?q=80&w=1000&auto=format&fit=crop',
+    }));
 
     const activeOutletIds = this.outlets.map((o) => o.id);
     this.products = INITIAL_PRODUCTS.map((p: any) => {
@@ -627,11 +639,18 @@ class AppStorage {
 
     const outlet = this.getOutletById(outletId);
     const fallback: OutletAbout = {
-      ...DEFAULT_OUTLET_ABOUT,
       outletId,
-      heroFireLine: outlet?.heroFireLine || DEFAULT_OUTLET_ABOUT.heroFireLine,
-      heroHeader: outlet?.heroHeader || DEFAULT_OUTLET_ABOUT.heroHeader,
-      heroDescription: outlet?.heroDescription || DEFAULT_OUTLET_ABOUT.heroDescription,
+      heroFireLine: outlet?.heroFireLine || (outlet ? `THE HERITAGE BEHIND GAON KA SWAD • ${outlet.name.toUpperCase()}` : 'THE HERITAGE BEHIND GAON KA SWAD'),
+      heroHeader: outlet?.heroHeader || 'Crafting Authentic Culinary Memories',
+      heroDescription: outlet?.heroDescription || 'Born out of a deep reverence for forgotten village recipes and slow-cooking traditions.',
+      storyLine: 'WHO WE ARE',
+      storyTitle: 'A Modern Cloud Kitchen with Heirloom Roots',
+      storyDescription: 'Gaon Ka Swad was founded with a singular conviction: genuine taste cannot be rushed.',
+      storyHighlight1Title: '100% Pure Desi Ghee',
+      storyHighlight1Description: 'Pure Desi Ghee & Raw Spices',
+      storyHighlight2Title: '24 Hrs Slow-Simmered',
+      storyHighlight2Description: 'Slow-Simmered Dal Bukhara',
+      outletImage: 'https://images.unsplash.com/photo-1556910103-1c02745aae4d?q=80&w=1000&auto=format&fit=crop',
     };
     return fallback;
   }
