@@ -79,6 +79,18 @@ class AppStorage {
       storyHighlight2Title: '24 Hrs Slow-Simmered',
       storyHighlight2Description: 'Slow-Simmered Dal Bukhara',
       outletImage: 'https://images.unsplash.com/photo-1556910103-1c02745aae4d?q=80&w=1000&auto=format&fit=crop',
+      expLine: 'THE GAON KA SWAD EXPERIENCE',
+      expHeader: 'Food That Feels Like Home',
+      expDescription: 'From the way we cook to the way we serve, every detail is designed to make your meal feel a little more special.',
+      expCard1Title: '🏠 Familiar Flavours',
+      expCard1Header: 'Taste That Feels Like Home',
+      expCard1Description: 'Comforting Indian flavours inspired by the food we know, love, and grew up sharing.',
+      expCard2Title: '🍽️ Made With Care',
+      expCard2Header: 'Every Order Matters',
+      expCard2Description: 'We prepare each order with attention to freshness, consistency, and the little details that make a meal memorable.',
+      expCard3Title: '❤️ Your Experience',
+      expCard3Header: 'We Listen & Improve',
+      expCard3Description: 'Your feedback helps us get better. Every rating, review, and suggestion helps shape the Gaon Ka Swad experience.',
     }));
 
     const activeOutletIds = this.outlets.map((o) => o.id);
@@ -651,6 +663,18 @@ class AppStorage {
       storyHighlight2Title: '24 Hrs Slow-Simmered',
       storyHighlight2Description: 'Slow-Simmered Dal Bukhara',
       outletImage: 'https://images.unsplash.com/photo-1556910103-1c02745aae4d?q=80&w=1000&auto=format&fit=crop',
+      expLine: 'THE GAON KA SWAD EXPERIENCE',
+      expHeader: 'Food That Feels Like Home',
+      expDescription: 'From the way we cook to the way we serve, every detail is designed to make your meal feel a little more special.',
+      expCard1Title: '🏠 Familiar Flavours',
+      expCard1Header: 'Taste That Feels Like Home',
+      expCard1Description: 'Comforting Indian flavours inspired by the food we know, love, and grew up sharing.',
+      expCard2Title: '🍽️ Made With Care',
+      expCard2Header: 'Every Order Matters',
+      expCard2Description: 'We prepare each order with attention to freshness, consistency, and the little details that make a meal memorable.',
+      expCard3Title: '❤️ Your Experience',
+      expCard3Header: 'We Listen & Improve',
+      expCard3Description: 'Your feedback helps us get better. Every rating, review, and suggestion helps shape the Gaon Ka Swad experience.',
     };
     return fallback;
   }

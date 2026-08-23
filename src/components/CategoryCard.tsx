@@ -17,12 +17,12 @@ export const CategoryCard: React.FC<CategoryCardProps> = ({
   itemCount
 }) => {
   const { goToShop } = useNavigation();
-  const { activeProducts } = useProducts();
+  const { outletProducts } = useProducts();
 
   const count =
     itemCount !== undefined
       ? itemCount
-      : activeProducts.filter(
+      : outletProducts.filter(
           (p) => p.category === category.slug || p.category === category.id
         ).length;
 

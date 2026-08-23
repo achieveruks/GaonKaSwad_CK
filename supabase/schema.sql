@@ -249,6 +249,18 @@ CREATE TABLE IF NOT EXISTS public.abouts (
   story_highlight2_title TEXT,
   story_highlight2_description TEXT,
   outlet_image TEXT,
+  exp_line TEXT DEFAULT 'THE GAON KA SWAD EXPERIENCE',
+  exp_header TEXT DEFAULT 'Food That Feels Like Home',
+  exp_description TEXT DEFAULT 'From the way we cook to the way we serve, every detail is designed to make your meal feel a little more special.',
+  exp_card1_title TEXT DEFAULT '🏠 Familiar Flavours',
+  exp_card1_header TEXT DEFAULT 'Taste That Feels Like Home',
+  exp_card1_description TEXT DEFAULT 'Comforting Indian flavours inspired by the food we know, love, and grew up sharing.',
+  exp_card2_title TEXT DEFAULT '🍽️ Made With Care',
+  exp_card2_header TEXT DEFAULT 'Every Order Matters',
+  exp_card2_description TEXT DEFAULT 'We prepare each order with attention to freshness, consistency, and the little details that make a meal memorable.',
+  exp_card3_title TEXT DEFAULT '❤️ Your Experience',
+  exp_card3_header TEXT DEFAULT 'We Listen & Improve',
+  exp_card3_description TEXT DEFAULT 'Your feedback helps us get better. Every rating, review, and suggestion helps shape the Gaon Ka Swad experience.',
   created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
   updated_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
 );
@@ -266,6 +278,18 @@ ALTER TABLE IF EXISTS public.abouts ADD COLUMN IF NOT EXISTS story_highlight1_de
 ALTER TABLE IF EXISTS public.abouts ADD COLUMN IF NOT EXISTS story_highlight2_title TEXT;
 ALTER TABLE IF EXISTS public.abouts ADD COLUMN IF NOT EXISTS story_highlight2_description TEXT;
 ALTER TABLE IF EXISTS public.abouts ADD COLUMN IF NOT EXISTS outlet_image TEXT;
+ALTER TABLE IF EXISTS public.abouts ADD COLUMN IF NOT EXISTS exp_line TEXT DEFAULT 'THE GAON KA SWAD EXPERIENCE';
+ALTER TABLE IF EXISTS public.abouts ADD COLUMN IF NOT EXISTS exp_header TEXT DEFAULT 'Food That Feels Like Home';
+ALTER TABLE IF EXISTS public.abouts ADD COLUMN IF NOT EXISTS exp_description TEXT DEFAULT 'From the way we cook to the way we serve, every detail is designed to make your meal feel a little more special.';
+ALTER TABLE IF EXISTS public.abouts ADD COLUMN IF NOT EXISTS exp_card1_title TEXT DEFAULT '🏠 Familiar Flavours';
+ALTER TABLE IF EXISTS public.abouts ADD COLUMN IF NOT EXISTS exp_card1_header TEXT DEFAULT 'Taste That Feels Like Home';
+ALTER TABLE IF EXISTS public.abouts ADD COLUMN IF NOT EXISTS exp_card1_description TEXT DEFAULT 'Comforting Indian flavours inspired by the food we know, love, and grew up sharing.';
+ALTER TABLE IF EXISTS public.abouts ADD COLUMN IF NOT EXISTS exp_card2_title TEXT DEFAULT '🍽️ Made With Care';
+ALTER TABLE IF EXISTS public.abouts ADD COLUMN IF NOT EXISTS exp_card2_header TEXT DEFAULT 'Every Order Matters';
+ALTER TABLE IF EXISTS public.abouts ADD COLUMN IF NOT EXISTS exp_card2_description TEXT DEFAULT 'We prepare each order with attention to freshness, consistency, and the little details that make a meal memorable.';
+ALTER TABLE IF EXISTS public.abouts ADD COLUMN IF NOT EXISTS exp_card3_title TEXT DEFAULT '❤️ Your Experience';
+ALTER TABLE IF EXISTS public.abouts ADD COLUMN IF NOT EXISTS exp_card3_header TEXT DEFAULT 'We Listen & Improve';
+ALTER TABLE IF EXISTS public.abouts ADD COLUMN IF NOT EXISTS exp_card3_description TEXT DEFAULT 'Your feedback helps us get better. Every rating, review, and suggestion helps shape the Gaon Ka Swad experience.';
 
 -- ==============================================================================
 -- HELPER FUNCTIONS FOR SECURITY DEFINER RLS EVALUATION

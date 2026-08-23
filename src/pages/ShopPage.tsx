@@ -19,7 +19,7 @@ import { motion, AnimatePresence } from 'motion/react';
 
 export const ShopPage: React.FC = () => {
   const { currentRoute, goToShop } = useNavigation();
-  const { activeProducts } = useProducts();
+  const { outletProducts } = useProducts();
 
   // Extract route params if passed
   const initialCategory = currentRoute.path === '/shop' ? currentRoute.category || '' : '';
@@ -64,7 +64,7 @@ export const ShopPage: React.FC = () => {
 
   // Filter & Sort computation
   const filteredProducts = useMemo(() => {
-    return activeProducts.filter((product) => {
+    return outletProducts.filter((product) => {
       // 1. Search Query
       if (filters.searchQuery?.trim()) {
         const query = (filters.searchQuery || '').toLowerCase().trim();
@@ -120,18 +120,18 @@ export const ShopPage: React.FC = () => {
           return (b.bestseller ? 2 : 0) + b.rating - ((a.bestseller ? 2 : 0) + a.rating);
       }
     });
-  }, [filters, activeProducts]);
+  }, [filters, outletProducts]);
 
-  // Dynamic category counts map based on active products
+  // Dynamic category counts map based on outlet products
   const categoryCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const cat of CATEGORIES) {
-      counts[cat.slug] = activeProducts.filter(
+      counts[cat.slug] = outletProducts.filter(
         (p) => p.category === cat.slug || p.category === cat.id
       ).length;
     }
     return counts;
-  }, [activeProducts]);
+  }, [outletProducts]);
 
   const activeCategoryObj = CATEGORIES.find((c) => c.slug === filters.category);
 
@@ -232,7 +232,7 @@ export const ShopPage: React.FC = () => {
                 : 'bg-white border border-gray-200 text-gray-700 hover:bg-gray-50'
             }`}
           >
-            All Specialties ({activeProducts.length})
+            All Specialties ({outletProducts.length})
           </button>
 
           {CATEGORIES.map((cat) => {

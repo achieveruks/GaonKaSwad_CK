@@ -17,18 +17,18 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
   onReset,
   totalResultsCount
 }) => {
-  const { activeProducts } = useProducts();
+  const { outletProducts } = useProducts();
   const spiceOptions = ['All', 'Mild', 'Medium', 'Spicy', 'Extra Spicy'];
 
   const categoryCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const cat of CATEGORIES) {
-      counts[cat.slug] = activeProducts.filter(
+      counts[cat.slug] = outletProducts.filter(
         (p) => p.category === cat.slug || p.category === cat.id
       ).length;
     }
     return counts;
-  }, [activeProducts]);
+  }, [outletProducts]);
 
   return (
     <aside className="bg-white rounded-xl border border-gray-200 p-4 shadow-xs space-y-5">
@@ -133,7 +133,7 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
           >
             <span>All Categories</span>
             <span className="flex items-center gap-1.5">
-              <span className="text-[10px] text-gray-400 font-normal">({activeProducts.length})</span>
+              <span className="text-[10px] text-gray-400 font-normal">({outletProducts.length})</span>
               {filters.category === '' && <Check className="w-3.5 h-3.5 text-orange-600" />}
             </span>
           </button>

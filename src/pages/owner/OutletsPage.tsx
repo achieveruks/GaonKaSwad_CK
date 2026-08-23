@@ -49,6 +49,7 @@ import {
   BookOpen,
   Image as ImageIcon,
   RotateCcw,
+  Heart,
 } from 'lucide-react';
 
 interface OutletProductItemState {
@@ -112,6 +113,18 @@ export const OutletsPage: React.FC = () => {
     storyHighlight2Title: '',
     storyHighlight2Description: '',
     outletImage: '',
+    expLine: '',
+    expHeader: '',
+    expDescription: '',
+    expCard1Title: '',
+    expCard1Header: '',
+    expCard1Description: '',
+    expCard2Title: '',
+    expCard2Header: '',
+    expCard2Description: '',
+    expCard3Title: '',
+    expCard3Header: '',
+    expCard3Description: '',
   });
 
   // Per-outlet menu item states in modal
@@ -226,6 +239,18 @@ export const OutletsPage: React.FC = () => {
       storyHighlight2Title: '',
       storyHighlight2Description: '',
       outletImage: '',
+      expLine: '',
+      expHeader: '',
+      expDescription: '',
+      expCard1Title: '',
+      expCard1Header: '',
+      expCard1Description: '',
+      expCard2Title: '',
+      expCard2Header: '',
+      expCard2Description: '',
+      expCard3Title: '',
+      expCard3Header: '',
+      expCard3Description: '',
     });
     initOutletItemStates(null);
     setIsModalOpen(true);
@@ -275,6 +300,18 @@ export const OutletsPage: React.FC = () => {
       storyHighlight2Title: '',
       storyHighlight2Description: '',
       outletImage: '',
+      expLine: '',
+      expHeader: '',
+      expDescription: '',
+      expCard1Title: '',
+      expCard1Header: '',
+      expCard1Description: '',
+      expCard2Title: '',
+      expCard2Header: '',
+      expCard2Description: '',
+      expCard3Title: '',
+      expCard3Header: '',
+      expCard3Description: '',
     });
     getAboutByOutletId(outlet.id)
       .then((ab) => {
@@ -1385,7 +1422,7 @@ export const OutletsPage: React.FC = () => {
                               2. About Page Customization
                             </h3>
                             <p className="text-[11px] text-stone-500">
-                              Customise the first 2 sections of the /#/about page when this outlet is selected. Saved to Supabase DB.
+                              Customise the hero, story, and experience sections of the /#/about page when this outlet is selected. Saved to Supabase DB.
                             </p>
                           </div>
                         </div>
@@ -1406,6 +1443,18 @@ export const OutletsPage: React.FC = () => {
                               storyHighlight2Title: '24 Hrs Slow-Simmered',
                               storyHighlight2Description: 'Slow-Simmered Dal Bukhara',
                               outletImage: 'https://images.unsplash.com/photo-1556910103-1c02745aae4d?q=80&w=1000&auto=format&fit=crop',
+                              expLine: 'THE GAON KA SWAD EXPERIENCE',
+                              expHeader: 'Food That Feels Like Home',
+                              expDescription: 'From the way we cook to the way we serve, every detail is designed to make your meal feel a little more special.',
+                              expCard1Title: '🏠 Familiar Flavours',
+                              expCard1Header: 'Taste That Feels Like Home',
+                              expCard1Description: 'Comforting Indian flavours inspired by the food we know, love, and grew up sharing.',
+                              expCard2Title: '🍽️ Made With Care',
+                              expCard2Header: 'Every Order Matters',
+                              expCard2Description: 'We prepare each order with attention to freshness, consistency, and the little details that make a meal memorable.',
+                              expCard3Title: '❤️ Your Experience',
+                              expCard3Header: 'We Listen & Improve',
+                              expCard3Description: 'Your feedback helps us get better. Every rating, review, and suggestion helps shape the Gaon Ka Swad experience.',
                             });
                           }}
                           className="px-2.5 py-1 text-[11px] font-semibold text-stone-600 hover:text-amber-900 bg-white border border-stone-200 rounded-lg hover:bg-stone-100 flex items-center gap-1 self-start sm:self-auto cursor-pointer"
@@ -1676,6 +1725,241 @@ export const OutletsPage: React.FC = () => {
                               >
                                 Clay Oven & Breads
                               </button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Section 3: Experience & Values Section Inputs (Populates Section 4 on About Page) */}
+                      <div className="bg-white border border-stone-200 rounded-xl p-3.5 space-y-3.5">
+                        <p className="text-[11px] font-bold text-stone-800 uppercase tracking-wide flex items-center gap-1.5">
+                          <Heart className="w-3.5 h-3.5 text-rose-600" />
+                          <span>About Page Experience & Values Section (Section 4)</span>
+                        </p>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-xs font-semibold text-stone-700 mb-1">
+                              Experience Eyebrow Line
+                            </label>
+                            <input
+                              type="text"
+                              value={aboutFormData.expLine || ''}
+                              onChange={(e) =>
+                                setAboutFormData({ ...aboutFormData, expLine: e.target.value.toUpperCase() })
+                              }
+                              placeholder="e.g. THE GAON KA SWAD EXPERIENCE"
+                              className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700 focus:bg-white"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-xs font-semibold text-stone-700 mb-1">
+                              Experience Section Title
+                            </label>
+                            <input
+                              type="text"
+                              value={aboutFormData.expHeader || ''}
+                              onChange={(e) =>
+                                setAboutFormData({ ...aboutFormData, expHeader: e.target.value })
+                              }
+                              placeholder="e.g. Food That Feels Like Home"
+                              className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700 focus:bg-white"
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-semibold text-stone-700 mb-1">
+                            Experience Description
+                          </label>
+                          <textarea
+                            rows={2}
+                            value={aboutFormData.expDescription || ''}
+                            onChange={(e) =>
+                              setAboutFormData({ ...aboutFormData, expDescription: e.target.value })
+                            }
+                            placeholder="e.g. From the way we cook to the way we serve, every detail is designed to make your meal feel a little more special."
+                            className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700 focus:bg-white resize-none"
+                          />
+                        </div>
+
+                        {/* Experience Cards (3 Cards) */}
+                        <div className="space-y-3 pt-1">
+                          <p className="text-[11px] font-semibold text-stone-700">Experience Cards (3 Values)</p>
+                          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+                            {/* Card 1 */}
+                            <div className="p-3 bg-stone-50 rounded-xl border border-stone-200 space-y-2">
+                              <span className="text-[10px] font-bold text-orange-800 uppercase tracking-wide">
+                                Experience Card 1
+                              </span>
+                              <div>
+                                <label className="block text-[11px] font-semibold text-stone-700 mb-0.5">
+                                  Title (e.g. 🏠 Familiar Flavours)
+                                </label>
+                                <input
+                                  type="text"
+                                  value={aboutFormData.expCard1Title || ''}
+                                  onChange={(e) =>
+                                    setAboutFormData({
+                                      ...aboutFormData,
+                                      expCard1Title: e.target.value,
+                                    })
+                                  }
+                                  placeholder="e.g. 🏠 Familiar Flavours"
+                                  className="w-full px-2.5 py-1.5 bg-white border border-stone-200 rounded-lg text-xs text-stone-900 focus:outline-none focus:border-amber-700"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-[11px] font-semibold text-stone-700 mb-0.5">
+                                  Header / Subtitle
+                                </label>
+                                <input
+                                  type="text"
+                                  value={aboutFormData.expCard1Header || ''}
+                                  onChange={(e) =>
+                                    setAboutFormData({
+                                      ...aboutFormData,
+                                      expCard1Header: e.target.value,
+                                    })
+                                  }
+                                  placeholder="e.g. Taste That Feels Like Home"
+                                  className="w-full px-2.5 py-1.5 bg-white border border-stone-200 rounded-lg text-xs text-stone-900 focus:outline-none focus:border-amber-700"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-[11px] font-semibold text-stone-700 mb-0.5">
+                                  Description
+                                </label>
+                                <textarea
+                                  rows={2}
+                                  value={aboutFormData.expCard1Description || ''}
+                                  onChange={(e) =>
+                                    setAboutFormData({
+                                      ...aboutFormData,
+                                      expCard1Description: e.target.value,
+                                    })
+                                  }
+                                  placeholder="Comforting Indian flavours inspired by..."
+                                  className="w-full px-2.5 py-1.5 bg-white border border-stone-200 rounded-lg text-xs text-stone-900 focus:outline-none focus:border-amber-700 resize-none"
+                                />
+                              </div>
+                            </div>
+
+                            {/* Card 2 */}
+                            <div className="p-3 bg-stone-50 rounded-xl border border-stone-200 space-y-2">
+                              <span className="text-[10px] font-bold text-orange-800 uppercase tracking-wide">
+                                Experience Card 2
+                              </span>
+                              <div>
+                                <label className="block text-[11px] font-semibold text-stone-700 mb-0.5">
+                                  Title (e.g. 🍽️ Made With Care)
+                                </label>
+                                <input
+                                  type="text"
+                                  value={aboutFormData.expCard2Title || ''}
+                                  onChange={(e) =>
+                                    setAboutFormData({
+                                      ...aboutFormData,
+                                      expCard2Title: e.target.value,
+                                    })
+                                  }
+                                  placeholder="e.g. 🍽️ Made With Care"
+                                  className="w-full px-2.5 py-1.5 bg-white border border-stone-200 rounded-lg text-xs text-stone-900 focus:outline-none focus:border-amber-700"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-[11px] font-semibold text-stone-700 mb-0.5">
+                                  Header / Subtitle
+                                </label>
+                                <input
+                                  type="text"
+                                  value={aboutFormData.expCard2Header || ''}
+                                  onChange={(e) =>
+                                    setAboutFormData({
+                                      ...aboutFormData,
+                                      expCard2Header: e.target.value,
+                                    })
+                                  }
+                                  placeholder="e.g. Every Order Matters"
+                                  className="w-full px-2.5 py-1.5 bg-white border border-stone-200 rounded-lg text-xs text-stone-900 focus:outline-none focus:border-amber-700"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-[11px] font-semibold text-stone-700 mb-0.5">
+                                  Description
+                                </label>
+                                <textarea
+                                  rows={2}
+                                  value={aboutFormData.expCard2Description || ''}
+                                  onChange={(e) =>
+                                    setAboutFormData({
+                                      ...aboutFormData,
+                                      expCard2Description: e.target.value,
+                                    })
+                                  }
+                                  placeholder="We prepare each order with attention to freshness..."
+                                  className="w-full px-2.5 py-1.5 bg-white border border-stone-200 rounded-lg text-xs text-stone-900 focus:outline-none focus:border-amber-700 resize-none"
+                                />
+                              </div>
+                            </div>
+
+                            {/* Card 3 */}
+                            <div className="p-3 bg-stone-50 rounded-xl border border-stone-200 space-y-2">
+                              <span className="text-[10px] font-bold text-orange-800 uppercase tracking-wide">
+                                Experience Card 3
+                              </span>
+                              <div>
+                                <label className="block text-[11px] font-semibold text-stone-700 mb-0.5">
+                                  Title (e.g. ❤️ Your Experience)
+                                </label>
+                                <input
+                                  type="text"
+                                  value={aboutFormData.expCard3Title || ''}
+                                  onChange={(e) =>
+                                    setAboutFormData({
+                                      ...aboutFormData,
+                                      expCard3Title: e.target.value,
+                                    })
+                                  }
+                                  placeholder="e.g. ❤️ Your Experience"
+                                  className="w-full px-2.5 py-1.5 bg-white border border-stone-200 rounded-lg text-xs text-stone-900 focus:outline-none focus:border-amber-700"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-[11px] font-semibold text-stone-700 mb-0.5">
+                                  Header / Subtitle
+                                </label>
+                                <input
+                                  type="text"
+                                  value={aboutFormData.expCard3Header || ''}
+                                  onChange={(e) =>
+                                    setAboutFormData({
+                                      ...aboutFormData,
+                                      expCard3Header: e.target.value,
+                                    })
+                                  }
+                                  placeholder="e.g. We Listen & Improve"
+                                  className="w-full px-2.5 py-1.5 bg-white border border-stone-200 rounded-lg text-xs text-stone-900 focus:outline-none focus:border-amber-700"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-[11px] font-semibold text-stone-700 mb-0.5">
+                                  Description
+                                </label>
+                                <textarea
+                                  rows={2}
+                                  value={aboutFormData.expCard3Description || ''}
+                                  onChange={(e) =>
+                                    setAboutFormData({
+                                      ...aboutFormData,
+                                      expCard3Description: e.target.value,
+                                    })
+                                  }
+                                  placeholder="Your feedback helps us get better..."
+                                  className="w-full px-2.5 py-1.5 bg-white border border-stone-200 rounded-lg text-xs text-stone-900 focus:outline-none focus:border-amber-700 resize-none"
+                                />
+                              </div>
                             </div>
                           </div>
                         </div>

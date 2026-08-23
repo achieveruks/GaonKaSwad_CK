@@ -36,7 +36,7 @@ import { motion, AnimatePresence } from 'motion/react';
 export const HomePage: React.FC = () => {
   const { goToShop, goToProduct, goToCategories, goToAbout } = useNavigation();
   const { addToCart } = useCart();
-  const { activeProducts, bestsellerProducts, chefSignatures, newArrivals } = useProducts();
+  const { activeProducts, outletProducts, bestsellerProducts, chefSignatures, newArrivals } = useProducts();
   const { currentZone, currentOutlet, selectedLocation } = useLocation();
 
   const deliveryTime =
@@ -390,7 +390,7 @@ export const HomePage: React.FC = () => {
 
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
           {CATEGORIES.map((category) => {
-            const count = activeProducts.filter(
+            const count = outletProducts.filter(
               (p) => p.category === category.slug || p.category === category.id
             ).length;
             return (

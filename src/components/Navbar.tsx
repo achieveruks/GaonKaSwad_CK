@@ -26,7 +26,7 @@ export const Navbar: React.FC = () => {
     useNavigation();
   const { totalItemsCount, setIsCartDrawerOpen } = useCart();
   const { selectedLocation, setIsLocationModalOpen, currentOutlet, currentZone } = useLocation();
-  const { activeProducts } = useProducts();
+  const { outletProducts } = useProducts();
   const { customer, isCustomerLoggedIn, openOtpModal, logoutCustomer } = useCustomer();
 
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -97,13 +97,13 @@ export const Navbar: React.FC = () => {
       </div>
 
       {/* Main Nav Container */}
-      <div className="max-w-7xl mx-auto px-2.5 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between h-16 gap-1.5 sm:gap-3">
-          {/* Brand Logo & Outlet / Mobile Pin Header Area */}
-          <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0 min-w-0">
+      <div className="max-w-7xl mx-auto px-2.5 sm:px-3 md:px-6 lg:px-8">
+        <div className="flex items-center justify-between min-h-[3.75rem] sm:min-h-[4rem] md:min-h-[4.25rem] py-1 gap-1.5 sm:gap-2 md:gap-4">
+          {/* Brand Logo & Outlet / PIN Header Area */}
+          <div className="flex items-center gap-1.5 sm:gap-2 md:gap-2.5 shrink-0 min-w-0">
             <div
               onClick={goToHome}
-              className="w-7 h-7 sm:w-9 sm:h-9 bg-amber-800 rounded-lg flex items-center justify-center text-white font-bold text-sm sm:text-xl shadow-xs hover:scale-105 transition-transform shrink-0 cursor-pointer select-none"
+              className="w-7 h-7 sm:w-8 sm:h-8 md:w-9 md:h-9 bg-amber-800 rounded-lg flex items-center justify-center text-white font-bold text-xs sm:text-sm md:text-lg shadow-xs hover:scale-105 transition-transform shrink-0 cursor-pointer select-none"
             >
               G
             </div>
@@ -112,73 +112,43 @@ export const Navbar: React.FC = () => {
                 onClick={goToHome}
                 className="cursor-pointer select-none"
               >
-                <span className="font-heading font-bold text-sm sm:text-base md:text-lg text-stone-900 tracking-tight whitespace-nowrap block">
+                <span className="font-heading font-bold text-xs sm:text-xs md:text-sm lg:text-base text-stone-900 tracking-tight whitespace-nowrap block">
                   Gaon Ka <span className="text-amber-800">Swad</span>
                 </span>
                 <span
                   style={{ fontFamily: "'Playfair Display', Georgia, serif" }}
-                  className="text-[10px] sm:text-[13px] italic font-semibold text-amber-700 tracking-wide max-w-[95px] sm:max-w-[200px] truncate block hover:text-amber-800 transition-colors leading-none"
+                  className="text-[9px] sm:text-[10px] md:text-xs italic font-semibold text-amber-700 tracking-wide max-w-[100px] sm:max-w-[120px] md:max-w-[200px] truncate block hover:text-amber-800 transition-colors leading-none"
                 >
                   {outletSecondLine}
                 </span>
               </div>
 
-              {/* Only for Mobile Portrait (< sm): Show PIN icon just below the outlet name */}
+              {/* Pin Layout directly below Outlet Name */}
               <button
                 type="button"
+                id="header-location-button"
                 onClick={() => setIsLocationModalOpen(true)}
-                className="sm:hidden mt-0.5 flex items-center gap-1 text-[10px] text-amber-900 hover:text-amber-950 font-bold transition-colors w-fit leading-none"
-                title="Change delivery PIN code"
+                className="mt-0.5 flex items-center gap-0.5 sm:gap-1 text-[9px] sm:text-[10px] md:text-[11px] font-semibold text-amber-900 hover:text-amber-950 transition-colors group cursor-pointer w-fit leading-none"
+                title="Click to select or change delivery PIN code"
               >
-                <MapPin className="w-2.5 h-2.5 text-amber-800 shrink-0" />
-                <span className="font-bold underline decoration-amber-300 underline-offset-2">
+                <MapPin className="w-2.5 h-2.5 sm:w-2.5 sm:h-2.5 md:w-3 md:h-3 text-amber-700 group-hover:text-amber-900 shrink-0" />
+                <span className="font-bold underline decoration-amber-400 group-hover:decoration-amber-700 underline-offset-2">
                   {selectedLocation ? `PIN ${selectedLocation.pinCode}` : 'Select PIN'}
+                </span>
+                <span className="text-[8px] sm:text-[9px] md:text-[10px] text-amber-700 font-normal opacity-80">
+                  · Change
                 </span>
               </button>
             </div>
           </div>
 
-          {/* Location Selector Badge (Tablet & Desktop: sm+) */}
-          <button
-            type="button"
-            id="header-location-button"
-            onClick={() => setIsLocationModalOpen(true)}
-            className={`hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-medium transition-all shrink-0 max-w-[220px] ${
-              selectedLocation
-                ? 'bg-amber-50/80 hover:bg-amber-100/90 border-amber-200/80 text-stone-900 shadow-2xs'
-                : 'bg-amber-100/80 hover:bg-amber-200 border-amber-400 text-amber-950 ring-2 ring-amber-400/30'
-            }`}
-            title="Click to select or change delivery PIN code"
-          >
-            <MapPin className="w-3.5 h-3.5 text-amber-800 shrink-0" />
-            <div className="text-left flex flex-col justify-center leading-none min-w-0">
-              {selectedLocation ? (
-                <div className="flex items-center gap-1 min-w-0">
-                  <span className="font-bold text-stone-900 text-xs shrink-0">
-                    PIN {selectedLocation.pinCode}
-                  </span>
-                  <span className="text-stone-500 text-[11px] truncate hidden md:inline max-w-[110px]">
-                    · {selectedLocation.outletName.replace(/^Gaon\s+Ka\s+Swad\s*[-–:]\s*/i, '')}
-                  </span>
-                </div>
-              ) : (
-                <span className="font-bold text-amber-950 text-xs whitespace-nowrap">
-                  Select PIN
-                </span>
-              )}
-            </div>
-            <span className="text-[10px] text-amber-800 underline font-semibold shrink-0">
-              Change
-            </span>
-          </button>
-
-          {/* Desktop Search Bar */}
-          <div className="hidden lg:block max-w-xs xl:max-w-sm w-full">
+          {/* Search Bar taking remaining space */}
+          <div className="hidden sm:block flex-1 min-w-0 max-w-3xl mx-1 sm:mx-2 md:mx-4">
             <SearchBar />
           </div>
 
-          {/* Desktop Navigation Links (Visible on Large/Desktop screens) */}
-          <nav className="hidden lg:flex items-center gap-1 text-sm font-medium shrink-0">
+          {/* Desktop Navigation Links (Visible on Extra Large/Desktop screens) */}
+          <nav className="hidden xl:flex items-center gap-1 text-sm font-medium shrink-0">
             <button
               type="button"
               onClick={goToHome}
@@ -235,7 +205,7 @@ export const Navbar: React.FC = () => {
                       Our Specialties
                     </div>
                     {CATEGORIES.map((cat) => {
-                      const count = activeProducts.filter(
+                      const count = outletProducts.filter(
                         (p) => p.category === cat.slug || p.category === cat.id
                       ).length;
                       return (
@@ -299,14 +269,14 @@ export const Navbar: React.FC = () => {
 
           {/* Right Action Icons */}
           <div className="flex items-center gap-1 sm:gap-2.5 shrink-0">
-            {/* Mobile/Tablet Search Toggle */}
+            {/* Mobile Search Toggle (< sm) */}
             <button
               type="button"
               onClick={() => setIsSearchExpanded(!isSearchExpanded)}
-              className="lg:hidden p-1.5 sm:p-2 text-stone-700 hover:text-stone-900 rounded-full hover:bg-stone-100 transition-colors"
+              className="sm:hidden p-1.5 text-stone-700 hover:text-stone-900 rounded-full hover:bg-stone-100 transition-colors"
               aria-label="Search"
             >
-              <Search className="w-4 h-4 sm:w-5 sm:h-5" />
+              <Search className="w-4 h-4" />
             </button>
 
             {/* Customer Account / Sign In Widget */}
@@ -402,7 +372,7 @@ export const Navbar: React.FC = () => {
             <button
               type="button"
               onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-              className="lg:hidden p-1.5 sm:p-2 text-stone-700 hover:text-stone-900 rounded-lg hover:bg-stone-100 transition-colors"
+              className="xl:hidden p-1.5 sm:p-2 text-stone-700 hover:text-stone-900 rounded-lg hover:bg-stone-100 transition-colors"
               aria-label="Toggle navigation menu"
             >
               {isMobileMenuOpen ? <X className="w-5 h-5 sm:w-6 sm:h-6" /> : <Menu className="w-5 h-5 sm:w-6 sm:h-6" />}
@@ -410,14 +380,14 @@ export const Navbar: React.FC = () => {
           </div>
         </div>
 
-        {/* Mobile/Tablet Search Collapsible */}
+        {/* Mobile Search Collapsible (< sm) */}
         <AnimatePresence>
           {isSearchExpanded && (
             <motion.div
               initial={{ height: 0, opacity: 0 }}
               animate={{ height: 'auto', opacity: 1 }}
               exit={{ height: 0, opacity: 0 }}
-              className="lg:hidden pb-4 overflow-hidden"
+              className="sm:hidden pb-3 relative z-50 overflow-visible"
             >
               <SearchBar autoFocus onClose={() => setIsSearchExpanded(false)} />
             </motion.div>
@@ -432,7 +402,7 @@ export const Navbar: React.FC = () => {
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: 'auto' }}
             exit={{ opacity: 0, height: 0 }}
-            className="lg:hidden bg-white border-b border-stone-200 overflow-hidden"
+            className="xl:hidden bg-white border-b border-stone-200 overflow-hidden"
           >
             <div className="px-4 py-4 space-y-1.5">
               {/* Location info inside mobile menu */}

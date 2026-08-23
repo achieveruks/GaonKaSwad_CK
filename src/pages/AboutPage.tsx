@@ -66,6 +66,22 @@ const AboutPageSkeleton: React.FC = () => {
           </div>
         </div>
       </section>
+
+      {/* 4. Dynamic Experience / Values Skeleton */}
+      <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="bg-white rounded-2xl border border-stone-200 p-6 sm:p-8 space-y-6">
+          <div className="max-w-2xl space-y-2">
+            <div className="h-4 w-44 bg-stone-200 rounded-full" />
+            <div className="h-7 w-72 bg-stone-300 rounded-xl" />
+            <div className="h-4 w-full bg-stone-200 rounded-md" />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            {[1, 2, 3].map((i) => (
+              <div key={i} className="p-4 rounded-xl bg-stone-50 border border-stone-200 h-32" />
+            ))}
+          </div>
+        </div>
+      </section>
     </div>
   );
 };
@@ -282,43 +298,62 @@ export const AboutPage: React.FC = () => {
         </div>
       </section>
 
-      {/* 4. Meet The Master Chefs & Kitchen Story */}
+      {/* 4. Experience & Values Section (Dynamic from Supabase abouts table) */}
       <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="bg-white rounded-2xl border border-stone-200 p-6 sm:p-8 shadow-xs space-y-6">
           <div className="max-w-2xl space-y-1.5">
             <span className="text-orange-600 font-bold text-xs uppercase tracking-wider">
-              The Culinary Guild
+              {aboutData?.expLine || 'THE GAON KA SWAD EXPERIENCE'}
             </span>
             <h2 className="font-extrabold text-xl sm:text-2xl text-stone-900">
-              Guided by Master Khansamas
+              {aboutData?.expHeader || 'Food That Feels Like Home'}
             </h2>
             <p className="text-xs text-stone-600">
-              Our executive chefs bring over 45 combined years of heritage cooking experience from royal Mughal, Awadhi, and Kashmiri kitchens.
+              {aboutData?.expDescription ||
+                'From the way we cook to the way we serve, every detail is designed to make your meal feel a little more special.'}
             </p>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            {/* Card 1 */}
             <div className="p-4 rounded-xl bg-stone-50 border border-stone-200 space-y-2">
-              <h4 className="font-bold text-sm text-stone-900">Ustad Imran Qureshi</h4>
-              <p className="text-xs text-orange-600 font-semibold">Master Dum Specialist (Awadh)</p>
+              <h4 className="font-bold text-sm text-stone-900">
+                {aboutData?.expCard1Title || '🏠 Familiar Flavours'}
+              </h4>
+              <p className="text-xs text-orange-600 font-semibold">
+                {aboutData?.expCard1Header || 'Taste That Feels Like Home'}
+              </p>
               <p className="text-xs text-stone-500 leading-relaxed">
-                Specializes in sealing dum handis, saffron balance, and royal Nizami yakhni preparations.
+                {aboutData?.expCard1Description ||
+                  'Comforting Indian flavours inspired by the food we know, love, and grew up sharing.'}
               </p>
             </div>
 
+            {/* Card 2 */}
             <div className="p-4 rounded-xl bg-stone-50 border border-stone-200 space-y-2">
-              <h4 className="font-bold text-sm text-stone-900">Chef Harpreet Bhatia</h4>
-              <p className="text-xs text-orange-600 font-semibold">Head Tandoor & Charcoal Pit</p>
+              <h4 className="font-bold text-sm text-stone-900">
+                {aboutData?.expCard2Title || '🍽️ Made With Care'}
+              </h4>
+              <p className="text-xs text-orange-600 font-semibold">
+                {aboutData?.expCard2Header || 'Every Order Matters'}
+              </p>
               <p className="text-xs text-stone-500 leading-relaxed">
-                Master of bhatti marinades, clay oven heat regulation, and artisanal multilayered breads.
+                {aboutData?.expCard2Description ||
+                  'We prepare each order with attention to freshness, consistency, and the little details that make a meal memorable.'}
               </p>
             </div>
 
+            {/* Card 3 */}
             <div className="p-4 rounded-xl bg-stone-50 border border-stone-200 space-y-2">
-              <h4 className="font-bold text-sm text-stone-900">Chef Rameshwar Tiwari</h4>
-              <p className="text-xs text-orange-600 font-semibold">Slow Gravies & Mithai Artisan</p>
+              <h4 className="font-bold text-sm text-stone-900">
+                {aboutData?.expCard3Title || '❤️ Your Experience'}
+              </h4>
+              <p className="text-xs text-orange-600 font-semibold">
+                {aboutData?.expCard3Header || 'We Listen & Improve'}
+              </p>
               <p className="text-xs text-stone-500 leading-relaxed">
-                Oversees our 24-hour slow-cooked Dal Bukhara, Shahi Paneer, and pure mawa gulab jamuns.
+                {aboutData?.expCard3Description ||
+                  'Your feedback helps us get better. Every rating, review, and suggestion helps shape the Gaon Ka Swad experience.'}
               </p>
             </div>
           </div>

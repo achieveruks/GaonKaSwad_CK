@@ -42,6 +42,19 @@ export interface OutletAbout {
   storyHighlight2Title?: string;
   storyHighlight2Description?: string;
   outletImage?: string;
+  // Section 4 Experience / Values Fields (Mapped to exp_* in DB)
+  expLine?: string;
+  expHeader?: string;
+  expDescription?: string;
+  expCard1Title?: string;
+  expCard1Header?: string;
+  expCard1Description?: string;
+  expCard2Title?: string;
+  expCard2Header?: string;
+  expCard2Description?: string;
+  expCard3Title?: string;
+  expCard3Header?: string;
+  expCard3Description?: string;
   createdAt?: string;
   updatedAt?: string;
 }

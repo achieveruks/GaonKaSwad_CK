@@ -191,6 +191,18 @@ export function mapDbAboutToAbout(row: any): OutletAbout {
     storyHighlight2Title: row.story_highlight2_title || undefined,
     storyHighlight2Description: row.story_highlight2_description || undefined,
     outletImage: row.outlet_image || undefined,
+    expLine: row.exp_line || undefined,
+    expHeader: row.exp_header || undefined,
+    expDescription: row.exp_description || undefined,
+    expCard1Title: row.exp_card1_title || undefined,
+    expCard1Header: row.exp_card1_header || undefined,
+    expCard1Description: row.exp_card1_description || undefined,
+    expCard2Title: row.exp_card2_title || undefined,
+    expCard2Header: row.exp_card2_header || undefined,
+    expCard2Description: row.exp_card2_description || undefined,
+    expCard3Title: row.exp_card3_title || undefined,
+    expCard3Header: row.exp_card3_header || undefined,
+    expCard3Description: row.exp_card3_description || undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -211,6 +223,18 @@ export function mapAboutToDbAbout(a: Partial<OutletAbout>): any {
   if (a.storyHighlight2Title !== undefined) dbObj.story_highlight2_title = a.storyHighlight2Title;
   if (a.storyHighlight2Description !== undefined) dbObj.story_highlight2_description = a.storyHighlight2Description;
   if (a.outletImage !== undefined) dbObj.outlet_image = a.outletImage;
+  if (a.expLine !== undefined) dbObj.exp_line = a.expLine;
+  if (a.expHeader !== undefined) dbObj.exp_header = a.expHeader;
+  if (a.expDescription !== undefined) dbObj.exp_description = a.expDescription;
+  if (a.expCard1Title !== undefined) dbObj.exp_card1_title = a.expCard1Title;
+  if (a.expCard1Header !== undefined) dbObj.exp_card1_header = a.expCard1Header;
+  if (a.expCard1Description !== undefined) dbObj.exp_card1_description = a.expCard1Description;
+  if (a.expCard2Title !== undefined) dbObj.exp_card2_title = a.expCard2Title;
+  if (a.expCard2Header !== undefined) dbObj.exp_card2_header = a.expCard2Header;
+  if (a.expCard2Description !== undefined) dbObj.exp_card2_description = a.expCard2Description;
+  if (a.expCard3Title !== undefined) dbObj.exp_card3_title = a.expCard3Title;
+  if (a.expCard3Header !== undefined) dbObj.exp_card3_header = a.expCard3Header;
+  if (a.expCard3Description !== undefined) dbObj.exp_card3_description = a.expCard3Description;
   dbObj.updated_at = new Date().toISOString();
   return dbObj;
 }
@@ -1072,6 +1096,18 @@ export async function seedSupabaseDatabase(force = false): Promise<{
         storyHighlight2Title: '24 Hrs Slow-Simmered',
         storyHighlight2Description: 'Slow-Simmered Dal Bukhara',
         outletImage: 'https://images.unsplash.com/photo-1556910103-1c02745aae4d?q=80&w=1000&auto=format&fit=crop',
+        expLine: 'THE GAON KA SWAD EXPERIENCE',
+        expHeader: 'Food That Feels Like Home',
+        expDescription: 'From the way we cook to the way we serve, every detail is designed to make your meal feel a little more special.',
+        expCard1Title: '🏠 Familiar Flavours',
+        expCard1Header: 'Taste That Feels Like Home',
+        expCard1Description: 'Comforting Indian flavours inspired by the food we know, love, and grew up sharing.',
+        expCard2Title: '🍽️ Made With Care',
+        expCard2Header: 'Every Order Matters',
+        expCard2Description: 'We prepare each order with attention to freshness, consistency, and the little details that make a meal memorable.',
+        expCard3Title: '❤️ Your Experience',
+        expCard3Header: 'We Listen & Improve',
+        expCard3Description: 'Your feedback helps us get better. Every rating, review, and suggestion helps shape the Gaon Ka Swad experience.',
       })
     );
     const { error: aboutErr } = await supabase.from('abouts').upsert(aboutPayloads, { onConflict: 'outlet_id' });
