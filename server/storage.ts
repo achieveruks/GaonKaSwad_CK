@@ -1,8 +1,122 @@
 import fs from 'fs';
 import path from 'path';
-import { Product, Outlet, OutletAbout, DeliveryZone, Order, DashboardStats, Customer, CustomerAddress } from '../src/types';
+import { Product, Outlet, OutletAbout, DeliveryZone, Order, OrderItem, CleanOrderItem, DashboardStats, Customer, CustomerAddress } from '../src/types';
 import { PRODUCTS as INITIAL_PRODUCTS } from '../src/data/products';
 import { INITIAL_OUTLETS, INITIAL_DELIVERY_ZONES } from '../src/data/outlets';
+
+/**
+ * Clean Architecture Database Serializer for Order Items
+ * Produces a flat, minimal JSONB object with zero duplicate keys, zero ephemeral React IDs, and no nested master catalog copies.
+ */
+export function serializeOrderItemForDb(it: any): CleanOrderItem {
+  const p = it.product || {};
+  const productId = String(it.productId || p.id || it.id || '');
+  const name = String(it.name || p.name || 'Authentic Delicacy');
+  const hindiName = it.hindiName || p.hindiName || undefined;
+  const image = String(it.image || p.image || '');
+  const isVeg = it.isVeg !== undefined ? Boolean(it.isVeg) : (p.isVeg !== undefined ? Boolean(p.isVeg) : true);
+  const quantity = Math.max(1, Number(it.quantity) || 1);
+  const unitPrice = Number(it.unitPrice || it.price || p.price || 0);
+  const totalPrice = Number(it.totalPrice || unitPrice * quantity);
+
+  const selectedVariant = it.selectedVariant
+    ? {
+        id: String(it.selectedVariant.id || ''),
+        name: String(it.selectedVariant.name || ''),
+        weight: it.selectedVariant.weight || undefined,
+        serves: it.selectedVariant.serves || undefined,
+        price: Number(it.selectedVariant.price || unitPrice),
+      }
+    : undefined;
+
+  const selectedAddons = Array.isArray(it.selectedAddons) && it.selectedAddons.length > 0
+    ? it.selectedAddons.map((ad: any) => ({
+        id: String(ad.id || ''),
+        name: String(ad.name || ''),
+        price: Number(ad.price || 0),
+        isVeg: Boolean(ad.isVeg ?? true),
+      }))
+    : [];
+
+  const cleanItem: CleanOrderItem = {
+    productId,
+    name,
+    image,
+    isVeg,
+    quantity,
+    unitPrice,
+    totalPrice,
+  };
+
+  if (hindiName) cleanItem.hindiName = hindiName;
+  if (selectedVariant) cleanItem.selectedVariant = selectedVariant;
+  if (it.selectedSpiceLevel) cleanItem.selectedSpiceLevel = it.selectedSpiceLevel;
+  cleanItem.selectedAddons = selectedAddons;
+
+  return cleanItem;
+}
+
+/**
+ * In-Memory Deserializer
+ * Injects lightweight getters/shims for UI components that look for item.product or item.id
+ */
+export function deserializeOrderItem(it: any): OrderItem {
+  const p = it.product || {};
+  const productId = String(it.productId || p.id || it.id || '');
+  const name = String(it.name || p.name || 'Authentic Delicacy');
+  const hindiName = it.hindiName || p.hindiName || undefined;
+  const image = String(it.image || p.image || '');
+  const isVeg = it.isVeg !== undefined ? Boolean(it.isVeg) : (p.isVeg !== undefined ? Boolean(p.isVeg) : true);
+  const quantity = Math.max(1, Number(it.quantity) || 1);
+  const unitPrice = Number(it.unitPrice || it.price || p.price || 0);
+  const totalPrice = Number(it.totalPrice || unitPrice * quantity);
+
+  const selectedVariant = it.selectedVariant
+    ? {
+        id: String(it.selectedVariant.id || ''),
+        name: String(it.selectedVariant.name || ''),
+        weight: it.selectedVariant.weight || undefined,
+        serves: it.selectedVariant.serves || undefined,
+        price: Number(it.selectedVariant.price || unitPrice),
+        originalPrice: it.selectedVariant.originalPrice ? Number(it.selectedVariant.originalPrice) : undefined,
+      }
+    : undefined;
+
+  const selectedAddons = Array.isArray(it.selectedAddons)
+    ? it.selectedAddons.map((ad: any) => ({
+        id: String(ad.id || ''),
+        name: String(ad.name || ''),
+        price: Number(ad.price || 0),
+        isVeg: Boolean(ad.isVeg ?? true),
+      }))
+    : [];
+
+  return {
+    productId,
+    name,
+    hindiName,
+    image,
+    isVeg,
+    quantity,
+    unitPrice,
+    price: unitPrice,
+    totalPrice,
+    selectedVariant,
+    selectedAddons,
+    selectedSpiceLevel: it.selectedSpiceLevel || undefined,
+    id: it.id || `${productId}_${selectedVariant?.id || 'std'}`,
+    product: {
+      id: productId,
+      name,
+      hindiName,
+      image,
+      isVeg,
+      price: unitPrice,
+    },
+  };
+}
+
+export const sanitizeOrderItem = serializeOrderItemForDb;
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const PRODUCTS_FILE = path.join(DATA_DIR, 'products_store.json');
@@ -213,13 +327,14 @@ class AppStorage {
     if (Array.isArray(data.outlets) && data.outlets.length > 0) {
       outletsConfig = data.outlets.map((o: any) =>
         typeof o === 'string'
-          ? { outletId: o, inStock: true, isFeatured: false, isBestseller: false, isChefSpecial: false }
+          ? { outletId: o, inStock: true, isFeatured: false, isBestseller: false, isChefSpecial: false, portionsLeft: null }
           : {
               outletId: o.outletId,
               inStock: o.inStock !== false,
               isFeatured: !!o.isFeatured,
               isBestseller: !!o.isBestseller,
               isChefSpecial: !!o.isChefSpecial,
+              portionsLeft: o.portionsLeft !== undefined && o.portionsLeft !== null && o.portionsLeft !== '' ? Number(o.portionsLeft) : null,
             }
       );
     } else if (Array.isArray(data.outletIds) && data.outletIds.length > 0) {
@@ -229,6 +344,7 @@ class AppStorage {
         isFeatured: !!data.featured,
         isBestseller: !!data.bestseller,
         isChefSpecial: !!data.chefSpecial,
+        portionsLeft: null,
       }));
     } else {
       outletsConfig = activeOutletIds.map((oid) => ({
@@ -237,6 +353,7 @@ class AppStorage {
         isFeatured: false,
         isBestseller: false,
         isChefSpecial: false,
+        portionsLeft: null,
       }));
     }
 
@@ -312,20 +429,21 @@ class AppStorage {
     if (data.outlets !== undefined) {
       updatedOutlets = data.outlets.map((o: any) =>
         typeof o === 'string'
-          ? { outletId: o, inStock: true, isFeatured: false, isBestseller: false, isChefSpecial: false }
+          ? { outletId: o, inStock: true, isFeatured: false, isBestseller: false, isChefSpecial: false, portionsLeft: null }
           : {
               outletId: o.outletId,
               inStock: o.inStock !== false,
               isFeatured: !!o.isFeatured,
               isBestseller: !!o.isBestseller,
               isChefSpecial: !!o.isChefSpecial,
+              portionsLeft: o.portionsLeft !== undefined && o.portionsLeft !== null && o.portionsLeft !== '' ? Number(o.portionsLeft) : null,
             }
       );
     } else if (data.outletIds !== undefined) {
       // Retain configurations for kept outletIds, add new defaults if added
       updatedOutlets = data.outletIds.map((oid) => {
         const prev = existing.outlets?.find((o) => o.outletId === oid);
-        return prev || { outletId: oid, inStock: true, isFeatured: false, isBestseller: false, isChefSpecial: false };
+        return prev || { outletId: oid, inStock: true, isFeatured: false, isBestseller: false, isChefSpecial: false, portionsLeft: null };
       });
     }
 
@@ -365,7 +483,7 @@ class AppStorage {
   public updateOutletProductConfig(
     outletId: string,
     productId: string | number,
-    config: { inStock?: boolean; isFeatured?: boolean; isBestseller?: boolean; isChefSpecial?: boolean; isAssigned?: boolean; assigned?: boolean }
+    config: { inStock?: boolean; isFeatured?: boolean; isBestseller?: boolean; isChefSpecial?: boolean; isAssigned?: boolean; assigned?: boolean; portionsLeft?: number | null }
   ): Product | null {
     this.init();
     const idStr = String(productId);
@@ -387,6 +505,7 @@ class AppStorage {
           isFeatured: config.isFeatured !== undefined ? config.isFeatured : outlets[existingIdx].isFeatured,
           isBestseller: config.isBestseller !== undefined ? config.isBestseller : outlets[existingIdx].isBestseller,
           isChefSpecial: config.isChefSpecial !== undefined ? config.isChefSpecial : outlets[existingIdx].isChefSpecial,
+          portionsLeft: config.portionsLeft !== undefined ? config.portionsLeft : outlets[existingIdx].portionsLeft,
         };
       } else {
         outlets.push({
@@ -395,6 +514,7 @@ class AppStorage {
           isFeatured: !!config.isFeatured,
           isBestseller: !!config.isBestseller,
           isChefSpecial: !!config.isChefSpecial,
+          portionsLeft: config.portionsLeft !== undefined ? config.portionsLeft : null,
         });
       }
     }
@@ -419,6 +539,7 @@ class AppStorage {
       isFeatured?: boolean;
       isBestseller?: boolean;
       isChefSpecial?: boolean;
+      portionsLeft?: number | null;
     }[]
   ): Product[] {
     this.init();
@@ -534,6 +655,7 @@ class AppStorage {
       city: cleanCity,
       state: cleanState,
       address: data.address.trim(),
+      fssaiLicId: data.fssaiLicId !== undefined && data.fssaiLicId !== null ? Number(data.fssaiLicId) : 11523034000000,
       phone: data.phone?.trim() || undefined,
       email: data.email?.trim() || undefined,
       minimumOrderValue: data.minimumOrderValue !== undefined ? Math.max(0, Number(data.minimumOrderValue)) : 200,
@@ -587,6 +709,7 @@ class AppStorage {
       city: data.city !== undefined ? data.city.trim() : existing.city,
       state: data.state !== undefined ? data.state.trim() : existing.state,
       address: data.address !== undefined ? data.address.trim() : existing.address,
+      fssaiLicId: data.fssaiLicId !== undefined && data.fssaiLicId !== null ? Number(data.fssaiLicId) : existing.fssaiLicId,
       phone: data.phone !== undefined ? data.phone.trim() : existing.phone,
       email: data.email !== undefined ? data.email.trim() : existing.email,
       minimumOrderValue: data.minimumOrderValue !== undefined ? Math.max(0, Number(data.minimumOrderValue)) : existing.minimumOrderValue,
@@ -912,19 +1035,39 @@ class AppStorage {
   // ORDERS METHODS
   // =====================
 
-  public getAllOrders(): Order[] {
+  public getAllOrders(outletId?: string, status?: string): Order[] {
     this.init();
-    return [...this.orders];
+    let result = [...this.orders];
+    if (outletId) {
+      result = result.filter((o) => o.outletId === outletId);
+    }
+    if (status) {
+      result = result.filter((o) => (o.status || '').toLowerCase() === status.toLowerCase());
+    }
+    return result.map((o) => ({
+      ...o,
+      items: Array.isArray(o.items) ? o.items.map(deserializeOrderItem) : [],
+    }));
   }
 
   public getOrdersByOutlet(outletId: string): Order[] {
     this.init();
-    return this.orders.filter((o) => o.outletId === outletId);
+    return this.orders
+      .filter((o) => o.outletId === outletId)
+      .map((o) => ({
+        ...o,
+        items: Array.isArray(o.items) ? o.items.map(deserializeOrderItem) : [],
+      }));
   }
 
   public getOrderById(orderId: string): Order | undefined {
     this.init();
-    return this.orders.find((o) => o.orderId === orderId || o.id === orderId);
+    const order = this.orders.find((o) => o.orderId === orderId || o.id === orderId);
+    if (!order) return undefined;
+    return {
+      ...order,
+      items: Array.isArray(order.items) ? order.items.map(deserializeOrderItem) : [],
+    };
   }
 
   public createOrder(orderData: Partial<Order>): Order {
@@ -948,8 +1091,8 @@ class AppStorage {
     const addressSnapshot = {
       fullAddress: orderData.customerDetails?.address || '',
       landmark: orderData.customerDetails?.landmark || '',
-      city: orderData.customerDetails?.city || outlet?.city || 'Bangalore',
-      state: orderData.customerDetails?.state || outlet?.state || 'Karnataka',
+      city: orderData.customerDetails?.city || outlet?.city || 'Bhubaneswar',
+      state: orderData.customerDetails?.state || outlet?.state || 'Odisha',
       pincode: orderData.deliveryPinCode || orderData.customerDetails?.pincode || '',
     };
 
@@ -979,7 +1122,7 @@ class AppStorage {
         });
 
         // Save / update default address for future prefill
-        this.saveCustomerAddress(customer.id, {
+        const savedAddr = this.saveCustomerAddress(customer.id, {
           fullAddress: addressSnapshot.fullAddress,
           landmark: addressSnapshot.landmark,
           city: addressSnapshot.city,
@@ -988,6 +1131,10 @@ class AppStorage {
           isDefault: true,
         });
 
+        if (savedAddr) {
+          orderData.addressId = savedAddr.id;
+        }
+
         // If welcome discount was used in this order, mark it used on the customer
         if (orderData.isWelcomeDiscountApplied) {
           this.markWelcomeDiscountUsed(customer.id);
@@ -995,15 +1142,72 @@ class AppStorage {
       }
     }
 
+    // Generate auto-incrementing Order ID (e.g. GKSWAD-#001, GKSWAD-#002, ...)
+    let nextSeq = 1;
+    for (const o of this.orders) {
+      if (o.orderId) {
+        const match = o.orderId.match(/GKSWAD-#?(\d+)/i) || o.orderId.match(/GKS-#?(\d+)/i);
+        if (match && match[1]) {
+          const num = parseInt(match[1], 10);
+          if (!isNaN(num) && num >= nextSeq) {
+            nextSeq = num + 1;
+          }
+        }
+      }
+    }
+    const formattedOrderId =
+      orderData.orderId && orderData.orderId.startsWith('GKSWAD-#')
+        ? orderData.orderId
+        : `GKSWAD-#${String(nextSeq).padStart(3, '0')}`;
+
+    // Atomically decrement portions in products for this outlet
+    if (orderData.items && Array.isArray(orderData.items)) {
+      let anyStockChanged = false;
+      for (const item of orderData.items) {
+        const productId = item.product?.id || (item as any).productId || (item as any).id;
+        const qty = Number(item.quantity) || 1;
+        if (!productId) continue;
+
+        const prod = this.products.find((p) => String(p.id) === String(productId));
+        if (prod && Array.isArray(prod.outlets)) {
+          for (const outletCfg of prod.outlets) {
+            const oId = outletCfg.outletId;
+            if (
+              oId === orderData.outletId &&
+              outletCfg.portionsLeft !== null &&
+              outletCfg.portionsLeft !== undefined
+            ) {
+              const currentPortions = Number(outletCfg.portionsLeft);
+              if (!isNaN(currentPortions)) {
+                const nextPortions = Math.max(0, currentPortions - qty);
+                outletCfg.portionsLeft = nextPortions;
+                if (nextPortions <= 0) {
+                  outletCfg.inStock = false;
+                }
+                anyStockChanged = true;
+              }
+            }
+          }
+          if (anyStockChanged) {
+            prod.inStock = prod.outlets.some((o) => o.inStock);
+          }
+        }
+      }
+      if (anyStockChanged) {
+        this.saveProducts();
+      }
+    }
+
     const newOrder: Order = {
-      orderId: orderData.orderId || `GKS-${Date.now().toString().slice(-6)}`,
+      orderId: formattedOrderId,
       customerId: customerId || undefined,
+      addressId: orderData.addressId || undefined,
       isGuestCheckout: isGuest,
       outletId: orderData.outletId,
       outletName: outlet?.name || 'Gaon Ka Swad Kitchen',
       deliveryPinCode: orderData.deliveryPinCode,
       createdAt: orderData.createdAt || new Date().toISOString(),
-      items: orderData.items || [],
+      items: Array.isArray(orderData.items) ? orderData.items.map(sanitizeOrderItem) : [],
       subtotal: orderData.subtotal || 0,
       discount: orderData.discount || 0,
       welcomeDiscountAmount: orderData.welcomeDiscountAmount || 0,
@@ -1027,6 +1231,14 @@ class AppStorage {
       },
       deliveryAddressSnapshot: addressSnapshot,
       status: orderData.status || 'Received',
+      orderStatus: 'received',
+      placedAt: orderData.placedAt || orderData.createdAt || new Date().toISOString(),
+      confirmedAt: undefined,
+      preparingAt: undefined,
+      readyAt: undefined,
+      outForDeliveryAt: undefined,
+      deliveredAt: undefined,
+      cancelledAt: undefined,
       estimatedDeliveryMinutes: orderData.estimatedDeliveryMinutes || 35,
     };
 
@@ -1035,13 +1247,57 @@ class AppStorage {
     return newOrder;
   }
 
-  public updateOrderStatus(orderId: string, status: Order['status']): Order | null {
+  public updateOrderStatus(
+    orderId: string,
+    status: Order['status'],
+    cancellationReason?: string
+  ): Order | null {
     this.init();
     const order = this.getOrderById(orderId);
     if (!order) return null;
+
+    const now = new Date().toISOString();
     order.status = status;
+    const normalized = (status || '').toLowerCase().trim();
+
+    if (normalized === 'received') {
+      order.orderStatus = 'received';
+    } else if (normalized === 'confirmed') {
+      order.orderStatus = 'confirmed';
+      if (!order.confirmedAt) order.confirmedAt = now;
+    } else if (normalized === 'preparing' || normalized === 'in kitchen' || normalized === 'preparing in kitchen') {
+      order.orderStatus = 'preparing';
+      if (!order.preparingAt) order.preparingAt = now;
+    } else if (normalized === 'ready' || normalized === 'ready for pickup') {
+      order.orderStatus = 'ready';
+      if (!order.readyAt) order.readyAt = now;
+    } else if (normalized === 'out_for_delivery' || normalized === 'out for delivery') {
+      order.orderStatus = 'out_for_delivery';
+      if (!order.outForDeliveryAt) order.outForDeliveryAt = now;
+    } else if (normalized === 'delivered' || normalized === 'picked up') {
+      order.orderStatus = 'delivered';
+      if (!order.deliveredAt) order.deliveredAt = now;
+    } else if (normalized === 'cancelled') {
+      order.orderStatus = 'cancelled';
+      order.cancelledAt = now;
+      if (cancellationReason) {
+        order.cancellationReason = cancellationReason;
+      }
+    }
+
     this.saveOrders();
     return order;
+  }
+
+  public deleteOrder(orderId: string): boolean {
+    this.init();
+    const initialLen = this.orders.length;
+    this.orders = this.orders.filter((o) => o.orderId !== orderId && o.id !== orderId);
+    const deleted = this.orders.length < initialLen;
+    if (deleted) {
+      this.saveOrders();
+    }
+    return deleted;
   }
 
   // =====================
@@ -1162,8 +1418,8 @@ class AppStorage {
       addressLabel: addressData.addressLabel || 'Home',
       fullAddress: addressData.fullAddress || '',
       landmark: addressData.landmark || '',
-      city: addressData.city || 'Bangalore',
-      state: addressData.state || 'Karnataka',
+      city: addressData.city || 'Bhubaneswar',
+      state: addressData.state || 'Odisha',
       pincode: addressData.pincode || '',
       isDefault: true,
       createdAt: new Date().toISOString(),

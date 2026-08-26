@@ -12,6 +12,7 @@ import {
   isProductFeaturedAtOutlet,
   isProductBestsellerAtOutlet,
   isProductChefSpecialAtOutlet,
+  getProductPortionsLeftAtOutlet,
 } from '../lib/locationService';
 import {
   Flame,
@@ -21,7 +22,6 @@ import {
   Star,
   Clock,
   ShieldCheck,
-  Award,
   Truck,
   Heart,
   ChevronRight,
@@ -36,7 +36,7 @@ import { motion, AnimatePresence } from 'motion/react';
 export const HomePage: React.FC = () => {
   const { goToShop, goToProduct, goToCategories, goToAbout } = useNavigation();
   const { addToCart } = useCart();
-  const { activeProducts, outletProducts, bestsellerProducts, chefSignatures, newArrivals } = useProducts();
+  const { activeProducts, outletProducts, bestsellerProducts, chefSignatures } = useProducts();
   const { currentZone, currentOutlet, selectedLocation } = useLocation();
 
   const deliveryTime =
@@ -139,7 +139,6 @@ export const HomePage: React.FC = () => {
 
   const bestsellers = bestsellerProducts.slice(0, 4);
   const chefSpecialItems = chefSignatures.slice(0, 4);
-  const seasonalArrivals = newArrivals.slice(0, 4);
 
   return (
     <div className="space-y-12 sm:space-y-16 pb-16">
@@ -335,30 +334,53 @@ export const HomePage: React.FC = () => {
                   </div>
 
                   {/* Floating Bottom Card - Only this section is clickable */}
-                  <div
-                    onClick={() => goToProduct(activeItem.slug)}
-                    className="absolute bottom-3 left-3 right-3 bg-stone-900/90 hover:bg-stone-900/95 active:bg-stone-950 backdrop-blur-md rounded-xl p-3 border border-stone-700/60 hover:border-orange-500/50 text-white flex items-center justify-between shadow-md z-20 cursor-pointer transition-all group"
-                  >
-                    <div className="flex items-center gap-2.5 min-w-0 pr-2">
-                      <div className="w-9 h-9 rounded-lg bg-orange-500/20 border border-orange-500/40 text-orange-400 flex items-center justify-center font-bold shrink-0 group-hover:scale-105 transition-transform">
-                        <Flame className="w-4 h-4 fill-orange-400" />
+                  {(() => {
+                    const activePortions = getProductPortionsLeftAtOutlet(activeItem, outletId);
+                    return (
+                      <div
+                        onClick={() => goToProduct(activeItem.slug)}
+                        className="absolute bottom-3 left-3 right-3 bg-stone-900/90 hover:bg-stone-900/95 active:bg-stone-950 backdrop-blur-md rounded-xl p-3 border border-stone-700/60 hover:border-orange-500/50 text-white flex items-center justify-between shadow-md z-20 cursor-pointer transition-all group"
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0 pr-2">
+                          <div className="w-9 h-9 rounded-lg bg-orange-500/20 border border-orange-500/40 text-orange-400 flex items-center justify-center font-bold shrink-0 group-hover:scale-105 transition-transform">
+                            <Flame className="w-4 h-4 fill-orange-400" />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <p className="text-[10px] font-semibold text-orange-400 uppercase tracking-wide">
+                                Today&apos;s Special
+                              </p>
+                              {activePortions !== null && activePortions !== undefined && (
+                                activePortions === 0 ? (
+                                  <span className="text-[9px] font-bold bg-stone-800 text-stone-300 px-1.5 py-0.2 rounded border border-stone-600">
+                                    Sold Out Today
+                                  </span>
+                                ) : activePortions <= 5 ? (
+                                  <span className="inline-flex items-center gap-0.5 text-[9px] font-bold bg-amber-500/25 text-amber-300 border border-amber-500/40 px-1.5 py-0.2 rounded animate-pulse">
+                                    <Flame className="w-2.5 h-2.5 text-amber-400 fill-amber-400" />
+                                    <span>Only {activePortions} left!</span>
+                                  </span>
+                                ) : (
+                                  <span className="text-[9px] font-medium text-stone-300 bg-stone-800/80 px-1.5 py-0.2 rounded">
+                                    {activePortions} portions left
+                                  </span>
+                                )
+                              )}
+                            </div>
+                            <h4 className="font-bold text-xs text-white truncate max-w-[150px] sm:max-w-[200px] group-hover:text-orange-200 transition-colors">
+                              {activeItem.name}
+                            </h4>
+                          </div>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <span className="text-sm font-bold text-white block">₹{activeItem.price}</span>
+                          <span className="block text-[10px] font-semibold text-orange-400 group-hover:text-orange-300 transition-colors">
+                            View Dish →
+                          </span>
+                        </div>
                       </div>
-                      <div className="min-w-0">
-                        <p className="text-[10px] font-semibold text-orange-400 uppercase tracking-wide">
-                          Today&apos;s Special
-                        </p>
-                        <h4 className="font-bold text-xs text-white truncate max-w-[150px] sm:max-w-[200px] group-hover:text-orange-200 transition-colors">
-                          {activeItem.name}
-                        </h4>
-                      </div>
-                    </div>
-                    <div className="text-right shrink-0">
-                      <span className="text-sm font-bold text-white block">₹{activeItem.price}</span>
-                      <span className="block text-[10px] font-semibold text-orange-400 group-hover:text-orange-300 transition-colors">
-                        View Dish →
-                      </span>
-                    </div>
-                  </div>
+                    );
+                  })()}
                 </div>
               ) : null}
             </motion.div>
@@ -496,36 +518,7 @@ export const HomePage: React.FC = () => {
         </div>
       </section>
 
-      {/* 5. NEW ARRIVALS */}
-      <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3 mb-6">
-          <div>
-            <div className="flex items-center gap-1.5 text-orange-600 font-bold text-xs uppercase tracking-wider mb-0.5">
-              <Award className="w-3.5 h-3.5" />
-              <span>Fresh From The Clay Oven</span>
-            </div>
-            <h2 className="font-extrabold text-xl sm:text-2xl text-gray-900">
-              New Seasonal Creations
-            </h2>
-          </div>
-          <button
-            type="button"
-            onClick={() => goToShop()}
-            className="text-xs font-bold text-orange-600 hover:text-orange-700 flex items-center gap-1"
-          >
-            <span>View Full Menu</span>
-            <ArrowRight className="w-3.5 h-3.5" />
-          </button>
-        </div>
-
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-          {seasonalArrivals.map((product) => (
-            <ProductCard key={product.id} product={product} />
-          ))}
-        </div>
-      </section>
-
-      {/* 6. WHY CHOOSE GAON KA SWAD */}
+      {/* 5. WHY CHOOSE GAON KA SWAD */}
       <section className="bg-gray-100 border-y border-gray-200 py-12">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center max-w-2xl mx-auto mb-10">

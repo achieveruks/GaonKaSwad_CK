@@ -4,6 +4,7 @@ export interface Outlet {
   city: string;
   state?: string;
   address: string;
+  fssaiLicId?: number; // Strictly numeric 14-digit FSSAI License ID
   phone?: string;
   email?: string;
   latitude?: number;
@@ -117,6 +118,7 @@ export interface ProductOutletConfig {
   isFeatured?: boolean;
   isBestseller?: boolean;
   isChefSpecial?: boolean;
+  portionsLeft?: number | null; // null/undefined = unlimited, 0 = sold out, >0 = portions remaining
 }
 
 export interface Product {
@@ -267,18 +269,56 @@ export interface CheckoutFormData {
   createAccount?: boolean;
   marketingConsent?: boolean;
   isOtpVerified?: boolean;
+  orderType?: 'delivery' | 'pickup';
+  isSelfPickup?: boolean;
 }
+
+export interface OrderItem {
+  productId: string;
+  name: string;
+  hindiName?: string;
+  image: string;
+  isVeg: boolean;
+  quantity: number;
+  unitPrice: number;
+  totalPrice: number;
+  selectedVariant?: {
+    id: string;
+    name: string;
+    weight?: string;
+    serves?: string;
+    price?: number;
+    originalPrice?: number;
+  };
+  selectedSpiceLevel?: string;
+  selectedAddons?: Array<{
+    id: string;
+    name: string;
+    price: number;
+    isVeg?: boolean;
+  }>;
+  // UI In-Memory Compatibility fields (optional, populated when reading for legacy components)
+  id?: string;
+  price?: number;
+  product?: Partial<Product>;
+}
+
+export type CleanOrderItem = Omit<OrderItem, 'id' | 'price' | 'product'>;
 
 export interface Order {
   id?: string;
   orderId: string;
   customerId?: string;
+  addressId?: string;
   isGuestCheckout?: boolean;
   outletId: string;
   outletName?: string;
+  orderType?: 'delivery' | 'pickup';
+  isSelfPickup?: boolean;
+  kitchenAddress?: string;
   deliveryPinCode: string;
   createdAt: string;
-  items: CartItem[];
+  items: Array<OrderItem | CartItem>;
   subtotal: number;
   discount: number;
   welcomeDiscountAmount?: number;
@@ -300,13 +340,29 @@ export interface Order {
     | 'pending'
     | 'confirmed'
     | 'preparing'
+    | 'ready'
     | 'out_for_delivery'
     | 'delivered'
     | 'cancelled'
     | 'Received'
+    | 'Confirmed'
+    | 'Preparing'
     | 'Preparing in Kitchen'
+    | 'Ready'
+    | 'Ready for Pickup'
     | 'Out for Delivery'
-    | 'Delivered';
+    | 'Picked Up'
+    | 'Delivered'
+    | 'Cancelled';
+  orderStatus?: string;
+  placedAt?: string;
+  confirmedAt?: string;
+  preparingAt?: string;
+  readyAt?: string;
+  outForDeliveryAt?: string;
+  deliveredAt?: string;
+  cancelledAt?: string;
+  cancellationReason?: string;
   estimatedDeliveryMinutes?: number;
 }
 

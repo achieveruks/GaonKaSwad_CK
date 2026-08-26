@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS public.outlets (
   city TEXT NOT NULL,
   state TEXT,
   address TEXT NOT NULL,
+  fssai_lic_id NUMERIC, -- Strictly numeric 14-digit FSSAI License ID
   phone TEXT,
   email TEXT,
   latitude DOUBLE PRECISION,
@@ -46,6 +47,10 @@ CREATE TABLE IF NOT EXISTS public.outlets (
   created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
   updated_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
 );
+
+-- Safe Column Migrations for public.outlets
+ALTER TABLE IF EXISTS public.outlets ADD COLUMN IF NOT EXISTS fssai_lic_id NUMERIC;
+UPDATE public.outlets SET fssai_lic_id = 11523034000000 WHERE fssai_lic_id IS NULL;
 
 -- 3. DELIVERY ZONES TABLE
 CREATE TABLE IF NOT EXISTS public.delivery_zones (
@@ -118,75 +123,302 @@ CREATE TABLE IF NOT EXISTS public.customer_addresses (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   customer_id UUID NOT NULL REFERENCES public.customers(id) ON DELETE CASCADE,
   label VARCHAR(50) DEFAULT 'Home',
-  address_line1 TEXT NOT NULL,
-  address_line2 TEXT,
+  full_address TEXT NOT NULL,
   landmark VARCHAR(150),
   city VARCHAR(100) NOT NULL,
+  state VARCHAR(100) DEFAULT 'Odisha' NOT NULL,
   pincode VARCHAR(10) NOT NULL,
   is_default BOOLEAN DEFAULT true,
-  created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
+  created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
+  updated_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
 );
 
--- 7. ORDERS TABLE (Core Order History & Multi-Outlet Dispatch)
+-- Safe Column Migrations for public.customer_addresses (Rename address_line1 -> full_address and drop address_line2)
+DO $$
+BEGIN
+  -- 1. If full_address doesn't exist but address_line1 exists, rename or copy
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns 
+    WHERE table_schema = 'public' AND table_name = 'customer_addresses' AND column_name = 'full_address'
+  ) THEN
+    IF EXISTS (
+      SELECT 1 FROM information_schema.columns 
+      WHERE table_schema = 'public' AND table_name = 'customer_addresses' AND column_name = 'address_line1'
+    ) THEN
+      -- Populate full_address with combined line1 + line2 if line2 existed
+      ALTER TABLE public.customer_addresses ADD COLUMN full_address TEXT;
+      UPDATE public.customer_addresses 
+      SET full_address = CASE 
+        WHEN address_line2 IS NOT NULL AND TRIM(address_line2) != '' 
+        THEN TRIM(address_line1) || ', ' || TRIM(address_line2)
+        ELSE TRIM(address_line1)
+      END;
+      ALTER TABLE public.customer_addresses ALTER COLUMN full_address SET NOT NULL;
+    ELSE
+      ALTER TABLE public.customer_addresses ADD COLUMN full_address TEXT NOT NULL DEFAULT '';
+    END IF;
+  END IF;
+
+  -- 2. Drop unused legacy columns if present
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns 
+    WHERE table_schema = 'public' AND table_name = 'customer_addresses' AND column_name = 'address_line1'
+  ) THEN
+    ALTER TABLE public.customer_addresses DROP COLUMN address_line1;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns 
+    WHERE table_schema = 'public' AND table_name = 'customer_addresses' AND column_name = 'address_line2'
+  ) THEN
+    ALTER TABLE public.customer_addresses DROP COLUMN address_line2;
+  END IF;
+END $$;
+
+ALTER TABLE IF EXISTS public.customer_addresses ADD COLUMN IF NOT EXISTS state VARCHAR(100) DEFAULT 'Odisha';
+ALTER TABLE IF EXISTS public.customer_addresses ADD COLUMN IF NOT EXISTS landmark VARCHAR(150);
+ALTER TABLE IF EXISTS public.customer_addresses ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW());
+CREATE INDEX IF NOT EXISTS idx_customer_addresses_customer_id ON public.customer_addresses(customer_id);
+CREATE INDEX IF NOT EXISTS idx_customers_phone ON public.customers(phone);
+
+-- Optional: Clean up any duplicate addresses for the same customer (keeps the latest)
+DELETE FROM public.customer_addresses a USING public.customer_addresses b
+WHERE a.customer_id = b.customer_id 
+  AND a.full_address = b.full_address 
+  AND a.created_at < b.created_at;
+
+-- 7. ORDERS TABLE (Production Normalized Order Master)
 CREATE TABLE IF NOT EXISTS public.orders (
-  id TEXT PRIMARY KEY,
-  order_id TEXT,
-  outlet_id TEXT NOT NULL,
-  outlet_name TEXT,
-  customer_id UUID REFERENCES public.customers(id) ON DELETE SET NULL,
-  customer_name VARCHAR(150),
-  customer_phone VARCHAR(15),
-  customer_email VARCHAR(255),
-  delivery_pincode TEXT,
-  items JSONB DEFAULT '[]'::jsonb NOT NULL,
-  subtotal NUMERIC NOT NULL DEFAULT 0,
-  tax NUMERIC DEFAULT 0,
-  gst NUMERIC DEFAULT 0,
-  delivery_fee NUMERIC DEFAULT 0,
-  packaging_fee NUMERIC DEFAULT 0,
-  discount NUMERIC DEFAULT 0,
-  discount_amount NUMERIC DEFAULT 0,
-  welcome_discount_applied BOOLEAN DEFAULT false,
-  total NUMERIC NOT NULL DEFAULT 0,
-  total_amount NUMERIC DEFAULT 0,
-  coupon_code TEXT,
-  customer_details JSONB,
-  delivery_address_snapshot JSONB,
-  payment_method VARCHAR(50),
-  status TEXT DEFAULT 'Received',
-  order_status VARCHAR(50) DEFAULT 'ORDER_PLACED',
+  id TEXT PRIMARY KEY,                                                   -- Unique Order ID (e.g. order-abc1234)
+  order_number TEXT NOT NULL UNIQUE,                                     -- Human-readable Order ID (e.g. GKSWAD-#10001)
+  order_id TEXT UNIQUE,                                                  -- Compatible alias for order_number
+  customer_id UUID REFERENCES public.customers(id) ON DELETE SET NULL,   -- Registered Customer Reference (nullable for guest)
+  customer_address_id UUID REFERENCES public.customer_addresses(id) ON DELETE SET NULL, -- Saved Address Reference
+  address_id UUID REFERENCES public.customer_addresses(id) ON DELETE SET NULL, -- Compatible alias for customer_address_id
+  outlet_id TEXT NOT NULL REFERENCES public.outlets(id),                 -- Mandatory Outlet Reference
+  order_type TEXT DEFAULT 'delivery',                                    -- delivery | pickup
+  is_self_pickup BOOLEAN DEFAULT false,                                  -- True if customer self-pickup
+
+  -- Order & Payment Statuses (Separated)
+  order_status VARCHAR(50) DEFAULT 'received',                           -- received | confirmed | preparing | ready | out_for_delivery | delivered | cancelled
+  status TEXT DEFAULT 'Received',                                        -- Compatible UI status string
+  payment_status VARCHAR(50) DEFAULT 'pending',                          -- pending | paid | failed | refunded | partially_refunded
+  payment_method VARCHAR(50) DEFAULT 'cod',                              -- online | cod
+
+  -- Server-authoritative Pricing Fields
+  subtotal NUMERIC NOT NULL DEFAULT 0 CHECK (subtotal >= 0),             -- Sum of order item totals
+  delivery_fee NUMERIC NOT NULL DEFAULT 0 CHECK (delivery_fee >= 0),     -- Applicable delivery fee
+  packaging_fee NUMERIC NOT NULL DEFAULT 0 CHECK (packaging_fee >= 0),   -- Food packaging charge
+  discount_amount NUMERIC NOT NULL DEFAULT 0 CHECK (discount_amount >= 0), -- Total discount amount
+  discount NUMERIC NOT NULL DEFAULT 0 CHECK (discount >= 0),             -- Compatible alias for discount_amount
+  tax_amount NUMERIC NOT NULL DEFAULT 0 CHECK (tax_amount >= 0),         -- 5% GST tax amount
+  gst NUMERIC NOT NULL DEFAULT 0 CHECK (gst >= 0),                       -- Compatible alias for tax_amount
+  total_amount NUMERIC NOT NULL DEFAULT 0 CHECK (total_amount >= 0),     -- Final total payable amount
+  total NUMERIC NOT NULL DEFAULT 0 CHECK (total >= 0),                   -- Compatible alias for total_amount
+
+  -- Discount & Coupon Metadata
+  discount_type VARCHAR(50) DEFAULT 'NONE',                              -- WELCOME | COUPON | NONE
+  discount_code TEXT,                                                    -- Promo code used (e.g. WELCOME30, DESI50)
+  coupon_code TEXT,                                                      -- Compatible alias for discount_code
+  discount_description TEXT,                                             -- Descriptive discount text
+  welcome_discount_applied BOOLEAN DEFAULT false,                        -- Welcome discount boolean flag
+  welcome_discount_amount NUMERIC NOT NULL DEFAULT 0,                    -- Welcome discount in INR
+
+  -- Historical Customer Snapshot (Permanent record)
+  customer_name TEXT,                                                    -- Customer name at time of order
+  customer_phone TEXT,                                                   -- Customer phone at time of order
+  customer_details JSONB DEFAULT '{}'::jsonb,                            -- Full customer info snapshot
+
+  -- Historical Delivery Address Snapshot (Permanent record)
+  delivery_address_snapshot JSONB DEFAULT '{}'::jsonb,                   -- Address object snapshot at checkout
+  delivery_pincode TEXT,                                                 -- Delivery PIN code
+  delivery_instructions TEXT,                                            -- Gate/cooking delivery notes
+  delivery_notes TEXT,                                                   -- Compatible alias for delivery_instructions
+  delivery_slot VARCHAR(50) DEFAULT 'immediate',                         -- immediate | lunch | dinner | custom
   estimated_delivery_minutes INTEGER DEFAULT 35,
+
+  -- Payment Gateway Integration (Razorpay ready)
+  payment_gateway TEXT,                                                  -- razorpay | cashfree | paytm
+  payment_gateway_order_id TEXT,                                         -- Gateway Order ID (e.g. order_O12345)
+  payment_gateway_payment_id TEXT,                                       -- Gateway Payment ID (e.g. pay_P12345)
+  payment_gateway_signature TEXT,                                        -- Gateway Webhook / Callback Signature
+  paid_at TIMESTAMPTZ,                                                   -- Payment completion timestamp
+
+  -- Operational Timestamps for Analytics & Live Tracking
+  placed_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()),
+  confirmed_at TIMESTAMPTZ,
+  preparing_at TIMESTAMPTZ,
+  ready_at TIMESTAMPTZ,
+  out_for_delivery_at TIMESTAMPTZ,
+  delivered_at TIMESTAMPTZ,
+  cancelled_at TIMESTAMPTZ,
+  cancellation_reason TEXT,                                              -- Reason if cancelled
+
+  -- Optional denormalized items array for ultra-fast single-query caching
+  items JSONB DEFAULT '[]'::jsonb NOT NULL,
+
+  created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
+  updated_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
+);
+
+-- Safe Column Migrations for public.orders
+ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS order_number TEXT;
+ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS customer_address_id UUID REFERENCES public.customer_addresses(id) ON DELETE SET NULL;
+ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS order_status VARCHAR(50) DEFAULT 'confirmed';
+ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS discount_amount NUMERIC NOT NULL DEFAULT 0;
+ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS tax_amount NUMERIC NOT NULL DEFAULT 0;
+ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS total_amount NUMERIC NOT NULL DEFAULT 0;
+ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS discount_type VARCHAR(50) DEFAULT 'NONE';
+ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS discount_code TEXT;
+ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS discount_description TEXT;
+ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS customer_name TEXT;
+ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS customer_phone TEXT;
+ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS delivery_instructions TEXT;
+ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS payment_gateway TEXT;
+ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS payment_gateway_order_id TEXT;
+ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS payment_gateway_payment_id TEXT;
+ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS payment_gateway_signature TEXT;
+ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ;
+ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS placed_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW());
+ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS confirmed_at TIMESTAMPTZ;
+ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS preparing_at TIMESTAMPTZ;
+ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS ready_at TIMESTAMPTZ;
+ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS out_for_delivery_at TIMESTAMPTZ;
+ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMPTZ;
+ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ;
+ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS cancellation_reason TEXT;
+
+-- 8. ORDER_ITEMS TABLE (Normalized Line Items with Historical Price Snapshots)
+CREATE TABLE IF NOT EXISTS public.order_items (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_id TEXT NOT NULL REFERENCES public.orders(id) ON DELETE CASCADE,
+  product_id TEXT REFERENCES public.products(id) ON DELETE SET NULL,     -- Product Reference
+  product_name TEXT NOT NULL,                                            -- Snapshot of Product Name
+  product_variant_name TEXT,                                             -- Snapshot of Variant Name (e.g. 500g Handi, Full)
+  quantity INTEGER NOT NULL CHECK (quantity > 0),                        -- Ordered Quantity
+  unit_price NUMERIC NOT NULL CHECK (unit_price >= 0),                   -- Snapshot of Unit Price at purchase time
+  discount_amount NUMERIC NOT NULL DEFAULT 0 CHECK (discount_amount >= 0),-- Item discount
+  total_price NUMERIC NOT NULL CHECK (total_price >= 0),                 -- Computed Total Price (unit_price * quantity - discount)
   created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
 );
 
--- Safe Column Migrations for public.orders (in case table already existed with previous columns)
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS order_id TEXT;
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS outlet_id TEXT;
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS outlet_name TEXT;
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS customer_id UUID;
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS customer_name VARCHAR(150);
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS customer_phone VARCHAR(15);
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS customer_email VARCHAR(255);
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS delivery_pincode TEXT;
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS items JSONB DEFAULT '[]'::jsonb;
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS subtotal NUMERIC DEFAULT 0;
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS tax NUMERIC DEFAULT 0;
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS gst NUMERIC DEFAULT 0;
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS delivery_fee NUMERIC DEFAULT 0;
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS packaging_fee NUMERIC DEFAULT 0;
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS discount NUMERIC DEFAULT 0;
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS discount_amount NUMERIC DEFAULT 0;
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS welcome_discount_applied BOOLEAN DEFAULT false;
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS total NUMERIC DEFAULT 0;
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS total_amount NUMERIC DEFAULT 0;
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS coupon_code TEXT;
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS customer_details JSONB;
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS delivery_address_snapshot JSONB;
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS payment_method VARCHAR(50);
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'Received';
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS order_status VARCHAR(50) DEFAULT 'ORDER_PLACED';
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS estimated_delivery_minutes INTEGER DEFAULT 35;
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW());
+-- Indexes for lightning-fast queries
+CREATE INDEX IF NOT EXISTS idx_orders_order_number ON public.orders(order_number);
+CREATE INDEX IF NOT EXISTS idx_orders_order_id ON public.orders(order_id);
+CREATE INDEX IF NOT EXISTS idx_orders_customer_id ON public.orders(customer_id);
+CREATE INDEX IF NOT EXISTS idx_orders_outlet_id ON public.orders(outlet_id);
+CREATE INDEX IF NOT EXISTS idx_orders_order_status ON public.orders(order_status);
+CREATE INDEX IF NOT EXISTS idx_orders_payment_status ON public.orders(payment_status);
+CREATE INDEX IF NOT EXISTS idx_orders_created_at ON public.orders(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON public.order_items(order_id);
+CREATE INDEX IF NOT EXISTS idx_order_items_product_id ON public.order_items(product_id);
+
+-- ============================================================================
+-- AUTO-INCREMENT ORDER NUMBERS & ATOMIC INVENTORY DECREMENT
+-- ============================================================================
+
+-- Sequence for Auto-Incrementing Order IDs (e.g. GKSWAD-#001, GKSWAD-#002)
+CREATE SEQUENCE IF NOT EXISTS public.order_number_seq START WITH 1;
+
+-- Function: Automatically format order_id as GKSWAD-#001, GKSWAD-#002, ...
+CREATE OR REPLACE FUNCTION public.generate_order_id()
+RETURNS TRIGGER AS $$
+DECLARE
+  seq_val BIGINT;
+BEGIN
+  IF NEW.order_id IS NULL OR NEW.order_id = '' OR NEW.order_id LIKE 'temp-%' OR NEW.order_id NOT LIKE 'GKSWAD-#%' THEN
+    seq_val := nextval('public.order_number_seq');
+    NEW.order_id := 'GKSWAD-#' || LPAD(seq_val::text, 3, '0');
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_generate_order_id ON public.orders;
+CREATE TRIGGER trg_generate_order_id
+BEFORE INSERT ON public.orders
+FOR EACH ROW
+EXECUTE FUNCTION public.generate_order_id();
+
+-- Function: Atomically Decrement Product Portions in public.products.outlets
+CREATE OR REPLACE FUNCTION public.decrement_product_portions(
+  p_outlet_id TEXT,
+  p_items JSONB
+)
+RETURNS VOID AS $$
+DECLARE
+  item JSONB;
+  p_id TEXT;
+  p_qty INT;
+BEGIN
+  IF p_items IS NULL OR jsonb_array_length(p_items) = 0 THEN
+    RETURN;
+  END IF;
+
+  FOR item IN SELECT * FROM jsonb_array_elements(p_items)
+  LOOP
+    -- Extract product ID (handles item.product.id or item.productId or item.id)
+    p_id := item->'product'->>'id';
+    IF p_id IS NULL THEN
+      p_id := item->>'productId';
+    END IF;
+    IF p_id IS NULL THEN
+      p_id := item->>'id';
+    END IF;
+
+    p_qty := COALESCE((item->>'quantity')::INT, 1);
+
+    IF p_id IS NOT NULL THEN
+      -- Atomically update the outlets JSONB array for this product
+      UPDATE public.products
+      SET outlets = (
+        SELECT jsonb_agg(
+          CASE 
+            WHEN elem->>'outletId' = p_outlet_id 
+              AND elem->'portionsLeft' IS NOT NULL 
+              AND elem->>'portionsLeft' != 'null' THEN
+              jsonb_set(
+                jsonb_set(
+                  elem,
+                  '{portionsLeft}',
+                  to_jsonb(GREATEST(0, (elem->>'portionsLeft')::INT - p_qty))
+                ),
+                '{inStock}',
+                to_jsonb(CASE WHEN ((elem->>'portionsLeft')::INT - p_qty) <= 0 THEN false ELSE COALESCE((elem->>'inStock')::BOOLEAN, true) END)
+              )
+            ELSE elem
+          END
+        )
+        FROM jsonb_array_elements(outlets) AS elem
+      ),
+      updated_at = NOW()
+      WHERE id = p_id 
+        AND outlets IS NOT NULL
+        AND EXISTS (
+          SELECT 1 FROM jsonb_array_elements(outlets) AS elem 
+          WHERE elem->>'outletId' = p_outlet_id 
+            AND elem->'portionsLeft' IS NOT NULL 
+            AND elem->>'portionsLeft' != 'null'
+        );
+    END IF;
+  END LOOP;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Trigger: Atomically decrement portions on order placement
+CREATE OR REPLACE FUNCTION public.trg_on_order_placed()
+RETURNS TRIGGER AS $$
+BEGIN
+  PERFORM public.decrement_product_portions(NEW.outlet_id, NEW.items);
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_decrement_portions_on_order ON public.orders;
+CREATE TRIGGER trg_decrement_portions_on_order
+AFTER INSERT ON public.orders
+FOR EACH ROW
+EXECUTE FUNCTION public.trg_on_order_placed();
 
 -- 8. PRODUCT REVIEWS TABLE (Verified Customer Tastings)
 CREATE TABLE IF NOT EXISTS public.reviews (
@@ -394,7 +626,8 @@ CREATE INDEX IF NOT EXISTS idx_outlets_city ON public.outlets(city);
 CREATE INDEX IF NOT EXISTS idx_outlets_active ON public.outlets(is_active);
 CREATE INDEX IF NOT EXISTS idx_delivery_zones_outlet ON public.delivery_zones(outlet_id);
 CREATE INDEX IF NOT EXISTS idx_orders_outlet_id ON public.orders(outlet_id);
-CREATE INDEX IF NOT EXISTS idx_orders_customer_phone ON public.orders(customer_phone);
+CREATE INDEX IF NOT EXISTS idx_orders_customer_id ON public.orders(customer_id);
+CREATE INDEX IF NOT EXISTS idx_orders_order_id ON public.orders(order_id);
 CREATE INDEX IF NOT EXISTS idx_customers_phone ON public.customers(phone);
 CREATE INDEX IF NOT EXISTS idx_customer_addresses_customer_id ON public.customer_addresses(customer_id);
 CREATE INDEX IF NOT EXISTS idx_reviews_product_id ON public.reviews(product_id);
@@ -532,6 +765,17 @@ CREATE POLICY "Orders Update Policy" ON public.orders
     auth.uid() IS NULL
   );
 
+-- 7b. Order Items Policies
+ALTER TABLE public.order_items ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Order Items Insert Policy" ON public.order_items;
+DROP POLICY IF EXISTS "Order Items Select Policy" ON public.order_items;
+
+CREATE POLICY "Order Items Insert Policy" ON public.order_items 
+  FOR INSERT WITH CHECK (true);
+
+CREATE POLICY "Order Items Select Policy" ON public.order_items 
+  FOR SELECT USING (true);
+
 -- 8. Reviews Policies
 CREATE POLICY "Public Read Reviews" ON public.reviews 
   FOR SELECT USING (true);
@@ -560,5 +804,6 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.products;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.outlets;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.delivery_zones;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.orders;
+ALTER PUBLICATION supabase_realtime ADD TABLE public.order_items;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.profiles;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.abouts;

@@ -156,6 +156,45 @@ export function getDeliveryZoneByPinCode(
 }
 
 /**
+ * 6b. doesOutletDeliverToPinCode - check if a specific outlet serves the given PIN code
+ */
+export function doesOutletDeliverToPinCode(
+  outletId?: string,
+  pinCode?: string,
+  zonesList: DeliveryZone[] = cachedZones
+): boolean {
+  if (!outletId || !pinCode) return false;
+  const cleanPin = pinCode.trim();
+  if (!cleanPin) return false;
+  return (zonesList || []).some(
+    (z) => z?.isActive && z.outletId === outletId && (z.pinCodes || []).includes(cleanPin)
+  );
+}
+
+/**
+ * 6c. findOutletDeliveringToPinCode - resolves which outlet & zone services this PIN code
+ */
+export function findOutletDeliveringToPinCode(
+  pinCode?: string,
+  outletsList: Outlet[] = cachedOutlets,
+  zonesList: DeliveryZone[] = cachedZones
+): { outlet: Outlet; zone: DeliveryZone } | null {
+  if (!pinCode) return null;
+  const cleanPin = pinCode.trim();
+  if (!cleanPin) return null;
+
+  const matchingZone = (zonesList || []).find(
+    (z) => z?.isActive && (z.pinCodes || []).includes(cleanPin)
+  );
+  if (!matchingZone) return null;
+
+  const outlet = (outletsList || []).find((o) => o.id === matchingZone.outletId && o.isActive);
+  if (!outlet) return null;
+
+  return { outlet, zone: matchingZone };
+}
+
+/**
  * 7. getOutletForPinCode - resolves the physical outlet for a given PIN code
  */
 export function getOutletForPinCode(
@@ -229,11 +268,36 @@ export function isProductInStockAtOutlet(product: Product, outletId?: string): b
   if (product.outlets && Array.isArray(product.outlets)) {
     const config = product.outlets.find((o) => o.outletId === outletId);
     if (config) {
-      return config.inStock !== false;
+      if (config.inStock === false) return false;
+      if (config.portionsLeft === 0) return false; // Sold out for today
+      return true;
     }
   }
   // Fallback to legacy inStock
   return true;
+}
+
+/**
+ * 10b. getProductPortionsLeftAtOutlet - returns remaining portion count at outlet (null/undefined if unlimited)
+ */
+export function getProductPortionsLeftAtOutlet(product: Product, outletId?: string): number | null | undefined {
+  if (!product) return undefined;
+  if (!outletId) {
+    if (Array.isArray(product.outlets) && product.outlets.length > 0) {
+      const configWithPortions = product.outlets.find(
+        (o) => o.portionsLeft !== undefined && o.portionsLeft !== null
+      );
+      if (configWithPortions) return configWithPortions.portionsLeft;
+    }
+    return undefined;
+  }
+  if (Array.isArray(product.outlets)) {
+    const config = product.outlets.find((o) => o.outletId === outletId);
+    if (config && config.portionsLeft !== undefined && config.portionsLeft !== null) {
+      return config.portionsLeft;
+    }
+  }
+  return undefined;
 }
 
 /**

@@ -281,7 +281,7 @@ export async function toggleProductStock(id: string | number, token: string): Pr
 export async function updateOutletProductConfig(
   outletId: string,
   productId: string | number,
-  config: { inStock?: boolean; isFeatured?: boolean; isBestseller?: boolean; isChefSpecial?: boolean; isAssigned?: boolean },
+  config: { inStock?: boolean; isFeatured?: boolean; isBestseller?: boolean; isChefSpecial?: boolean; isAssigned?: boolean; portionsLeft?: number | null },
   token: string
 ): Promise<Product> {
   if (isSupabaseConfigured()) {
@@ -326,6 +326,7 @@ export async function batchUpdateOutletProducts(
     isFeatured?: boolean;
     isBestseller?: boolean;
     isChefSpecial?: boolean;
+    portionsLeft?: number | null;
   }[],
   token: string
 ): Promise<Product[]> {

@@ -21,7 +21,8 @@ import {
   ExternalLink,
   Timer,
   ShieldCheck,
-  Truck
+  Truck,
+  UtensilsCrossed
 } from 'lucide-react';
 
 export const ContactPage: React.FC = () => {
@@ -199,9 +200,17 @@ export const ContactPage: React.FC = () => {
                   <h4 className="font-extrabold text-sm sm:text-base text-stone-900">
                     {currentHub.name}
                   </h4>
-                  <p className="text-[11px] text-stone-500 font-medium">
-                    {currentHub.city}, {currentHub.state || 'India'}
-                  </p>
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <p className="text-[11px] text-stone-500 font-medium">
+                      {currentHub.city}, {currentHub.state || 'India'}
+                    </p>
+                    {currentHub.fssaiLicId && (
+                      <span className="inline-flex items-center gap-1 bg-amber-50 text-amber-900 border border-amber-200/80 text-[10px] font-mono font-medium px-2 py-0.5 rounded-md">
+                        <UtensilsCrossed className="w-3 h-3 text-amber-700 shrink-0" />
+                        <span>FSSAI Lic. #{currentHub.fssaiLicId}</span>
+                      </span>
+                    )}
+                  </div>
                 </div>
 
                 {/* 1. Phone & Helpline */}

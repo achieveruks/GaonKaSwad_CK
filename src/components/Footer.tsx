@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigation } from '../context/NavigationContext';
 import { useCart } from '../context/CartContext';
+import { useLocation } from '../context/LocationContext';
 import {
   Flame,
   ShieldCheck,
@@ -19,7 +20,11 @@ import { CATEGORIES } from '../data/products';
 export const Footer: React.FC = () => {
   const { goToHome, goToShop, goToCategories, goToAbout, goToContact, goToOwnerLogin } = useNavigation();
   const { showToast } = useCart();
+  const { currentOutlet, outlets } = useLocation();
   const [newsletterEmail, setNewsletterEmail] = useState('');
+
+  const activeOutlet = currentOutlet || (outlets && outlets.length > 0 ? outlets[0] : null);
+  const currentFssai = activeOutlet?.fssaiLicId || 11523034000000;
 
   const handleSubscribe = (e: React.FormEvent) => {
     e.preventDefault();
@@ -102,7 +107,7 @@ export const Footer: React.FC = () => {
             <div className="pt-1 flex items-center gap-3 text-gray-400 text-xs">
               <div className="flex items-center gap-1.5 bg-gray-800/80 px-2.5 py-1 rounded-md border border-gray-700 text-[11px]">
                 <UtensilsCrossed className="w-3 h-3 text-orange-400" />
-                <span>FSSAI Lic. #11523034000189</span>
+                <span>FSSAI Lic. #{currentFssai}</span>
               </div>
             </div>
           </div>

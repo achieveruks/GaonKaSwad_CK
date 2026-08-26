@@ -9,6 +9,7 @@ import {
   isProductFeaturedAtOutlet,
   isProductBestsellerAtOutlet,
   isProductChefSpecialAtOutlet,
+  getProductPortionsLeftAtOutlet,
 } from '../lib/locationService';
 import { Star, Clock, Flame, Plus, Sparkles, ChefHat } from 'lucide-react';
 import { motion } from 'motion/react';
@@ -29,10 +30,14 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, viewMode = 'g
   const isFeaturedHere = isProductFeaturedAtOutlet(product, currentOutletId);
   const isBestsellerHere = isProductBestsellerAtOutlet(product, currentOutletId);
   const isChefSpecialHere = isProductChefSpecialAtOutlet(product, currentOutletId);
+  const portionsLeft = getProductPortionsLeftAtOutlet(product, currentOutletId);
 
   // Check if item is already in cart (default variant)
   const cartItemsForProduct = cart.filter((item) => item.product.id === product.id);
   const totalQuantityInCart = cartItemsForProduct.reduce((sum, i) => sum + i.quantity, 0);
+
+  const isSoldOut = !isInStockHere || portionsLeft === 0;
+  const isMaxReached = portionsLeft !== null && portionsLeft !== undefined && totalQuantityInCart >= portionsLeft;
 
   const handleQuickAdd = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -40,7 +45,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, viewMode = 'g
       setIsLocationModalOpen(true);
       return;
     }
-    if (!isServedHere || !isInStockHere) return;
+    if (!isServedHere || isSoldOut || isMaxReached) return;
 
     // Pick default variant if variants exist
     const defaultVariant =
@@ -53,6 +58,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, viewMode = 'g
 
   const handleIncrement = (e: React.MouseEvent) => {
     e.stopPropagation();
+    if (isMaxReached) return;
     if (cartItemsForProduct.length >= 1) {
       updateQuantity(cartItemsForProduct[0].id, 1);
     } else {
@@ -190,50 +196,73 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, viewMode = 'g
           <span className="text-[10px] text-stone-400">({product.reviewsCount})</span>
         </div>
 
-        {/* Cart Actions */}
-        {!isServedHere ? (
-          <span className="text-[10px] font-bold text-stone-500 bg-stone-100 border border-stone-200 px-2 py-1 rounded-md">
-            Not at Outlet
-          </span>
-        ) : !isInStockHere ? (
-          <span className="text-[10px] font-bold text-amber-900 bg-amber-50 border border-amber-200 px-2 py-1 rounded-md">
-            Out of Stock
-          </span>
-        ) : totalQuantityInCart > 0 ? (
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="inline-flex items-center bg-amber-50 border border-amber-300 rounded-lg px-2 py-0.5 text-xs font-bold text-amber-950 gap-1.5 shadow-2xs"
-          >
+        {/* Cart Actions & Portion Status */}
+        <div className="flex flex-col items-end">
+          {!isServedHere ? (
+            <span className="text-[10px] font-bold text-stone-500 bg-stone-100 border border-stone-200 px-2 py-1 rounded-md">
+              Not at Outlet
+            </span>
+          ) : isSoldOut ? (
+            <span className="text-[10px] font-bold text-amber-900 bg-amber-50 border border-amber-200 px-2 py-1 rounded-md">
+              {portionsLeft === 0 ? 'Sold Out' : 'Out of Stock'}
+            </span>
+          ) : totalQuantityInCart > 0 ? (
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="inline-flex items-center bg-amber-50 border border-amber-300 rounded-lg px-2 py-0.5 text-xs font-bold text-amber-950 gap-1.5 shadow-2xs"
+            >
+              <button
+                type="button"
+                onClick={handleDecrement}
+                className="w-5 h-5 rounded hover:bg-amber-200 text-amber-950 flex items-center justify-center transition-colors"
+                aria-label="Decrease"
+              >
+                -
+              </button>
+              <span className="font-bold min-w-[14px] text-center">{totalQuantityInCart}</span>
+              <button
+                type="button"
+                onClick={handleIncrement}
+                disabled={isMaxReached}
+                className={`w-5 h-5 rounded flex items-center justify-center transition-colors ${
+                  isMaxReached
+                    ? 'opacity-40 cursor-not-allowed text-stone-400'
+                    : 'hover:bg-amber-200 text-amber-950'
+                }`}
+                aria-label="Increase"
+              >
+                +
+              </button>
+            </div>
+          ) : (
             <button
               type="button"
-              onClick={handleDecrement}
-              className="w-5 h-5 rounded hover:bg-amber-200 text-amber-950 flex items-center justify-center transition-colors"
-              aria-label="Decrease"
+              id={`add-to-cart-btn-${product.id}`}
+              onClick={handleQuickAdd}
+              className="p-1.5 px-2.5 bg-amber-800 hover:bg-amber-900 active:bg-stone-950 text-white rounded-lg text-xs font-bold transition-colors shadow-2xs flex items-center gap-1"
+              aria-label={`Add ${product.name} to cart`}
             >
-              -
+              <Plus className="w-3.5 h-3.5" />
+              <span className="text-[11px] font-bold">Add</span>
             </button>
-            <span className="font-bold min-w-[14px] text-center">{totalQuantityInCart}</span>
-            <button
-              type="button"
-              onClick={handleIncrement}
-              className="w-5 h-5 rounded hover:bg-amber-200 text-amber-950 flex items-center justify-center transition-colors"
-              aria-label="Increase"
-            >
-              +
-            </button>
-          </div>
-        ) : (
-          <button
-            type="button"
-            id={`add-to-cart-btn-${product.id}`}
-            onClick={handleQuickAdd}
-            className="p-1.5 px-2.5 bg-amber-800 hover:bg-amber-900 active:bg-stone-950 text-white rounded-lg text-xs font-bold transition-colors shadow-2xs flex items-center gap-1"
-            aria-label={`Add ${product.name} to cart`}
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span className="text-[11px] font-bold">Add</span>
-          </button>
-        )}
+          )}
+
+          {/* Portion indicator below Add button */}
+          {isServedHere && !isSoldOut && portionsLeft !== null && portionsLeft !== undefined && (
+            <div className="mt-1 flex items-center justify-end gap-1">
+              {portionsLeft <= 5 ? (
+                <span className="inline-flex items-center gap-0.5 text-[10px] font-bold text-amber-700 bg-amber-50/80 px-1 py-0.2 rounded">
+                  <Flame className="w-2.5 h-2.5 text-amber-600 animate-pulse shrink-0" />
+                  <span>Only {portionsLeft} left</span>
+                </span>
+              ) : (
+                <span className="text-[10px] font-medium text-stone-500">
+                  {portionsLeft} portions left
+                </span>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </motion.div>
   );

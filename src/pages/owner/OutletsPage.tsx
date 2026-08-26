@@ -18,6 +18,7 @@ import {
   isProductFeaturedAtOutlet,
   isProductBestsellerAtOutlet,
   isProductChefSpecialAtOutlet,
+  getProductPortionsLeftAtOutlet,
 } from '../../lib/locationService';
 import {
   Store,
@@ -50,6 +51,7 @@ import {
   Image as ImageIcon,
   RotateCcw,
   Heart,
+  ShieldCheck,
 } from 'lucide-react';
 
 interface OutletProductItemState {
@@ -59,6 +61,7 @@ interface OutletProductItemState {
   isFeatured: boolean;
   isBestseller: boolean;
   isChefSpecial: boolean;
+  portionsLeft: number | null;
 }
 
 export const OutletsPage: React.FC = () => {
@@ -85,6 +88,7 @@ export const OutletsPage: React.FC = () => {
     city: 'Bangalore',
     state: 'Karnataka',
     address: '',
+    fssaiLicId: 11523034000000,
     phone: '',
     email: '',
     isActive: true,
@@ -182,6 +186,7 @@ export const OutletsPage: React.FC = () => {
           isFeatured: isProductFeaturedAtOutlet(p, outletId),
           isBestseller: isProductBestsellerAtOutlet(p, outletId),
           isChefSpecial: isProductChefSpecialAtOutlet(p, outletId),
+          portionsLeft: getProductPortionsLeftAtOutlet(p, outletId),
         };
       } else {
         // New outlet defaults: all products assigned & in stock
@@ -192,6 +197,7 @@ export const OutletsPage: React.FC = () => {
           isFeatured: !!p.featured,
           isBestseller: !!p.bestseller,
           isChefSpecial: isProductChefSpecialAtOutlet(p, undefined),
+          portionsLeft: null,
         };
       }
     });
@@ -209,6 +215,7 @@ export const OutletsPage: React.FC = () => {
       city: 'Bangalore',
       state: 'Karnataka',
       address: '',
+      fssaiLicId: 11523034000000,
       phone: '9876543210',
       email: 'kitchen@gaonkaswad.com',
       isActive: true,
@@ -266,6 +273,7 @@ export const OutletsPage: React.FC = () => {
       city: outlet.city || 'Bangalore',
       state: outlet.state || 'Karnataka',
       address: outlet.address || '',
+      fssaiLicId: outlet.fssaiLicId !== undefined && outlet.fssaiLicId !== null ? Number(outlet.fssaiLicId) : 11523034000000,
       phone: outlet.phone || '',
       email: outlet.email || '',
       isActive: outlet.isActive !== false,
@@ -334,6 +342,11 @@ export const OutletsPage: React.FC = () => {
       return;
     }
 
+    if (!formData.fssaiLicId || !String(formData.fssaiLicId).trim()) {
+      showFeedback('error', 'FSSAI License ID is required (14-digit numeric code)');
+      return;
+    }
+
     setIsSaving(true);
     try {
       const statesList = Object.values(outletItemStates) as OutletProductItemState[];
@@ -375,6 +388,7 @@ export const OutletsPage: React.FC = () => {
         isFeatured: item.isFeatured,
         isBestseller: item.isBestseller,
         isChefSpecial: item.isChefSpecial,
+        portionsLeft: item.portionsLeft,
       }));
 
       if (updates.length > 0) {
@@ -757,10 +771,18 @@ export const OutletsPage: React.FC = () => {
                             {outlet.city}
                           </span>
                         </div>
-                        <p className="text-xs text-stone-600 flex items-center gap-1.5">
-                          <MapPin className="w-3.5 h-3.5 text-stone-400 shrink-0" />
-                          <span>{outlet.address}</span>
-                        </p>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className="text-xs text-stone-600 flex items-center gap-1.5">
+                            <MapPin className="w-3.5 h-3.5 text-stone-400 shrink-0" />
+                            <span>{outlet.address}</span>
+                          </p>
+                          {outlet.fssaiLicId && (
+                            <span className="inline-flex items-center gap-1 bg-stone-100 text-stone-700 border border-stone-200 text-[10px] font-mono font-medium px-2 py-0.5 rounded-md">
+                              <ShieldCheck className="w-3 h-3 text-amber-700 shrink-0" />
+                              <span>FSSAI: {outlet.fssaiLicId}</span>
+                            </span>
+                          )}
+                        </div>
                       </div>
 
                       {/* Status Toggle Pill */}
@@ -1144,6 +1166,34 @@ export const OutletsPage: React.FC = () => {
                             placeholder="e.g. kitchen@gaonkaswad.com"
                             className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700 focus:bg-white"
                           />
+                        </div>
+
+                        <div className="sm:col-span-2">
+                          <label className="block text-xs font-semibold text-stone-700 mb-1">
+                            FSSAI License ID (14 Digits) *
+                          </label>
+                          <div className="relative">
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              pattern="[0-9]*"
+                              required
+                              value={formData.fssaiLicId !== undefined ? formData.fssaiLicId : ''}
+                              onChange={(e) => {
+                                const cleanDigits = e.target.value.replace(/\D/g, '').slice(0, 14);
+                                setFormData({
+                                  ...formData,
+                                  fssaiLicId: cleanDigits ? Number(cleanDigits) : ('' as any),
+                                });
+                              }}
+                              placeholder="e.g. 11523034000000"
+                              className="w-full pl-8 pr-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs text-stone-900 font-mono tracking-wider focus:outline-none focus:border-amber-700 focus:bg-white"
+                            />
+                            <ShieldCheck className="w-4 h-4 text-stone-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                          </div>
+                          <span className="text-[10px] text-stone-400 mt-0.5 block">
+                            Strictly numeric 14-digit registration code for food safety compliance. Exceeds standard 32-bit integers; stored as numeric/bigint in Supabase.
+                          </span>
                         </div>
 
                         <div className="sm:col-span-2">
@@ -2133,9 +2183,46 @@ export const OutletsPage: React.FC = () => {
                               </div>
                             </div>
 
-                            {/* Right: Stock Status & Merchandising Badges */}
+                            {/* Right: Stock Status, Portions & Merchandising Badges */}
                             {itemState.isAssigned ? (
                               <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap justify-end pl-7 sm:pl-0">
+                                {/* Portions Left Input */}
+                                <div className="flex items-center gap-1 bg-white border border-stone-200 rounded-lg px-2 py-0.5 shadow-2xs">
+                                  <span className="text-[10px] font-bold text-stone-600 shrink-0">Portions:</span>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    max="999"
+                                    placeholder="∞"
+                                    value={itemState.portionsLeft === null || itemState.portionsLeft === undefined ? '' : itemState.portionsLeft}
+                                    onChange={(e) => {
+                                      const val = e.target.value.trim();
+                                      const count = val === '' ? null : Math.max(0, parseInt(val, 10) || 0);
+                                      setOutletItemStates((prev) => ({
+                                        ...prev,
+                                        [product.id]: {
+                                          ...itemState,
+                                          portionsLeft: count,
+                                          inStock: count === 0 ? false : itemState.inStock,
+                                        },
+                                      }));
+                                    }}
+                                    className="w-12 text-center text-xs font-extrabold text-stone-900 bg-stone-50 border border-stone-200 rounded px-1 py-0.5 focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-500"
+                                    title="Portions left for today (leave blank for unlimited)"
+                                  />
+                                  {itemState.portionsLeft === 0 ? (
+                                    <span className="text-[9px] font-extrabold text-rose-700 bg-rose-50 px-1 py-0.2 rounded border border-rose-200">
+                                      Sold Out
+                                    </span>
+                                  ) : itemState.portionsLeft !== null && itemState.portionsLeft !== undefined ? (
+                                    <span className={`text-[9px] font-bold px-1 py-0.2 rounded ${itemState.portionsLeft <= 5 ? 'text-amber-700 bg-amber-50' : 'text-stone-600'}`}>
+                                      left
+                                    </span>
+                                  ) : (
+                                    <span className="text-[9px] text-stone-400 font-medium">unlimited</span>
+                                  )}
+                                </div>
+
                                 {/* Stock Toggle Pill */}
                                 <button
                                   type="button"

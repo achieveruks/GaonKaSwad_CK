@@ -1,5 +1,5 @@
 import { supabase, isSupabaseConfigured } from './supabase';
-import { Product, Outlet, OutletAbout, DeliveryZone, Order, Category, DashboardStats, Profile, UserRole, Customer, CustomerAddress } from '../types';
+import { Product, Outlet, OutletAbout, DeliveryZone, Order, OrderItem, CleanOrderItem, Category, DashboardStats, Profile, UserRole, Customer, CustomerAddress } from '../types';
 import { PRODUCTS as INITIAL_PRODUCTS, CATEGORIES as INITIAL_CATEGORIES } from '../data/products';
 import { INITIAL_OUTLETS, INITIAL_DELIVERY_ZONES } from '../data/outlets';
 
@@ -8,7 +8,19 @@ import { INITIAL_OUTLETS, INITIAL_DELIVERY_ZONES } from '../data/outlets';
 // ============================================================================
 
 export function mapDbProductToProduct(row: any): Product {
-  const outlets = Array.isArray(row.outlets) ? row.outlets : [];
+  const outlets = Array.isArray(row.outlets)
+    ? row.outlets.map((o: any) => ({
+        outletId: o.outletId || o.outlet_id,
+        inStock: o.inStock !== undefined ? !!o.inStock : (o.in_stock !== undefined ? !!o.in_stock : true),
+        isFeatured: !!(o.isFeatured || o.is_featured),
+        isBestseller: !!(o.isBestseller || o.is_bestseller),
+        isChefSpecial: !!(o.isChefSpecial || o.is_chef_special),
+        portionsLeft:
+          o.portionsLeft !== undefined && o.portionsLeft !== null && o.portionsLeft !== ''
+            ? Number(o.portionsLeft)
+            : (o.portions_left !== undefined && o.portions_left !== null && o.portions_left !== '' ? Number(o.portions_left) : null),
+      }))
+    : [];
   const outletIds = Array.isArray(row.outlet_ids) ? row.outlet_ids : [];
 
   return {
@@ -95,6 +107,7 @@ export function mapDbOutletToOutlet(row: any): Outlet {
     city: row.city,
     state: row.state || undefined,
     address: row.address,
+    fssaiLicId: row.fssai_lic_id !== undefined && row.fssai_lic_id !== null ? Number(row.fssai_lic_id) : undefined,
     phone: row.phone || undefined,
     email: row.email || undefined,
     latitude: row.latitude ? Number(row.latitude) : undefined,
@@ -126,6 +139,9 @@ export function mapOutletToDbOutlet(o: Partial<Outlet>): any {
   if (o.city !== undefined) dbObj.city = o.city.trim();
   if (o.state !== undefined) dbObj.state = o.state?.trim() || null;
   if (o.address !== undefined) dbObj.address = o.address.trim();
+  if (o.fssaiLicId !== undefined && o.fssaiLicId !== null && (o.fssaiLicId as any) !== '') {
+    dbObj.fssai_lic_id = Number(o.fssaiLicId);
+  }
   if (o.phone !== undefined) dbObj.phone = o.phone?.trim() || null;
   if (o.email !== undefined) dbObj.email = o.email?.trim() || null;
   if (o.latitude !== undefined) dbObj.latitude = o.latitude ? Number(o.latitude) : null;
@@ -361,7 +377,14 @@ export async function toggleSupabaseProductStock(id: string | number): Promise<P
 export async function updateSupabaseOutletProductConfig(
   outletId: string,
   productId: string | number,
-  config: { inStock?: boolean; isFeatured?: boolean; isBestseller?: boolean; isChefSpecial?: boolean; isAssigned?: boolean }
+  config: {
+    inStock?: boolean;
+    isFeatured?: boolean;
+    isBestseller?: boolean;
+    isChefSpecial?: boolean;
+    isAssigned?: boolean;
+    portionsLeft?: number | null;
+  }
 ): Promise<Product> {
   const { data: existing, error: fetchErr } = await supabase
     .from('products')
@@ -384,6 +407,7 @@ export async function updateSupabaseOutletProductConfig(
         isFeatured: config.isFeatured !== undefined ? config.isFeatured : outlets[idx].isFeatured,
         isBestseller: config.isBestseller !== undefined ? config.isBestseller : outlets[idx].isBestseller,
         isChefSpecial: config.isChefSpecial !== undefined ? config.isChefSpecial : outlets[idx].isChefSpecial,
+        portionsLeft: config.portionsLeft !== undefined ? config.portionsLeft : outlets[idx].portionsLeft,
       };
     } else {
       outlets.push({
@@ -392,6 +416,7 @@ export async function updateSupabaseOutletProductConfig(
         isFeatured: !!config.isFeatured,
         isBestseller: !!config.isBestseller,
         isChefSpecial: !!config.isChefSpecial,
+        portionsLeft: config.portionsLeft !== undefined ? config.portionsLeft : null,
       });
     }
   }
@@ -422,6 +447,7 @@ export async function batchUpdateSupabaseOutletProducts(
     isFeatured?: boolean;
     isBestseller?: boolean;
     isChefSpecial?: boolean;
+    portionsLeft?: number | null;
   }[]
 ): Promise<Product[]> {
   if (!isSupabaseConfigured()) throw new Error('Supabase not configured');
@@ -449,6 +475,7 @@ export async function batchUpdateSupabaseOutletProducts(
           isFeatured: item.isFeatured !== undefined ? item.isFeatured : outlets[existingIdx].isFeatured,
           isBestseller: item.isBestseller !== undefined ? item.isBestseller : outlets[existingIdx].isBestseller,
           isChefSpecial: item.isChefSpecial !== undefined ? item.isChefSpecial : outlets[existingIdx].isChefSpecial,
+          portionsLeft: item.portionsLeft !== undefined ? item.portionsLeft : outlets[existingIdx].portionsLeft,
         };
       } else {
         outlets.push({
@@ -457,6 +484,7 @@ export async function batchUpdateSupabaseOutletProducts(
           isFeatured: !!item.isFeatured,
           isBestseller: !!item.isBestseller,
           isChefSpecial: !!item.isChefSpecial,
+          portionsLeft: item.portionsLeft !== undefined ? item.portionsLeft : null,
         });
       }
     }
@@ -736,10 +764,10 @@ export function mapDbAddressToCustomerAddress(row: any): CustomerAddress {
     id: String(row.id),
     customerId: String(row.customer_id),
     addressLabel: row.label || 'Home',
-    fullAddress: row.address_line1 + (row.address_line2 ? `, ${row.address_line2}` : ''),
+    fullAddress: row.full_address || row.address_line1 || '',
     landmark: row.landmark || undefined,
-    city: row.city || 'Bangalore',
-    state: 'Karnataka',
+    city: row.city || 'Bhubaneswar',
+    state: row.state || 'Odisha',
     pincode: row.pincode || '',
     isDefault: row.is_default !== false,
     createdAt: row.created_at,
@@ -869,6 +897,7 @@ export async function upsertSupabaseCustomer(customerData: {
 
 /**
  * Upsert customer delivery address to Supabase public.customer_addresses table
+ * Deduplicates by checking if customer already has this address_line1 / pincode
  */
 export async function upsertSupabaseCustomerAddress(
   customerId: string,
@@ -877,73 +906,568 @@ export async function upsertSupabaseCustomerAddress(
   if (!isSupabaseConfigured()) throw new Error('Supabase not configured');
 
   const now = new Date().toISOString();
-  const payload: any = {
-    customer_id: customerId,
-    label: addressData.addressLabel || 'Home',
-    address_line1: addressData.fullAddress || '',
-    address_line2: null,
-    landmark: addressData.landmark || null,
-    city: addressData.city || 'Bangalore',
-    pincode: addressData.pincode || '',
-    is_default: addressData.isDefault !== false,
-    created_at: now,
+  const cleanFullAddress = (addressData.fullAddress || '').trim();
+
+  // 1. Check if the customer already has this address
+  const { data: existingAddresses } = await supabase
+    .from('customer_addresses')
+    .select('*')
+    .eq('customer_id', customerId);
+
+  const existingMatch = existingAddresses?.find(
+    (addr: any) =>
+      (addr.full_address || addr.address_line1 || '').trim().toLowerCase() === cleanFullAddress.toLowerCase() ||
+      (addr.id && addr.id === addressData.id)
+  );
+
+  const isDefault = addressData.isDefault !== false;
+
+  // 2. If setting as default, reset other addresses for this customer
+  if (isDefault && existingAddresses && existingAddresses.length > 0) {
+    try {
+      await supabase
+        .from('customer_addresses')
+        .update({ is_default: false, updated_at: now })
+        .eq('customer_id', customerId);
+    } catch {}
+  }
+
+  if (existingMatch) {
+    // 3. Update existing address
+    const { data: updated, error: updateErr } = await supabase
+      .from('customer_addresses')
+      .update({
+        label: addressData.addressLabel || existingMatch.label || 'Home',
+        full_address: cleanFullAddress || existingMatch.full_address || existingMatch.address_line1,
+        landmark: addressData.landmark !== undefined ? (addressData.landmark || null) : existingMatch.landmark,
+        city: addressData.city || existingMatch.city || 'Bhubaneswar',
+        state: addressData.state || existingMatch.state || 'Odisha',
+        pincode: addressData.pincode || existingMatch.pincode || '',
+        is_default: isDefault,
+        updated_at: now,
+      })
+      .eq('id', existingMatch.id)
+      .select()
+      .single();
+
+    if (updateErr) throw updateErr;
+    return mapDbAddressToCustomerAddress(updated);
+  } else {
+    // 4. Insert new address only if no existing match
+    const payload: any = {
+      customer_id: customerId,
+      label: addressData.addressLabel || 'Home',
+      full_address: cleanFullAddress,
+      landmark: addressData.landmark || null,
+      city: addressData.city || 'Bhubaneswar',
+      state: addressData.state || 'Odisha',
+      pincode: addressData.pincode || '',
+      is_default: isDefault,
+      created_at: now,
+      updated_at: now,
+    };
+
+    const { data: inserted, error: insertErr } = await supabase
+      .from('customer_addresses')
+      .insert(payload)
+      .select()
+      .single();
+
+    if (insertErr) throw insertErr;
+    return mapDbAddressToCustomerAddress(inserted);
+  }
+}
+
+export async function getNextSequentialOrderId(): Promise<string> {
+  if (!isSupabaseConfigured()) {
+    return `GKSWAD-#001`;
+  }
+  try {
+    const { data, error } = await supabase
+      .from('orders')
+      .select('order_id')
+      .order('created_at', { ascending: false })
+      .limit(50);
+
+    if (error || !data || data.length === 0) {
+      return `GKSWAD-#001`;
+    }
+
+    let maxNum = 0;
+    for (const row of data) {
+      if (row.order_id) {
+        const match = row.order_id.match(/GKSWAD-#?(\d+)/i) || row.order_id.match(/GKS-#?(\d+)/i);
+        if (match && match[1]) {
+          const num = parseInt(match[1], 10);
+          if (!isNaN(num) && num > maxNum) {
+            maxNum = num;
+          }
+        }
+      }
+    }
+    const nextSeq = maxNum + 1;
+    return `GKSWAD-#${String(nextSeq).padStart(3, '0')}`;
+  } catch {
+    return `GKSWAD-#001`;
+  }
+}
+
+export async function decrementProductPortionsInSupabase(outletId: string, items: any[]): Promise<void> {
+  if (!isSupabaseConfigured() || !items || !Array.isArray(items) || items.length === 0) return;
+
+  for (const item of items) {
+    const productId = item.product?.id || item.productId || item.id;
+    const qty = Number(item.quantity) || 1;
+    if (!productId) continue;
+
+    try {
+      const { data: prodData, error: fetchErr } = await supabase
+        .from('products')
+        .select('id, outlets')
+        .eq('id', String(productId))
+        .single();
+
+      if (fetchErr || !prodData || !Array.isArray(prodData.outlets)) continue;
+
+      let changed = false;
+      const updatedOutlets = prodData.outlets.map((outletCfg: any) => {
+        const oId = outletCfg.outletId || outletCfg.outlet_id;
+        if (
+          oId === outletId &&
+          outletCfg.portionsLeft !== null &&
+          outletCfg.portionsLeft !== undefined &&
+          outletCfg.portionsLeft !== ''
+        ) {
+          const currentPortions = Number(outletCfg.portionsLeft);
+          if (!isNaN(currentPortions)) {
+            const nextPortions = Math.max(0, currentPortions - qty);
+            changed = true;
+            return {
+              ...outletCfg,
+              portionsLeft: nextPortions,
+              inStock: nextPortions <= 0 ? false : outletCfg.inStock !== false,
+            };
+          }
+        }
+        return outletCfg;
+      });
+
+      if (changed) {
+        await supabase
+          .from('products')
+          .update({
+            outlets: updatedOutlets,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', String(productId));
+      }
+    } catch (err) {
+      console.warn(`Supabase portion decrement error for product ${productId}:`, err);
+    }
+  }
+}
+
+/**
+ * Clean Architecture Serializer for Supabase orders.items JSONB column
+ * Strips redundant nested product catalogs, ephemeral React IDs, and duplicate price keys.
+ */
+export function serializeOrderItemForDb(it: any): CleanOrderItem {
+  const p = it.product || {};
+  const productId = String(it.productId || p.id || it.id || '');
+  const name = String(it.name || p.name || 'Authentic Delicacy');
+  const hindiName = it.hindiName || p.hindiName || undefined;
+  const image = String(it.image || p.image || '');
+  const isVeg = it.isVeg !== undefined ? Boolean(it.isVeg) : (p.isVeg !== undefined ? Boolean(p.isVeg) : true);
+  const quantity = Math.max(1, Number(it.quantity) || 1);
+  const unitPrice = Number(it.unitPrice || it.price || p.price || 0);
+  const totalPrice = Number(it.totalPrice || unitPrice * quantity);
+
+  const selectedVariant = it.selectedVariant
+    ? {
+        id: String(it.selectedVariant.id || ''),
+        name: String(it.selectedVariant.name || ''),
+        weight: it.selectedVariant.weight || undefined,
+        serves: it.selectedVariant.serves || undefined,
+        price: Number(it.selectedVariant.price || unitPrice),
+      }
+    : undefined;
+
+  const selectedAddons = Array.isArray(it.selectedAddons) && it.selectedAddons.length > 0
+    ? it.selectedAddons.map((ad: any) => ({
+        id: String(ad.id || ''),
+        name: String(ad.name || ''),
+        price: Number(ad.price || 0),
+        isVeg: Boolean(ad.isVeg ?? true),
+      }))
+    : [];
+
+  const cleanItem: CleanOrderItem = {
+    productId,
+    name,
+    image,
+    isVeg,
+    quantity,
+    unitPrice,
+    totalPrice,
   };
 
-  const { data, error } = await supabase
-    .from('customer_addresses')
-    .insert(payload)
-    .select()
-    .single();
+  if (hindiName) cleanItem.hindiName = hindiName;
+  if (selectedVariant) cleanItem.selectedVariant = selectedVariant;
+  if (it.selectedSpiceLevel) cleanItem.selectedSpiceLevel = it.selectedSpiceLevel;
+  cleanItem.selectedAddons = selectedAddons;
 
-  if (error) throw error;
-  return mapDbAddressToCustomerAddress(data);
+  return cleanItem;
+}
+
+export const sanitizeOrderItem = serializeOrderItemForDb;
+
+/**
+ * In-Memory Deserializer
+ * Hydrates database JSONB items with safe UI property shims.
+ */
+export function deserializeOrderItem(it: any): OrderItem {
+  const p = it.product || {};
+  const productId = String(it.productId || p.id || it.id || '');
+  const name = String(it.name || p.name || 'Authentic Delicacy');
+  const hindiName = it.hindiName || p.hindiName || undefined;
+  const image = String(it.image || p.image || '');
+  const isVeg = it.isVeg !== undefined ? Boolean(it.isVeg) : (p.isVeg !== undefined ? Boolean(p.isVeg) : true);
+  const quantity = Math.max(1, Number(it.quantity) || 1);
+  const unitPrice = Number(it.unitPrice || it.price || p.price || 0);
+  const totalPrice = Number(it.totalPrice || unitPrice * quantity);
+
+  const selectedVariant = it.selectedVariant
+    ? {
+        id: String(it.selectedVariant.id || ''),
+        name: String(it.selectedVariant.name || ''),
+        weight: it.selectedVariant.weight || undefined,
+        serves: it.selectedVariant.serves || undefined,
+        price: Number(it.selectedVariant.price || unitPrice),
+        originalPrice: it.selectedVariant.originalPrice ? Number(it.selectedVariant.originalPrice) : undefined,
+      }
+    : undefined;
+
+  const selectedAddons = Array.isArray(it.selectedAddons)
+    ? it.selectedAddons.map((ad: any) => ({
+        id: String(ad.id || ''),
+        name: String(ad.name || ''),
+        price: Number(ad.price || 0),
+        isVeg: Boolean(ad.isVeg ?? true),
+      }))
+    : [];
+
+  return {
+    productId,
+    name,
+    hindiName,
+    image,
+    isVeg,
+    quantity,
+    unitPrice,
+    price: unitPrice,
+    totalPrice,
+    selectedVariant,
+    selectedAddons,
+    selectedSpiceLevel: it.selectedSpiceLevel || undefined,
+    id: it.id || `${productId}_${selectedVariant?.id || 'std'}`,
+    product: {
+      id: productId,
+      name,
+      hindiName,
+      image,
+      isVeg,
+      price: unitPrice,
+    },
+  };
+}
+
+export function mapDbOrderToOrder(row: any): Order {
+  const isPickup = row.order_type === 'pickup' || !!row.is_self_pickup;
+  return {
+    id: row.id,
+    orderId: row.order_id || row.order_number || row.id,
+    outletId: row.outlet_id,
+    customerId: row.customer_id || undefined,
+    addressId: row.address_id || row.customer_address_id || undefined,
+    orderType: isPickup ? 'pickup' : 'delivery',
+    isSelfPickup: isPickup,
+    isGuestCheckout: !row.customer_id,
+    outletName: row.outlet_name || 'Gaon Ka Swad Kitchen',
+    deliveryPinCode: row.delivery_pincode || row.customer_details?.pincode || '',
+    createdAt: row.created_at,
+    items: Array.isArray(row.items) ? row.items.map(deserializeOrderItem) : [],
+    subtotal: Number(row.subtotal || 0),
+    discount: Number(row.discount_amount || row.discount || 0),
+    welcomeDiscountAmount: Number(row.welcome_discount_amount || 0),
+    isWelcomeDiscountApplied: !!row.welcome_discount_applied,
+    deliveryFee: Number(row.delivery_fee || 0),
+    packagingFee: Number(row.packaging_fee || 0),
+    gst: Number(row.tax_amount || row.gst || 0),
+    total: Number(row.total_amount || row.total || 0),
+    couponCode: row.discount_code || row.coupon_code || undefined,
+    customerDetails: row.customer_details || {
+      fullName: row.customer_name || 'Customer',
+      phone: row.customer_phone || '',
+      email: row.customer_email || '',
+      address: row.delivery_address_snapshot?.fullAddress || '',
+      city: row.delivery_address_snapshot?.city || 'Bhubaneswar',
+      state: row.delivery_address_snapshot?.state || 'Odisha',
+      pincode: row.delivery_pincode || '',
+      deliverySlot: row.delivery_slot || 'immediate',
+      paymentMethod: row.payment_method || 'cod',
+      deliveryNotes: row.delivery_instructions || row.delivery_notes || undefined,
+      includeCutlery: true,
+    },
+    deliveryAddressSnapshot: row.delivery_address_snapshot || {
+      fullAddress: isPickup ? 'Self-Pickup from Kitchen' : '',
+      city: 'Bhubaneswar',
+      state: 'Odisha',
+      pincode: row.delivery_pincode || '',
+    },
+    status: row.status || 'Received',
+    orderStatus: row.order_status || (row.status ? row.status.toLowerCase().replace(/\s+/g, '_') : 'received'),
+    placedAt: row.placed_at || row.created_at,
+    confirmedAt: row.confirmed_at || undefined,
+    preparingAt: row.preparing_at || undefined,
+    readyAt: row.ready_at || undefined,
+    outForDeliveryAt: row.out_for_delivery_at || undefined,
+    deliveredAt: row.delivered_at || undefined,
+    cancelledAt: row.cancelled_at || undefined,
+    cancellationReason: row.cancellation_reason || undefined,
+    estimatedDeliveryMinutes: row.estimated_delivery_minutes || (isPickup ? 25 : 35),
+  };
+}
+
+export async function fetchSupabaseOrders(outletId?: string, customerId?: string): Promise<Order[]> {
+  if (!isSupabaseConfigured()) return [];
+
+  try {
+    let query = supabase.from('orders').select('*').order('created_at', { ascending: false });
+    if (outletId) {
+      query = query.eq('outlet_id', outletId);
+    }
+    if (customerId) {
+      query = query.eq('customer_id', customerId);
+    }
+
+    const { data, error } = await query;
+    if (error) {
+      console.warn('fetchSupabaseOrders notice:', error.message);
+      return [];
+    }
+    if (!data || data.length === 0) return [];
+    return data.map(mapDbOrderToOrder);
+  } catch (err) {
+    console.warn('fetchSupabaseOrders exception:', err);
+    return [];
+  }
+}
+
+export async function fetchSupabaseOrderById(orderId: string): Promise<Order | null> {
+  if (!isSupabaseConfigured()) return null;
+
+  try {
+    const { data, error } = await supabase
+      .from('orders')
+      .select('*')
+      .or(`order_id.eq.${orderId},id.eq.${orderId}`)
+      .maybeSingle();
+
+    if (error || !data) return null;
+    return mapDbOrderToOrder(data);
+  } catch {
+    return null;
+  }
+}
+
+export async function updateSupabaseOrderStatus(
+  orderId: string,
+  status: Order['status'],
+  cancellationReason?: string
+): Promise<boolean> {
+  if (!isSupabaseConfigured()) return false;
+
+  const now = new Date().toISOString();
+  const norm = (status || '').toLowerCase().trim();
+  const updateFields: any = {
+    status,
+    updated_at: now,
+  };
+
+  if (norm === 'received') {
+    updateFields.order_status = 'received';
+    updateFields.status = 'Received';
+  } else if (norm === 'confirmed') {
+    updateFields.order_status = 'confirmed';
+    updateFields.status = 'Confirmed';
+    updateFields.confirmed_at = now;
+  } else if (norm === 'preparing' || norm === 'in kitchen' || norm === 'preparing in kitchen') {
+    updateFields.order_status = 'preparing';
+    updateFields.status = 'Preparing in Kitchen';
+    updateFields.preparing_at = now;
+  } else if (norm === 'ready' || norm === 'ready for pickup') {
+    updateFields.order_status = 'ready';
+    updateFields.status = 'Ready for Pickup';
+    updateFields.ready_at = now;
+  } else if (norm === 'out_for_delivery' || norm === 'out for delivery') {
+    updateFields.order_status = 'out_for_delivery';
+    updateFields.status = 'Out for Delivery';
+    updateFields.out_for_delivery_at = now;
+  } else if (norm === 'delivered' || norm === 'picked up') {
+    updateFields.order_status = 'delivered';
+    updateFields.status = norm === 'picked up' ? 'Picked Up' : 'Delivered';
+    updateFields.delivered_at = now;
+  } else if (norm === 'cancelled') {
+    updateFields.order_status = 'cancelled';
+    updateFields.status = 'Cancelled';
+    updateFields.cancelled_at = now;
+    if (cancellationReason) {
+      updateFields.cancellation_reason = cancellationReason;
+    }
+  }
+
+  try {
+    const { error } = await supabase
+      .from('orders')
+      .update(updateFields)
+      .or(`order_id.eq.${orderId},id.eq.${orderId}`);
+
+    return !error;
+  } catch {
+    return false;
+  }
+}
+
+export async function deleteSupabaseOrder(orderId: string): Promise<boolean> {
+  if (!isSupabaseConfigured()) return false;
+
+  try {
+    const { error } = await supabase
+      .from('orders')
+      .delete()
+      .or(`order_id.eq.${orderId},id.eq.${orderId}`);
+
+    return !error;
+  } catch {
+    return false;
+  }
 }
 
 export async function createSupabaseOrder(orderData: Partial<Order>): Promise<Order> {
   if (!isSupabaseConfigured()) throw new Error('Supabase not configured');
 
-  const id = `order-${Date.now().toString(36)}`;
-  const orderId = orderData.orderId || `GKS-${Date.now().toString().slice(-6)}`;
+  const id = `order-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
+  let orderId = orderData.orderId;
+  if (!orderId || !orderId.startsWith('GKSWAD-#')) {
+    orderId = await getNextSequentialOrderId();
+  }
+  const now = new Date().toISOString();
 
-  const payload = {
+  const isUUID = (str?: string | null) =>
+    typeof str === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(str);
+
+  const safeOutletId = orderData.outletId || (orderData as any).outlet_id || 'outlet-1';
+  const isSelfPickup = !!(orderData.isSelfPickup || orderData.orderType === 'pickup');
+  const safeItems = Array.isArray(orderData.items)
+    ? orderData.items.map(sanitizeOrderItem)
+    : [];
+
+  const supaCustomerPhone =
+    orderData.customerDetails?.phone ||
+    (orderData.deliveryAddressSnapshot as any)?.phone ||
+    null;
+
+  const supaCustomerName =
+    orderData.customerDetails?.fullName ||
+    (orderData.deliveryAddressSnapshot as any)?.fullName ||
+    null;
+
+  const supaDeliveryInstructions =
+    orderData.customerDetails?.deliveryNotes ||
+    (orderData.deliveryAddressSnapshot as any)?.deliveryNotes ||
+    null;
+
+  const payload: any = {
     id,
     order_id: orderId,
-    outlet_id: orderData.outletId,
-    outlet_name: orderData.outletName || 'Gaon Ka Swad Kitchen',
-    delivery_pincode: orderData.deliveryPinCode,
-    items: orderData.items || [],
+    outlet_id: safeOutletId,
+    customer_id: isUUID(orderData.customerId) ? orderData.customerId : null,
+    address_id: isUUID(orderData.addressId) ? orderData.addressId : null,
+    customer_name: supaCustomerName,
+    customer_phone: supaCustomerPhone,
+    order_type: isSelfPickup ? 'pickup' : 'delivery',
+    is_self_pickup: isSelfPickup,
+    items: safeItems,
     subtotal: Number(orderData.subtotal || 0),
     discount: Number(orderData.discount || 0),
+    discount_amount: Number(orderData.discount || 0),
+    welcome_discount_applied: !!orderData.isWelcomeDiscountApplied,
+    welcome_discount_amount: Number(orderData.welcomeDiscountAmount || 0),
     delivery_fee: Number(orderData.deliveryFee || 0),
     packaging_fee: Number(orderData.packagingFee || 0),
+    tax_amount: Number(orderData.gst || 0),
     gst: Number(orderData.gst || 0),
+    total_amount: Number(orderData.total || 0),
     total: Number(orderData.total || 0),
     coupon_code: orderData.couponCode || null,
-    customer_details: orderData.customerDetails,
+    discount_code: orderData.couponCode || null,
+    payment_method: orderData.customerDetails?.paymentMethod || 'cod',
+    payment_status: 'PENDING',
+    delivery_slot: orderData.customerDetails?.deliverySlot || 'immediate',
+    delivery_notes: supaDeliveryInstructions,
+    delivery_instructions: supaDeliveryInstructions,
     status: orderData.status || 'Received',
-    estimated_delivery_minutes: orderData.estimatedDeliveryMinutes || 35,
+    order_status: 'received',
+    placed_at: now,
+    confirmed_at: null,
+    preparing_at: null,
+    ready_at: null,
+    out_for_delivery_at: null,
+    delivered_at: null,
+    cancelled_at: null,
+    customer_details: orderData.customerDetails || {},
+    delivery_address_snapshot: orderData.deliveryAddressSnapshot || {},
+    delivery_pincode: orderData.deliveryPinCode || orderData.customerDetails?.pincode || '',
+    estimated_delivery_minutes: Number(orderData.estimatedDeliveryMinutes || (isSelfPickup ? 25 : 35)),
+    created_at: now,
+    updated_at: now,
   };
 
   const { data, error } = await supabase.from('orders').insert(payload).select().single();
-  if (error) throw error;
+
+  if (error) {
+    console.warn('createSupabaseOrder direct insert notice:', error.message);
+  }
+
+  // Atomically decrement portions in Supabase products
+  if (orderData.outletId && orderData.items && orderData.items.length > 0) {
+    decrementProductPortionsInSupabase(orderData.outletId, orderData.items).catch((e) =>
+      console.warn('Portion decrement background notice:', e)
+    );
+  }
+
+  if (data) {
+    return mapDbOrderToOrder(data);
+  }
 
   return {
     ...orderData,
-    id: data.id,
-    orderId: data.order_id,
-    outletId: data.outlet_id,
-    deliveryPinCode: data.delivery_pincode,
-    createdAt: data.created_at,
-    items: data.items,
-    subtotal: Number(data.subtotal),
-    discount: Number(data.discount),
-    deliveryFee: Number(data.delivery_fee),
-    packagingFee: Number(data.packaging_fee),
-    gst: Number(data.gst),
-    total: Number(data.total),
-    customerDetails: data.customer_details,
-    status: data.status,
-    estimatedDeliveryMinutes: data.estimated_delivery_minutes,
+    id,
+    orderId,
+    outletId: safeOutletId,
+    isSelfPickup,
+    orderType: isSelfPickup ? 'pickup' : 'delivery',
+    items: safeItems,
+    subtotal: payload.subtotal,
+    discount: payload.discount,
+    welcomeDiscountAmount: payload.welcome_discount_amount,
+    isWelcomeDiscountApplied: payload.welcome_discount_applied,
+    deliveryFee: payload.delivery_fee,
+    packagingFee: payload.packaging_fee,
+    gst: payload.gst,
+    total: payload.total,
+    status: payload.status,
+    createdAt: now,
   } as Order;
 }
 

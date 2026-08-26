@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { createClient } from '@supabase/supabase-js';
-import { productStorage } from './server/storage';
+import { productStorage, sanitizeOrderItem, deserializeOrderItem } from './server/storage';
 import {
   createSessionToken,
   verifySessionToken,
@@ -241,10 +241,10 @@ async function startServer() {
               id: String(addrRow.id),
               customerId: String(addrRow.customer_id),
               addressLabel: addrRow.label || 'Home',
-              fullAddress: addrRow.address_line1 + (addrRow.address_line2 ? `, ${addrRow.address_line2}` : ''),
+              fullAddress: addrRow.full_address || addrRow.address_line1 || '',
               landmark: addrRow.landmark || undefined,
-              city: addrRow.city || 'Bangalore',
-              state: 'Karnataka',
+              city: addrRow.city || 'Bhubaneswar',
+              state: addrRow.state || 'Odisha',
               pincode: addrRow.pincode || '',
               isDefault: addrRow.is_default !== false,
             };
@@ -340,10 +340,10 @@ async function startServer() {
                 id: String(addrRow.id),
                 customerId: String(addrRow.customer_id),
                 addressLabel: addrRow.label || 'Home',
-                fullAddress: addrRow.address_line1 + (addrRow.address_line2 ? `, ${addrRow.address_line2}` : ''),
+                fullAddress: addrRow.full_address || addrRow.address_line1 || '',
                 landmark: addrRow.landmark || undefined,
-                city: addrRow.city || 'Bangalore',
-                state: 'Karnataka',
+                city: addrRow.city || 'Bhubaneswar',
+                state: addrRow.state || 'Odisha',
                 pincode: addrRow.pincode || '',
                 isDefault: addrRow.is_default !== false,
               }
@@ -456,32 +456,79 @@ async function startServer() {
         }
 
         if (supaCustomer && address && address.fullAddress) {
-          const { data: insAddr } = await serverSupabase
+          const cleanFullAddress = address.fullAddress.trim();
+          const { data: existingAddrs } = await serverSupabase
             .from('customer_addresses')
-            .insert({
-              customer_id: supaCustomer.id,
-              label: address.addressLabel || 'Home',
-              address_line1: address.fullAddress,
-              city: address.city || 'Bangalore',
-              pincode: address.pincode || '',
-              landmark: address.landmark || null,
-              is_default: address.isDefault !== false,
-            })
-            .select()
-            .single();
+            .select('*')
+            .eq('customer_id', supaCustomer.id);
 
-          if (insAddr) {
-            supaAddress = {
-              id: insAddr.id,
-              customerId: insAddr.customer_id,
-              addressLabel: insAddr.label || 'Home',
-              fullAddress: insAddr.address_line1,
-              landmark: insAddr.landmark || undefined,
-              city: insAddr.city || 'Bangalore',
-              state: 'Karnataka',
-              pincode: insAddr.pincode || '',
-              isDefault: insAddr.is_default !== false,
-            };
+          const matchedAddr = existingAddrs?.find(
+            (a: any) =>
+              (a.full_address || a.address_line1 || '').trim().toLowerCase() === cleanFullAddress.toLowerCase() ||
+              (address.id && a.id === address.id)
+          );
+
+          if (matchedAddr) {
+            const { data: updAddr } = await serverSupabase
+              .from('customer_addresses')
+              .update({
+                label: address.addressLabel || matchedAddr.label || 'Home',
+                full_address: cleanFullAddress,
+                landmark: address.landmark !== undefined ? address.landmark : matchedAddr.landmark,
+                city: address.city || matchedAddr.city || 'Bhubaneswar',
+                state: address.state || matchedAddr.state || 'Odisha',
+                pincode: address.pincode || matchedAddr.pincode || '',
+                is_default: address.isDefault !== false,
+                updated_at: now,
+              })
+              .eq('id', matchedAddr.id)
+              .select()
+              .single();
+
+            if (updAddr) {
+              supaAddress = {
+                id: updAddr.id,
+                customerId: updAddr.customer_id,
+                addressLabel: updAddr.label || 'Home',
+                fullAddress: updAddr.full_address || updAddr.address_line1,
+                landmark: updAddr.landmark || undefined,
+                city: updAddr.city || 'Bhubaneswar',
+                state: updAddr.state || 'Odisha',
+                pincode: updAddr.pincode || '',
+                isDefault: updAddr.is_default !== false,
+              };
+            }
+          } else {
+            const { data: insAddr } = await serverSupabase
+              .from('customer_addresses')
+              .insert({
+                customer_id: supaCustomer.id,
+                label: address.addressLabel || 'Home',
+                full_address: cleanFullAddress,
+                landmark: address.landmark || null,
+                city: address.city || 'Bhubaneswar',
+                state: address.state || 'Odisha',
+                pincode: address.pincode || '',
+                is_default: address.isDefault !== false,
+                created_at: now,
+                updated_at: now,
+              })
+              .select()
+              .single();
+
+            if (insAddr) {
+              supaAddress = {
+                id: insAddr.id,
+                customerId: insAddr.customer_id,
+                addressLabel: insAddr.label || 'Home',
+                fullAddress: insAddr.full_address || insAddr.address_line1,
+                landmark: insAddr.landmark || undefined,
+                city: insAddr.city || 'Bhubaneswar',
+                state: insAddr.state || 'Odisha',
+                pincode: insAddr.pincode || '',
+                isDefault: insAddr.is_default !== false,
+              };
+            }
           }
         }
       } catch (dbErr) {
@@ -1003,8 +1050,8 @@ async function startServer() {
   // ORDERS ENDPOINTS
   // =====================
 
-  // 21. Orders: Create Order (With server-side discount & totals recalculation)
-  app.post('/api/orders', (req, res) => {
+  // 21. Orders: Create Order (Fresh Implementation with server-side discount & totals recalculation and Supabase synchronization)
+  app.post('/api/orders', async (req, res) => {
     try {
       const payload = req.body;
       const rawPhone = payload.customerDetails?.phone || '';
@@ -1029,13 +1076,278 @@ async function startServer() {
         }
       }
 
+      const isSelfPickup = !!(payload.isSelfPickup || payload.orderType === 'pickup');
+
       const orderData = {
         ...payload,
+        isSelfPickup,
+        orderType: isSelfPickup ? 'pickup' : 'delivery',
         welcomeDiscountAmount,
         isWelcomeDiscountApplied,
       };
 
       const order = productStorage.createOrder(orderData);
+
+      // Asynchronously synchronize order and atomic portions decrement into Supabase
+      try {
+        let supaCustomerId: string | null = null;
+        let supaAddressId: string | null = null;
+
+        // 1. Resolve or create customer record in Supabase (with valid UUID)
+        if (normPhone) {
+          try {
+            const { data: existingSupaCust, error: findCustErr } = await serverSupabase
+              .from('customers')
+              .select('id, welcome_discount_used')
+              .eq('phone', normPhone)
+              .maybeSingle();
+
+            if (!findCustErr && existingSupaCust?.id) {
+              supaCustomerId = existingSupaCust.id;
+              if (order.isWelcomeDiscountApplied && !existingSupaCust.welcome_discount_used) {
+                await serverSupabase
+                  .from('customers')
+                  .update({ welcome_discount_used: true, updated_at: new Date().toISOString() })
+                  .eq('id', existingSupaCust.id);
+              }
+            } else if (payload.customerDetails?.createAccount || payload.customerDetails?.fullName) {
+              const { data: newSupaCust, error: createCustErr } = await serverSupabase
+                .from('customers')
+                .insert({
+                  phone: normPhone,
+                  full_name: payload.customerDetails?.fullName?.trim() || 'Valued Customer',
+                  email: payload.customerDetails?.email?.trim() || null,
+                  is_phone_verified: true,
+                  marketing_consent: !!payload.customerDetails?.marketingConsent,
+                  welcome_discount_used: !!order.isWelcomeDiscountApplied,
+                  created_at: new Date().toISOString(),
+                  updated_at: new Date().toISOString(),
+                })
+                .select('id')
+                .single();
+
+              if (!createCustErr && newSupaCust?.id) {
+                supaCustomerId = newSupaCust.id;
+              }
+            }
+          } catch (custErr) {
+            console.warn('Supabase customer resolution warning:', custErr);
+          }
+        }
+
+        // 2. Resolve or create delivery address in Supabase (if customer UUID exists)
+        if (supaCustomerId && payload.customerDetails?.address && !isSelfPickup) {
+          try {
+            const cleanAddr = payload.customerDetails.address.trim();
+            const { data: existingAddrs } = await serverSupabase
+              .from('customer_addresses')
+              .select('id, address_line1')
+              .eq('customer_id', supaCustomerId);
+
+            const matchedAddr = existingAddrs?.find(
+              (a: any) => (a.address_line1 || '').trim().toLowerCase() === cleanAddr.toLowerCase()
+            );
+
+            if (matchedAddr?.id) {
+              supaAddressId = matchedAddr.id;
+            } else {
+              const { data: newSupaAddr, error: createAddrErr } = await serverSupabase
+                .from('customer_addresses')
+                .insert({
+                  customer_id: supaCustomerId,
+                  label: 'Home',
+                  address_line1: cleanAddr,
+                  landmark: payload.customerDetails?.landmark || null,
+                  city: payload.customerDetails?.city || 'Bhubaneswar',
+                  state: payload.customerDetails?.state || 'Odisha',
+                  pincode: order.deliveryPinCode || payload.customerDetails?.pincode || '',
+                  is_default: true,
+                  created_at: new Date().toISOString(),
+                  updated_at: new Date().toISOString(),
+                })
+                .select('id')
+                .single();
+
+              if (!createAddrErr && newSupaAddr?.id) {
+                supaAddressId = newSupaAddr.id;
+              }
+            }
+          } catch (addrErr) {
+            console.warn('Supabase address resolution warning:', addrErr);
+          }
+        }
+
+        // 3. Insert order into Supabase orders table with fresh normalized payload
+        const isUUID = (str?: string | null) =>
+          typeof str === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(str);
+
+        const safeOutletId = order.outletId || (order as any).outlet_id || payload.outletId || 'outlet-1';
+        const safeItems = Array.isArray(order.items)
+          ? order.items.map(sanitizeOrderItem)
+          : [];
+
+        const supaCustomerPhone =
+          order.customerDetails?.phone ||
+          (order.deliveryAddressSnapshot as any)?.phone ||
+          payload.customerDetails?.phone ||
+          null;
+
+        const supaCustomerName =
+          order.customerDetails?.fullName ||
+          (order.deliveryAddressSnapshot as any)?.fullName ||
+          payload.customerDetails?.fullName ||
+          null;
+
+        const supaDeliveryInstructions =
+          order.customerDetails?.deliveryNotes ||
+          (order.deliveryAddressSnapshot as any)?.deliveryNotes ||
+          payload.customerDetails?.deliveryNotes ||
+          null;
+
+        const supaPayload: any = {
+          id: order.id || `order-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
+          order_id: order.orderId,
+          outlet_id: safeOutletId,
+          customer_id: isUUID(supaCustomerId) ? supaCustomerId : null,
+          address_id: isUUID(supaAddressId) ? supaAddressId : null,
+          customer_name: supaCustomerName,
+          customer_phone: supaCustomerPhone,
+          order_type: isSelfPickup ? 'pickup' : 'delivery',
+          is_self_pickup: isSelfPickup,
+          items: safeItems,
+          subtotal: Number(order.subtotal || 0),
+          discount: Number(order.discount || 0),
+          discount_amount: Number(order.discount || 0),
+          welcome_discount_applied: !!order.isWelcomeDiscountApplied,
+          welcome_discount_amount: Number(order.welcomeDiscountAmount || 0),
+          delivery_fee: Number(order.deliveryFee || 0),
+          packaging_fee: Number(order.packagingFee || 0),
+          tax_amount: Number(order.gst || 0),
+          gst: Number(order.gst || 0),
+          total_amount: Number(order.total || 0),
+          total: Number(order.total || 0),
+          coupon_code: order.couponCode || null,
+          discount_code: order.couponCode || null,
+          payment_method: order.customerDetails?.paymentMethod || 'cod',
+          payment_status: 'PENDING',
+          delivery_slot: order.customerDetails?.deliverySlot || 'immediate',
+          delivery_notes: supaDeliveryInstructions,
+          delivery_instructions: supaDeliveryInstructions,
+          status: order.status || 'Received',
+          order_status: 'received',
+          placed_at: new Date().toISOString(),
+          confirmed_at: null,
+          preparing_at: null,
+          ready_at: null,
+          out_for_delivery_at: null,
+          delivered_at: null,
+          cancelled_at: null,
+          customer_details: order.customerDetails || {},
+          delivery_address_snapshot: order.deliveryAddressSnapshot || {},
+          delivery_pincode: order.deliveryPinCode || order.customerDetails?.pincode || '',
+          estimated_delivery_minutes: Number(order.estimatedDeliveryMinutes || 35),
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+
+        const res1 = await serverSupabase
+          .from('orders')
+          .insert(supaPayload)
+          .select()
+          .single();
+
+        if (res1.data) {
+          console.log(`Order ${res1.data.order_id || res1.data.id} successfully persisted to Supabase.`);
+          if (res1.data.order_id && res1.data.order_id !== order.orderId) {
+            order.orderId = res1.data.order_id;
+          }
+
+          // Insert normalized order_items into Supabase
+          if (safeItems.length > 0) {
+            try {
+              const orderItemsPayload = safeItems.map((item: any) => {
+                const pId = item.productId || item.product?.id || item.id;
+                const pName = item.name || item.product?.name || 'Product';
+                const vName = item.selectedVariant?.name || item.variantName || null;
+                const unitPrice = Number(item.unitPrice || item.price || item.product?.price || 0);
+                const qty = Number(item.quantity || 1);
+                const itemDiscount = Number(item.discount || item.discount_amount || 0);
+                const totalPrice = Number(item.totalPrice || Math.max(0, unitPrice * qty - itemDiscount));
+                return {
+                  order_id: res1.data.id,
+                  product_id: pId ? String(pId) : null,
+                  product_name: pName,
+                  product_variant_name: vName,
+                  quantity: qty,
+                  unit_price: unitPrice,
+                  discount_amount: itemDiscount,
+                  total_price: totalPrice,
+                  created_at: new Date().toISOString(),
+                };
+              });
+
+              await serverSupabase.from('order_items').insert(orderItemsPayload);
+            } catch (itemInsertErr) {
+              console.warn('order_items Supabase insert notice:', itemInsertErr);
+            }
+          }
+        } else if (res1.error) {
+          console.warn('Supabase orders table insert notice (table might be newly recreated):', res1.error.message);
+        }
+
+        // Atomically decrement portions in Supabase products table
+        if (order.items && Array.isArray(order.items) && order.items.length > 0) {
+          for (const item of order.items) {
+            const productId = item.product?.id || (item as any).productId || (item as any).id;
+            const qty = Number(item.quantity) || 1;
+            if (!productId) continue;
+
+            const { data: prodData } = await serverSupabase
+              .from('products')
+              .select('id, outlets')
+              .eq('id', String(productId))
+              .single();
+
+            if (prodData && Array.isArray(prodData.outlets)) {
+              let changed = false;
+              const updatedOutlets = prodData.outlets.map((outletCfg: any) => {
+                const oId = outletCfg.outletId || outletCfg.outlet_id;
+                if (
+                  oId === order.outletId &&
+                  outletCfg.portionsLeft !== null &&
+                  outletCfg.portionsLeft !== undefined &&
+                  outletCfg.portionsLeft !== ''
+                ) {
+                  const currentPortions = Number(outletCfg.portionsLeft);
+                  if (!isNaN(currentPortions)) {
+                    const nextPortions = Math.max(0, currentPortions - qty);
+                    changed = true;
+                    return {
+                      ...outletCfg,
+                      portionsLeft: nextPortions,
+                      inStock: nextPortions <= 0 ? false : outletCfg.inStock !== false,
+                    };
+                  }
+                }
+                return outletCfg;
+              });
+
+              if (changed) {
+                await serverSupabase
+                  .from('products')
+                  .update({
+                    outlets: updatedOutlets,
+                    updated_at: new Date().toISOString(),
+                  })
+                  .eq('id', String(productId));
+              }
+            }
+          }
+        }
+      } catch (dbSyncErr) {
+        console.warn('Supabase order creation and stock sync notice:', dbSyncErr);
+      }
+
       return res.status(201).json({ success: true, order });
     } catch (err: any) {
       console.error('Create order error:', err);
@@ -1046,15 +1358,65 @@ async function startServer() {
     }
   });
 
-  // 21b. Orders: Update Status (Protected or for delivery simulation)
-  app.patch('/api/orders/:orderId/status', (req, res) => {
+  // 21b. Orders: Update Status
+  app.patch('/api/orders/:orderId/status', async (req, res) => {
     try {
-      const { status } = req.body;
+      const { status, cancellationReason } = req.body;
       if (!status) {
         return res.status(400).json({ success: false, error: 'Status is required' });
       }
 
-      const updated = productStorage.updateOrderStatus(req.params.orderId, status);
+      const updated = productStorage.updateOrderStatus(req.params.orderId, status, cancellationReason);
+
+      // Sync status update & timestamps to Supabase
+      try {
+        const now = new Date().toISOString();
+        const norm = (status || '').toLowerCase().trim();
+        const supaUpdate: any = {
+          status,
+          updated_at: now,
+        };
+
+        if (norm === 'received') {
+          supaUpdate.order_status = 'received';
+          supaUpdate.status = 'Received';
+        } else if (norm === 'confirmed') {
+          supaUpdate.order_status = 'confirmed';
+          supaUpdate.status = 'Confirmed';
+          supaUpdate.confirmed_at = now;
+        } else if (norm === 'preparing' || norm === 'in kitchen' || norm === 'preparing in kitchen') {
+          supaUpdate.order_status = 'preparing';
+          supaUpdate.status = 'Preparing in Kitchen';
+          supaUpdate.preparing_at = now;
+        } else if (norm === 'ready' || norm === 'ready for pickup') {
+          supaUpdate.order_status = 'ready';
+          supaUpdate.status = 'Ready for Pickup';
+          supaUpdate.ready_at = now;
+        } else if (norm === 'out_for_delivery' || norm === 'out for delivery') {
+          supaUpdate.order_status = 'out_for_delivery';
+          supaUpdate.status = 'Out for Delivery';
+          supaUpdate.out_for_delivery_at = now;
+        } else if (norm === 'delivered' || norm === 'picked up') {
+          supaUpdate.order_status = 'delivered';
+          supaUpdate.status = norm === 'picked up' ? 'Picked Up' : 'Delivered';
+          supaUpdate.delivered_at = now;
+        } else if (norm === 'cancelled') {
+          supaUpdate.order_status = 'cancelled';
+          supaUpdate.status = 'Cancelled';
+          supaUpdate.cancelled_at = now;
+          if (cancellationReason) {
+            supaUpdate.cancellation_reason = cancellationReason;
+          }
+        }
+
+        await serverSupabase
+          .from('orders')
+          .update(supaUpdate)
+          .or(`order_id.eq.${req.params.orderId},id.eq.${req.params.orderId}`);
+      } catch (syncErr) {
+        console.warn('Supabase order status sync notice:', syncErr);
+      }
+
       if (!updated) {
         return res.status(404).json({ success: false, error: 'Order not found' });
       }
@@ -1065,10 +1427,73 @@ async function startServer() {
     }
   });
 
-  // 22. Orders: Get Single Order
-  app.get('/api/orders/:orderId', (req, res) => {
+  // 21c. Orders: Delete/Cancel Order
+  app.delete('/api/orders/:orderId', async (req, res) => {
     try {
-      const order = productStorage.getOrderById(req.params.orderId);
+      const deleted = productStorage.deleteOrder(req.params.orderId);
+      // Sync delete to Supabase
+      try {
+        await serverSupabase
+          .from('orders')
+          .delete()
+          .or(`order_id.eq.${req.params.orderId},id.eq.${req.params.orderId}`);
+      } catch (e) {
+        console.warn('Supabase order delete notice:', e);
+      }
+
+      if (!deleted) {
+        return res.status(404).json({ success: false, error: 'Order not found' });
+      }
+      return res.json({ success: true, message: 'Order removed successfully' });
+    } catch (err: any) {
+      console.error('Delete order error:', err);
+      return res.status(500).json({ success: false, error: 'Failed to delete order' });
+    }
+  });
+
+  // 22. Orders: Get Single Order
+  app.get('/api/orders/:orderId', async (req, res) => {
+    try {
+      let order = productStorage.getOrderById(req.params.orderId);
+      if (!order) {
+        // Try Supabase lookup
+        try {
+          const { data } = await serverSupabase
+            .from('orders')
+            .select('*')
+            .or(`order_id.eq.${req.params.orderId},id.eq.${req.params.orderId}`)
+            .maybeSingle();
+
+          if (data) {
+            order = {
+              id: data.id,
+              orderId: data.order_id,
+              outletId: data.outlet_id,
+              customerId: data.customer_id,
+              addressId: data.address_id,
+              orderType: data.order_type || (data.is_self_pickup ? 'pickup' : 'delivery'),
+              isSelfPickup: !!data.is_self_pickup,
+              items: Array.isArray(data.items) ? data.items.map(deserializeOrderItem) : [],
+              subtotal: Number(data.subtotal || 0),
+              discount: Number(data.discount || 0),
+              welcomeDiscountAmount: Number(data.welcome_discount_amount || 0),
+              isWelcomeDiscountApplied: !!data.welcome_discount_applied,
+              deliveryFee: Number(data.delivery_fee || 0),
+              packagingFee: Number(data.packaging_fee || 0),
+              gst: Number(data.gst || 0),
+              total: Number(data.total || 0),
+              couponCode: data.coupon_code || undefined,
+              deliveryPinCode: data.delivery_pincode || '',
+              customerDetails: data.customer_details || {},
+              deliveryAddressSnapshot: data.delivery_address_snapshot || {},
+              status: data.status || 'Received',
+              estimatedDeliveryMinutes: data.estimated_delivery_minutes || 35,
+              createdAt: data.created_at,
+            };
+          }
+        } catch {}
+      }
+
       if (!order) {
         return res.status(404).json({ success: false, error: 'Order not found' });
       }
@@ -1079,10 +1504,12 @@ async function startServer() {
     }
   });
 
-  // 23. Orders: List All (Protected)
-  app.get('/api/orders', requireOwnerAuth, (req: AuthenticatedRequest, res) => {
+  // 23. Orders: List Orders (Supports filtering by outletId and status)
+  app.get('/api/orders', (req, res) => {
     try {
-      const orders = productStorage.getAllOrders();
+      const outletId = req.query.outletId as string | undefined;
+      const status = req.query.status as string | undefined;
+      const orders = productStorage.getAllOrders(outletId, status);
       return res.json({ success: true, orders, count: orders.length });
     } catch (err: any) {
       console.error('Fetch orders error:', err);

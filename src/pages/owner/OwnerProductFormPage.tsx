@@ -83,9 +83,9 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
   const [active, setActive] = useState(true);
   const [ingredientsText, setIngredientsText] = useState('Pure Cow Ghee, Heirloom Spices, Saffron, Fresh Ingredients');
 
-  // Outlet assignment state: Record<outletId, { isAssigned: boolean; inStock: boolean; isFeatured: boolean; isBestseller: boolean; isChefSpecial: boolean }>
+  // Outlet assignment state: Record<outletId, { isAssigned: boolean; inStock: boolean; isFeatured: boolean; isBestseller: boolean; isChefSpecial: boolean; portionsLeft: number | null }>
   const [outletConfigs, setOutletConfigs] = useState<
-    Record<string, { isAssigned: boolean; inStock: boolean; isFeatured: boolean; isBestseller: boolean; isChefSpecial: boolean }>
+    Record<string, { isAssigned: boolean; inStock: boolean; isFeatured: boolean; isBestseller: boolean; isChefSpecial: boolean; portionsLeft: number | null }>
   >({});
 
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -159,7 +159,7 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
         );
 
         // Map outlet configs
-        const configs: Record<string, { isAssigned: boolean; inStock: boolean; isFeatured: boolean; isBestseller: boolean; isChefSpecial: boolean }> = {};
+        const configs: Record<string, { isAssigned: boolean; inStock: boolean; isFeatured: boolean; isBestseller: boolean; isChefSpecial: boolean; portionsLeft: number | null }> = {};
         availableOutlets.forEach((o) => {
           if (Array.isArray(found.outlets)) {
             const oc = found.outlets.find((item) => item.outletId === o.id);
@@ -169,6 +169,7 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
               isFeatured: oc ? !!oc.isFeatured : false,
               isBestseller: oc ? !!oc.isBestseller : false,
               isChefSpecial: oc ? !!oc.isChefSpecial : false,
+              portionsLeft: oc && oc.portionsLeft !== undefined ? oc.portionsLeft : null,
             };
           } else if (Array.isArray(found.outletIds)) {
             const isAssigned = found.outletIds.includes(o.id);
@@ -178,6 +179,7 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
               isFeatured: !!found.featured,
               isBestseller: !!found.bestseller,
               isChefSpecial: false,
+              portionsLeft: null,
             };
           } else {
             // Default assigned
@@ -187,6 +189,7 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
               isFeatured: !!found.featured,
               isBestseller: !!found.bestseller,
               isChefSpecial: false,
+              portionsLeft: null,
             };
           }
         });
@@ -198,7 +201,7 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
       // In new mode, default select all active outlets as in stock
       setOutletConfigs((prev) => {
         if (Object.keys(prev).length > 0) return prev;
-        const initial: Record<string, { isAssigned: boolean; inStock: boolean; isFeatured: boolean; isBestseller: boolean; isChefSpecial: boolean }> = {};
+        const initial: Record<string, { isAssigned: boolean; inStock: boolean; isFeatured: boolean; isBestseller: boolean; isChefSpecial: boolean; portionsLeft: number | null }> = {};
         availableOutlets.forEach((o) => {
           initial[o.id] = {
             isAssigned: o.isActive !== false,
@@ -206,6 +209,7 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
             isFeatured: false,
             isBestseller: false,
             isChefSpecial: false,
+            portionsLeft: null,
           };
         });
         return initial;
@@ -217,17 +221,21 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
     setOutletConfigs((prev) => ({
       ...prev,
       [outletId]: {
-        ...(prev[outletId] || { inStock: true, isFeatured: false, isBestseller: false, isChefSpecial: false }),
+        ...(prev[outletId] || { inStock: true, isFeatured: false, isBestseller: false, isChefSpecial: false, portionsLeft: null }),
         isAssigned: !prev[outletId]?.isAssigned,
       },
     }));
   };
 
-  const updateOutletField = (outletId: string, field: 'inStock' | 'isFeatured' | 'isBestseller' | 'isChefSpecial', val: boolean) => {
+  const updateOutletField = (
+    outletId: string,
+    field: 'inStock' | 'isFeatured' | 'isBestseller' | 'isChefSpecial' | 'portionsLeft',
+    val: any
+  ) => {
     setOutletConfigs((prev) => ({
       ...prev,
       [outletId]: {
-        ...(prev[outletId] || { isAssigned: true, inStock: true, isFeatured: false, isBestseller: false, isChefSpecial: false }),
+        ...(prev[outletId] || { isAssigned: true, inStock: true, isFeatured: false, isBestseller: false, isChefSpecial: false, portionsLeft: null }),
         [field]: val,
       },
     }));
@@ -246,6 +254,7 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
             isFeatured: existing ? !!existing.isFeatured : false,
             isBestseller: existing ? !!existing.isBestseller : false,
             isChefSpecial: existing ? !!existing.isChefSpecial : false,
+            portionsLeft: existing ? existing.portionsLeft : null,
           };
         } else {
           // Clear all: uncheck all checkboxes (outlet + ribbon checkboxes) and mark out of stock
@@ -255,6 +264,7 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
             isFeatured: false,
             isBestseller: false,
             isChefSpecial: false,
+            portionsLeft: null,
           };
         }
       });
@@ -308,6 +318,7 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
         isFeatured: !!outletConfigs[o.id]?.isFeatured,
         isBestseller: !!outletConfigs[o.id]?.isBestseller,
         isChefSpecial: !!outletConfigs[o.id]?.isChefSpecial,
+        portionsLeft: outletConfigs[o.id]?.portionsLeft !== undefined ? outletConfigs[o.id].portionsLeft : null,
       }));
 
     if (assignedOutletsList.length === 0) {
@@ -653,7 +664,40 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
 
                           {/* Per-Outlet Controls (Active when assigned) */}
                           {cfg.isAssigned && (
-                            <div className="flex items-center gap-3 pt-2 sm:pt-0 border-t sm:border-t-0 border-gray-200/80">
+                            <div className="flex flex-wrap items-center gap-2 pt-2 sm:pt-0 border-t sm:border-t-0 border-gray-200/80">
+                              {/* Portions Input */}
+                              <div className="flex items-center gap-1 bg-white border border-stone-200 rounded-lg px-2 py-0.5 shadow-2xs">
+                                <span className="text-[10px] font-bold text-stone-600 shrink-0">Portions:</span>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  max="999"
+                                  placeholder="∞"
+                                  value={cfg.portionsLeft === null || cfg.portionsLeft === undefined ? '' : cfg.portionsLeft}
+                                  onChange={(e) => {
+                                    const val = e.target.value.trim();
+                                    const count = val === '' ? null : Math.max(0, parseInt(val, 10) || 0);
+                                    updateOutletField(outlet.id, 'portionsLeft', count);
+                                    if (count === 0) {
+                                      updateOutletField(outlet.id, 'inStock', false);
+                                    }
+                                  }}
+                                  className="w-12 text-center text-xs font-extrabold text-stone-900 bg-stone-50 border border-stone-200 rounded px-1 py-0.5 focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-500"
+                                  title="Portions left for today (leave blank for unlimited)"
+                                />
+                                {cfg.portionsLeft === 0 ? (
+                                  <span className="text-[9px] font-extrabold text-rose-700 bg-rose-50 px-1 py-0.2 rounded border border-rose-200">
+                                    Sold Out
+                                  </span>
+                                ) : cfg.portionsLeft !== null && cfg.portionsLeft !== undefined ? (
+                                  <span className={`text-[9px] font-bold px-1 py-0.2 rounded ${cfg.portionsLeft <= 5 ? 'text-amber-700 bg-amber-50' : 'text-stone-600'}`}>
+                                    left
+                                  </span>
+                                ) : (
+                                  <span className="text-[9px] text-stone-400 font-medium">unlimited</span>
+                                )}
+                              </div>
+
                               {/* Stock status toggle */}
                               <button
                                 type="button"

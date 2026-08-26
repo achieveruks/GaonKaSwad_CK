@@ -10,6 +10,7 @@ import {
   isProductInStockAtOutlet,
   isProductBestsellerAtOutlet,
   isProductChefSpecialAtOutlet,
+  getProductPortionsLeftAtOutlet,
 } from '../lib/locationService';
 import { ProductGallery } from '../components/ProductGallery';
 import { QuantitySelector } from '../components/QuantitySelector';
@@ -155,7 +156,10 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
   const isInStockHere = isProductInStockAtOutlet(product, currentOutletId);
   const isBestsellerHere = isProductBestsellerAtOutlet(product, currentOutletId);
   const isChefSpecialHere = isProductChefSpecialAtOutlet(product, currentOutletId);
-  const isItemInStock = isInStockHere && product.inStock !== false;
+  const portionsLeft = getProductPortionsLeftAtOutlet(product, currentOutletId);
+  const isItemInStock = isInStockHere && product.inStock !== false && portionsLeft !== 0;
+
+  const maxAvailableQuantity = portionsLeft !== null && portionsLeft !== undefined ? portionsLeft : 99;
 
   // Calculate pricing
   const basePrice = selectedVariant ? selectedVariant.price : product.price;
@@ -445,12 +449,47 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
             <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-start gap-2.5 text-xs text-rose-900">
               <AlertTriangle className="w-4 h-4 text-rose-700 shrink-0 mt-0.5" />
               <div>
-                <strong className="block font-bold text-rose-950">Currently Out of Stock</strong>
+                <strong className="block font-bold text-rose-950">
+                  {portionsLeft === 0 ? 'Sold Out for Today' : 'Currently Out of Stock'}
+                </strong>
                 <span>
-                  This delicacy is freshly prepared and is currently sold out
-                  {selectedLocation?.outletName ? ` at ${selectedLocation.outletName}` : ''}.
-                  Please select another delicacy or check back shortly.
+                  {portionsLeft === 0
+                    ? `All freshly simmered portions of this delicacy have been ordered for today${selectedLocation?.outletName ? ` at ${selectedLocation.outletName}` : ''}. Pre-order or check back tomorrow!`
+                    : `This delicacy is freshly prepared and is currently sold out${selectedLocation?.outletName ? ` at ${selectedLocation.outletName}` : ''}. Please select another delicacy or check back shortly.`}
                 </span>
+              </div>
+            </div>
+          ) : portionsLeft !== null && portionsLeft !== undefined ? (
+            <div
+              className={`p-3 rounded-xl flex items-start gap-2.5 text-xs ${
+                portionsLeft <= 5
+                  ? 'bg-amber-50 border border-amber-300 text-amber-950'
+                  : 'bg-stone-50 border border-stone-200 text-stone-700'
+              }`}
+            >
+              <Flame
+                className={`w-4 h-4 shrink-0 mt-0.5 ${
+                  portionsLeft <= 5 ? 'text-amber-600 animate-pulse' : 'text-stone-500'
+                }`}
+              />
+              <div className="flex-1">
+                <div className="flex items-center justify-between">
+                  <strong className="font-bold">
+                    {portionsLeft <= 5 ? 'High Demand Dish — Limited Portions' : 'Fresh Daily Batch'}
+                  </strong>
+                  <span
+                    className={`font-extrabold px-1.5 py-0.5 rounded text-[11px] ${
+                      portionsLeft <= 5 ? 'bg-amber-200 text-amber-900' : 'bg-stone-200 text-stone-800'
+                    }`}
+                  >
+                    {portionsLeft} portion{portionsLeft > 1 ? 's' : ''} left
+                  </span>
+                </div>
+                <p className="text-[11px] mt-0.5 text-stone-600">
+                  {portionsLeft <= 5
+                    ? `Only ${portionsLeft} freshly prepared portion${portionsLeft > 1 ? 's are' : ' is'} left at ${selectedLocation?.outletName || 'this kitchen'}. Order before it runs out!`
+                    : `Authentic dum cooked batch. ${portionsLeft} portions currently available for express delivery.`}
+                </p>
               </div>
             </div>
           ) : null}
@@ -615,7 +654,7 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
               <QuantitySelector
                 quantity={quantity}
                 onDecrease={() => setQuantity((q) => Math.max(1, q - 1))}
-                onIncrease={() => setQuantity((q) => q + 1)}
+                onIncrease={() => setQuantity((q) => Math.min(maxAvailableQuantity, q + 1))}
                 size="md"
               />
             </div>

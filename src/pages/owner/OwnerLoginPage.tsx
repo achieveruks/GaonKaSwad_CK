@@ -71,9 +71,26 @@ export const OwnerLoginPage: React.FC = () => {
     }
   };
 
-  const handleFillDemo = (demoEmail: string, demoPass: string) => {
-    setEmail(demoEmail);
-    setPassword(demoPass);
+  const handleRoleChange = (role: UserRole) => {
+    setSelectedRole(role);
+    setErrorMessage(null);
+    if (role === 'outlet_manager') {
+      setEmail('manager.kvbbsr@gaonkaswad.in');
+      setPassword('gaonkaswad@123');
+    } else {
+      setEmail('achieveruks@gmail.com');
+      setPassword('gaonkaswaD1!');
+    }
+  };
+
+  const handleFillDefault = () => {
+    if (selectedRole === 'outlet_manager') {
+      setEmail('manager.kvbbsr@gaonkaswad.in');
+      setPassword('gaonkaswad@123');
+    } else {
+      setEmail('achieveruks@gmail.com');
+      setPassword('gaonkaswaD1!');
+    }
     setErrorMessage(null);
   };
 
@@ -176,7 +193,7 @@ export const OwnerLoginPage: React.FC = () => {
               <div className="grid grid-cols-2 gap-2">
                 <button
                   type="button"
-                  onClick={() => setSelectedRole('owner')}
+                  onClick={() => handleRoleChange('owner')}
                   className={`p-2.5 rounded-xl border text-left cursor-pointer transition-all ${
                     selectedRole === 'owner'
                       ? 'border-amber-800 bg-amber-50/60 ring-1 ring-amber-800 text-stone-900'
@@ -194,7 +211,7 @@ export const OwnerLoginPage: React.FC = () => {
 
                 <button
                   type="button"
-                  onClick={() => setSelectedRole('outlet_manager')}
+                  onClick={() => handleRoleChange('outlet_manager')}
                   className={`p-2.5 rounded-xl border text-left cursor-pointer transition-all ${
                     selectedRole === 'outlet_manager'
                       ? 'border-amber-800 bg-amber-50/60 ring-1 ring-amber-800 text-stone-900'
@@ -220,7 +237,7 @@ export const OwnerLoginPage: React.FC = () => {
                 </label>
                 <button
                   type="button"
-                  onClick={() => handleFillDemo('achieveruks@gmail.com', 'gaonkaswaD1!')}
+                  onClick={handleFillDefault}
                   className="text-[10px] text-amber-800 hover:underline font-semibold cursor-pointer"
                 >
                   Fill default
@@ -238,7 +255,7 @@ export const OwnerLoginPage: React.FC = () => {
                     setEmail(e.target.value);
                     setErrorMessage(null);
                   }}
-                  placeholder="achieveruks@gmail.com"
+                  placeholder={selectedRole === 'outlet_manager' ? 'manager.kvbbsr@gaonkaswad.in' : 'achieveruks@gmail.com'}
                   className="w-full pl-9 pr-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs text-stone-900 font-medium placeholder:text-stone-400 focus:outline-none focus:border-amber-800 focus:bg-white transition-colors"
                 />
               </div>
@@ -252,7 +269,7 @@ export const OwnerLoginPage: React.FC = () => {
                 </label>
                 <button
                   type="button"
-                  onClick={() => handleFillDemo('achieveruks@gmail.com', 'gaonkaswaD1!')}
+                  onClick={handleFillDefault}
                   className="text-[10px] text-amber-800 hover:underline font-semibold cursor-pointer"
                 >
                   Fill pass

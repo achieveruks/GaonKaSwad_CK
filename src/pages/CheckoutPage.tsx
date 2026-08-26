@@ -1,9 +1,17 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useCart } from '../context/CartContext';
 import { useNavigation } from '../context/NavigationContext';
 import { useLocation } from '../context/LocationContext';
 import { useCustomer } from '../context/CustomerContext';
 import { CheckoutFormData, Order } from '../types';
+import {
+  getProductPortionsLeftAtOutlet,
+  doesOutletDeliverToPinCode,
+  findOutletDeliveringToPinCode,
+  getOutletById,
+} from '../lib/locationService';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { getNextSequentialOrderId, createSupabaseOrder } from '../lib/supabaseService';
 import confetti from 'canvas-confetti';
 import {
   CheckCircle2,
@@ -31,6 +39,10 @@ import {
   UserPlus,
   RefreshCw,
   Tag,
+  AlertTriangle,
+  Info,
+  PackageCheck,
+  Navigation,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -46,10 +58,18 @@ export const CheckoutPage: React.FC = () => {
     includeCutlery,
     specialInstructions,
     clearCart,
+    adaptCartForNewOutlet,
   } = useCart();
 
   const { goToHome, goToShop } = useNavigation();
-  const { selectedLocation, setIsLocationModalOpen } = useLocation();
+  const {
+    selectedLocation,
+    outlets,
+    deliveryZones,
+    currentOutlet,
+    setIsLocationModalOpen,
+    requestLocationChange,
+  } = useLocation();
   const {
     customer,
     defaultAddress,
@@ -57,7 +77,12 @@ export const CheckoutPage: React.FC = () => {
     isWelcomeDiscountEligible,
     lookupCustomer,
     openOtpModal,
+    saveProfile,
   } = useCustomer();
+
+  // Delivery vs Self-Pickup Mode
+  const [orderType, setOrderType] = useState<'delivery' | 'pickup'>('delivery');
+  const [isSelfPickup, setIsSelfPickup] = useState(false);
 
   // Form State
   const [formData, setFormData] = useState<CheckoutFormData>({
@@ -66,9 +91,9 @@ export const CheckoutPage: React.FC = () => {
     phone: customer?.phone || '',
     address: defaultAddress?.fullAddress || '',
     landmark: defaultAddress?.landmark || '',
-    city: defaultAddress?.city || selectedLocation?.cityName || 'Bangalore',
-    state: defaultAddress?.state || selectedLocation?.stateName || 'Karnataka',
-    pincode: defaultAddress?.pincode || (selectedLocation ? selectedLocation.pinCode : ''),
+    city: defaultAddress?.city || '',
+    state: defaultAddress?.state || '',
+    pincode: defaultAddress?.pincode || '',
     deliverySlot: 'immediate',
     deliveryNotes: specialInstructions || '',
     paymentMethod: 'upi',
@@ -76,7 +101,20 @@ export const CheckoutPage: React.FC = () => {
     createAccount: !isCustomerLoggedIn, // default checked for new users to get 10% welcome discount
     marketingConsent: true,
     isPhoneVerified: !!isCustomerLoggedIn,
+    orderType: 'delivery',
+    isSelfPickup: false,
   });
+
+  // Keep isSelfPickup in sync with orderType
+  const handleToggleSelfPickup = (checked: boolean) => {
+    setIsSelfPickup(checked);
+    setOrderType(checked ? 'pickup' : 'delivery');
+    setFormData((prev) => ({
+      ...prev,
+      orderType: checked ? 'pickup' : 'delivery',
+      isSelfPickup: checked,
+    }));
+  };
 
   // Returning customer detection state
   const [returningCustomerFound, setReturningCustomerFound] = useState<{
@@ -92,36 +130,24 @@ export const CheckoutPage: React.FC = () => {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [touched, setTouched] = useState<Record<string, boolean>>({});
 
-  // Sync if customer logs in or changes
+  // Sync if customer logs in or defaultAddress is loaded
   useEffect(() => {
     if (customer) {
       setFormData((prev) => ({
         ...prev,
-        fullName: prev.fullName || customer.fullName || '',
-        email: prev.email || customer.email || '',
+        fullName: customer.fullName || prev.fullName || '',
+        email: customer.email || prev.email || '',
         phone: customer.phone || prev.phone,
-        address: prev.address || defaultAddress?.fullAddress || '',
-        landmark: prev.landmark || defaultAddress?.landmark || '',
-        city: prev.city || defaultAddress?.city || selectedLocation?.cityName || 'Bangalore',
-        state: prev.state || defaultAddress?.state || selectedLocation?.stateName || 'Karnataka',
-        pincode: prev.pincode || defaultAddress?.pincode || selectedLocation?.pinCode || '',
+        address: defaultAddress?.fullAddress || prev.address || '',
+        landmark: defaultAddress?.landmark || prev.landmark || '',
+        city: defaultAddress?.city || prev.city || '',
+        state: defaultAddress?.state || prev.state || '',
+        pincode: defaultAddress?.pincode || prev.pincode || '',
         createAccount: false,
         isPhoneVerified: true,
       }));
     }
-  }, [customer, defaultAddress, selectedLocation]);
-
-  // Sync with selected location
-  useEffect(() => {
-    if (selectedLocation) {
-      setFormData((prev) => ({
-        ...prev,
-        pincode: prev.pincode || selectedLocation.pinCode,
-        city: prev.city || selectedLocation.cityName,
-        state: prev.state || selectedLocation.stateName,
-      }));
-    }
-  }, [selectedLocation]);
+  }, [customer, defaultAddress]);
 
   // Dynamic Returning Customer Phone Lookup
   useEffect(() => {
@@ -152,6 +178,65 @@ export const CheckoutPage: React.FC = () => {
     }
   }, [formData.phone, isCustomerLoggedIn]);
 
+  // PIN Code & Kitchen Delivery Zone Verification
+  const enteredPin = (formData.pincode || '').trim();
+  const isPinComplete = enteredPin.length === 6 && /^\d{6}$/.test(enteredPin);
+
+  const pinServiceability = useMemo(() => {
+    if (!isPinComplete) {
+      return { status: 'INCOMPLETE_PIN' as const, pinCode: enteredPin };
+    }
+
+    const currentOutletId = selectedLocation?.outletId || currentOutlet?.id;
+    const isServedByCurrentKitchen = doesOutletDeliverToPinCode(
+      currentOutletId,
+      enteredPin,
+      deliveryZones
+    );
+
+    if (isServedByCurrentKitchen) {
+      return {
+        status: 'SERVICED_BY_CURRENT' as const,
+        pinCode: enteredPin,
+        outletName: selectedLocation?.outletName || currentOutlet?.name || 'Assigned Kitchen',
+      };
+    }
+
+    // Check if another active kitchen outlet delivers to this customer PIN
+    const alt = findOutletDeliveringToPinCode(enteredPin, outlets, deliveryZones);
+    if (alt) {
+      return {
+        status: 'SERVICED_BY_OTHER' as const,
+        pinCode: enteredPin,
+        currentOutletName: selectedLocation?.outletName || currentOutlet?.name || 'Selected Kitchen',
+        altOutlet: alt.outlet,
+        altZone: alt.zone,
+      };
+    }
+
+    // Not serviced by ANY kitchen
+    return {
+      status: 'NOT_SERVICED' as const,
+      pinCode: enteredPin,
+    };
+  }, [
+    enteredPin,
+    isPinComplete,
+    selectedLocation?.outletId,
+    selectedLocation?.outletName,
+    currentOutlet?.id,
+    currentOutlet?.name,
+    deliveryZones,
+    outlets,
+  ]);
+
+  // Handle switching to the kitchen that delivers to customer's PIN
+  const handleSwitchToAltKitchen = (altOutlet: any, altZone: any) => {
+    requestLocationChange(enteredPin, altOutlet, altZone, cart.length > 0, () => {
+      adaptCartForNewOutlet(altOutlet.id, altOutlet.name);
+    });
+  };
+
   // 10% Welcome Discount Calculation
   // 10% extra discount (capping 50/-) after all discounts
   const remainingSubtotalAfterCoupon = Math.max(0, subtotal - discount);
@@ -164,16 +249,158 @@ export const CheckoutPage: React.FC = () => {
     ? Math.min(50, Math.round(remainingSubtotalAfterCoupon * 0.1))
     : 0;
 
+  // Delivery fee is ₹0 for Self-Pickup / Takeaway
+  const effectiveDeliveryFee = isSelfPickup || orderType === 'pickup' ? 0 : deliveryFee;
+
   const effectiveTotal = Math.max(
     0,
-    subtotal - discount - welcomeDiscountAmount + packagingFee + gst + deliveryFee
+    subtotal - discount - welcomeDiscountAmount + packagingFee + gst + effectiveDeliveryFee
   );
 
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // ==========================================================================
+  // EXTENSIBLE "PLACE ORDER" VALIDATION ENGINE & FLAG
+  // ==========================================================================
+  // Allows adding extra checks easily while ensuring strict outlet-PIN rules.
+  // Rule:
+  // - Self-Pickup is ALWAYS permitted from any outlet (regardless of PIN/address).
+  // - Doorstep Delivery is ONLY permitted if the customer's PIN is serviced by
+  //   the currently selected kitchen outlet.
+  // ==========================================================================
+  const placeOrderValidation = useMemo(() => {
+    // Check 1: Cart non-empty
+    if (cart.length === 0) {
+      return {
+        canPlaceOrder: false,
+        reason: 'Your cart is empty. Please add items to order.',
+        buttonLabel: 'Cart is Empty',
+        actionRequired: null,
+      };
+    }
+
+    // Check 2: Submission in progress
+    if (isSubmitting) {
+      return {
+        canPlaceOrder: false,
+        reason: 'Placing order, please wait...',
+        buttonLabel: 'Sending to Kitchen...',
+        actionRequired: null,
+      };
+    }
+
+    // Check 3: Delivery Mode validations (Outlet cannot deliver outside its zone)
+    if (!isSelfPickup && orderType === 'delivery') {
+      // 3a. Incomplete PIN
+      if (!isPinComplete) {
+        return {
+          canPlaceOrder: false,
+          reason: 'Please enter a valid 6-digit delivery PIN code.',
+          buttonLabel: 'Enter 6-Digit PIN Code',
+          actionRequired: 'ENTER_PIN' as const,
+        };
+      }
+
+      // 3b. PIN is serviced by a DIFFERENT active outlet
+      if (pinServiceability.status === 'SERVICED_BY_OTHER') {
+        const altName = pinServiceability.altOutlet?.name || 'another kitchen';
+        return {
+          canPlaceOrder: false,
+          reason: `PIN ${enteredPin} is serviced by ${altName}, not your active outlet (${pinServiceability.currentOutletName}). Please switch outlet or choose Self-Pickup.`,
+          buttonLabel: 'Switch Outlet or Choose Pickup',
+          actionRequired: 'SWITCH_OUTLET_OR_PICKUP' as const,
+        };
+      }
+
+      // 3c. PIN is NOT serviced by ANY outlet (outside delivery coverage)
+      if (pinServiceability.status === 'NOT_SERVICED') {
+        return {
+          canPlaceOrder: false,
+          reason: `Doorstep delivery is unavailable for PIN ${enteredPin}. Please switch to Self-Pickup.`,
+          buttonLabel: 'Delivery Unavailable for PIN',
+          actionRequired: 'SWITCH_TO_PICKUP' as const,
+        };
+      }
+
+      // 3d. Guarantee PIN is served by current outlet
+      if (pinServiceability.status !== 'SERVICED_BY_CURRENT') {
+        return {
+          canPlaceOrder: false,
+          reason: 'The entered delivery address PIN is not serviceable by the selected kitchen.',
+          buttonLabel: 'Delivery Unavailable',
+          actionRequired: 'SERVICEABILITY_MISMATCH' as const,
+        };
+      }
+    }
+
+    // All validation checks passed successfully!
+    return {
+      canPlaceOrder: true,
+      reason: null,
+      buttonLabel: isSelfPickup
+        ? `Confirm Pickup Order (₹${effectiveTotal})`
+        : `Place Order (₹${effectiveTotal})`,
+      actionRequired: null,
+    };
+  }, [
+    cart.length,
+    isSubmitting,
+    isSelfPickup,
+    orderType,
+    isPinComplete,
+    enteredPin,
+    pinServiceability,
+    effectiveTotal,
+  ]);
+
+  // Main flag for enabling/disabling "Place Order" button (extensible for future checks)
+  const isPlaceOrderEnabled = placeOrderValidation.canPlaceOrder;
+
   const [placedOrder, setPlacedOrder] = useState<Order | null>(null);
   const [orderStage, setOrderStage] = useState<
-    'Received' | 'Preparing in Kitchen' | 'Out for Delivery' | 'Delivered'
+    'Received' | 'Preparing in Kitchen' | 'Out for Delivery' | 'Ready for Pickup' | 'Picked Up' | 'Delivered'
   >('Received');
+
+  // Real-time synchronization of placed order status across devices
+  useEffect(() => {
+    if (!placedOrder) return;
+
+    if (placedOrder.status) {
+      setOrderStage(placedOrder.status as any);
+    }
+
+    if (!isSupabaseConfigured()) return;
+
+    const channel = supabase
+      .channel(`order-live-${placedOrder.id || placedOrder.orderId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'orders',
+        },
+        (payload) => {
+          if (payload.new) {
+            const updated = payload.new;
+            if (
+              (placedOrder.id && updated.id === placedOrder.id) ||
+              (placedOrder.orderId && updated.order_id === placedOrder.orderId)
+            ) {
+              if (updated.status) {
+                setOrderStage(updated.status as any);
+                setPlacedOrder((prev) => (prev ? { ...prev, status: updated.status } : null));
+              }
+            }
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [placedOrder?.id, placedOrder?.orderId]);
 
   // Form Validation Logic
   const validateField = (name: string, value: string): string => {
@@ -230,7 +457,9 @@ export const CheckoutPage: React.FC = () => {
 
   const validateAll = (data: CheckoutFormData): Record<string, string> => {
     const errs: Record<string, string> = {};
-    const fieldsToValidate = ['fullName', 'phone', 'email', 'address', 'city', 'state', 'pincode'];
+    const fieldsToValidate = isSelfPickup
+      ? ['fullName', 'phone', 'email']
+      : ['fullName', 'phone', 'email', 'address', 'city', 'state', 'pincode'];
 
     for (const f of fieldsToValidate) {
       const err = validateField(f, (data as any)[f]);
@@ -248,8 +477,12 @@ export const CheckoutPage: React.FC = () => {
         origin: { y: 0.6 },
       });
 
+      const isPickup = placedOrder.orderType === 'pickup' || placedOrder.isSelfPickup;
+
       const timer1 = setTimeout(() => setOrderStage('Preparing in Kitchen'), 3500);
-      const timer2 = setTimeout(() => setOrderStage('Out for Delivery'), 9000);
+      const timer2 = setTimeout(() => {
+        setOrderStage(isPickup ? 'Ready for Pickup' : 'Out for Delivery');
+      }, 9000);
 
       return () => {
         clearTimeout(timer1);
@@ -354,44 +587,134 @@ export const CheckoutPage: React.FC = () => {
 
     if (cart.length === 0) return;
 
+    // Check Place Order enablement & Serviceability Rules
+    if (!isPlaceOrderEnabled) {
+      if (placeOrderValidation.reason) {
+        alert(placeOrderValidation.reason);
+      }
+      return;
+    }
+
+    // Portion & Stock Inventory Verification before placement
+    const currentOutletId = selectedLocation?.outletId;
+    const inventoryErrors: string[] = [];
+
+    for (const item of cart) {
+      const portionsLeft = getProductPortionsLeftAtOutlet(item.product, currentOutletId);
+      if (portionsLeft !== null && portionsLeft !== undefined) {
+        if (portionsLeft <= 0) {
+          inventoryErrors.push(`"${item.product.name}" is currently sold out at this outlet.`);
+        } else if (item.quantity > portionsLeft) {
+          inventoryErrors.push(
+            `Only ${portionsLeft} portions left for "${item.product.name}" (you have ${item.quantity} in your cart).`
+          );
+        }
+      }
+    }
+
+    if (inventoryErrors.length > 0) {
+      alert(inventoryErrors.join('\n\n'));
+      return;
+    }
+
     setIsSubmitting(true);
 
-    const randomOrderNum = Math.floor(100000 + Math.random() * 900000);
+    let nextOrderId = '';
+    try {
+      nextOrderId = await getNextSequentialOrderId();
+    } catch {
+      nextOrderId = `GKSWAD-#001`;
+    }
+
+    const cleanCustomerPin = (formData.pincode || '').trim();
+
     const newOrder: Order = {
-      orderId: `GKSWAD-${randomOrderNum}`,
+      orderId: nextOrderId,
       customerId: customer?.id,
+      addressId: defaultAddress?.id,
       isGuestCheckout: !isCustomerLoggedIn && !formData.createAccount,
-      outletId: selectedLocation?.outletId || 'outlet-1',
-      outletName: selectedLocation?.outletName || 'Gaon Ka Swad - Bangalore Indiranagar',
-      deliveryPinCode: selectedLocation?.pinCode || formData.pincode,
+      outletId: selectedLocation?.outletId || currentOutlet?.id || 'outlet-1',
+      outletName: selectedLocation?.outletName || currentOutlet?.name || 'Gaon Ka Swad Kitchen',
+      deliveryPinCode: isSelfPickup
+        ? (currentOutlet?.pinCode || selectedLocation?.pinCode || cleanCustomerPin)
+        : cleanCustomerPin,
       createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       items: [...cart],
       subtotal,
       discount,
       welcomeDiscountAmount,
       isWelcomeDiscountApplied: willApplyWelcomeDiscount && welcomeDiscountAmount > 0,
-      deliveryFee,
+      deliveryFee: effectiveDeliveryFee,
       packagingFee,
       gst,
       total: effectiveTotal,
       couponCode: appliedCoupon ? appliedCoupon.code : undefined,
-      customerDetails: { ...formData },
+      customerDetails: {
+        ...formData,
+        orderType: isSelfPickup ? 'pickup' : 'delivery',
+        isSelfPickup,
+      },
+      orderType: isSelfPickup ? 'pickup' : 'delivery',
+      isSelfPickup,
+      kitchenAddress:
+        currentOutlet?.address ||
+        `${selectedLocation?.outletName || 'Gaon Ka Swad Kitchen Facility'}, Main Commercial Hub`,
       deliveryAddressSnapshot: {
-        fullAddress: formData.address,
-        landmark: formData.landmark,
-        city: formData.city,
-        state: formData.state,
-        pincode: formData.pincode,
+        fullAddress: isSelfPickup
+          ? `Self-Pickup from ${currentOutlet?.name || selectedLocation?.outletName || 'Kitchen'}`
+          : (formData.address || ''),
+        landmark: formData.landmark || '',
+        city: formData.city || 'Bhubaneswar',
+        state: formData.state || 'Odisha',
+        pincode: isSelfPickup
+          ? (currentOutlet?.pinCode || selectedLocation?.pinCode || cleanCustomerPin)
+          : cleanCustomerPin,
       },
       status: 'Received',
-      estimatedDeliveryMinutes: 35,
+      estimatedDeliveryMinutes: isSelfPickup ? 25 : 35,
     };
+
+    // Automatically persist customer profile and address for 1-click future reorders
+    let resolvedCustId = customer?.id;
+    let resolvedAddrId = defaultAddress?.id;
+
+    if (formData.phone && (!isSelfPickup ? formData.address : true)) {
+      try {
+        const profRes = await saveProfile({
+          phone: formData.phone,
+          fullName: formData.fullName,
+          email: formData.email || undefined,
+          marketingConsent: formData.marketingConsent,
+          address: !isSelfPickup
+            ? {
+                addressLabel: 'Home',
+                fullAddress: formData.address,
+                landmark: formData.landmark || undefined,
+                city: formData.city,
+                state: formData.state,
+                pincode: formData.pincode,
+                isDefault: true,
+              }
+            : undefined,
+        });
+        if (profRes?.customer?.id) {
+          resolvedCustId = profRes.customer.id;
+          newOrder.customerId = profRes.customer.id;
+        }
+      } catch (err) {
+        console.warn('Customer address auto-persist notice:', err);
+      }
+    }
 
     try {
       const res = await fetch('/api/orders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(newOrder),
+        body: JSON.stringify({
+          ...newOrder,
+          customerId: resolvedCustId || newOrder.customerId,
+          addressId: resolvedAddrId || newOrder.addressId,
+        }),
       });
       const data = await res.json();
       if (data.success && data.order) {
@@ -410,6 +733,8 @@ export const CheckoutPage: React.FC = () => {
 
   // If order was already placed, show the success tracking screen
   if (placedOrder) {
+    const isOrderPickup = placedOrder.orderType === 'pickup' || placedOrder.isSelfPickup;
+
     return (
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12 space-y-6">
         {/* Success Header */}
@@ -425,13 +750,17 @@ export const CheckoutPage: React.FC = () => {
           <div className="space-y-1">
             <div className="inline-flex items-center gap-1.5 bg-emerald-50 text-emerald-800 border border-emerald-200 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider">
               <Sparkles className="w-3 h-3" />
-              <span>Order Successfully Placed</span>
+              <span>
+                {isOrderPickup ? 'Pickup Order Confirmed' : 'Order Successfully Placed'}
+              </span>
             </div>
             <h1 className="font-extrabold text-xl sm:text-3xl text-gray-900">
-              Thank You for Your Order!
+              {isOrderPickup ? 'Self-Pickup Order Confirmed!' : 'Thank You for Your Order!'}
             </h1>
             <p className="text-xs text-gray-600 max-w-md mx-auto">
-              Our master chefs have received your handi request and are preparing your fresh delicacies.
+              {isOrderPickup
+                ? 'Our master chefs are preparing your handi delicacies. Your order will be packed for pickup shortly.'
+                : 'Our master chefs have received your handi request and are preparing your fresh delicacies.'}
             </p>
           </div>
 
@@ -458,7 +787,9 @@ export const CheckoutPage: React.FC = () => {
             <div className="text-left mb-3">
               <h3 className="font-bold text-sm text-gray-900">Live Kitchen Tracker</h3>
               <p className="text-xs text-gray-500">
-                Estimated Delivery: ~{placedOrder.estimatedDeliveryMinutes} mins
+                {isOrderPickup
+                  ? `Estimated Ready Time: ~${placedOrder.estimatedDeliveryMinutes || 25} mins`
+                  : `Estimated Delivery: ~${placedOrder.estimatedDeliveryMinutes || 35} mins`}
               </p>
             </div>
 
@@ -478,6 +809,8 @@ export const CheckoutPage: React.FC = () => {
                   className={`w-8 h-8 rounded-full mx-auto flex items-center justify-center font-bold text-xs transition-colors ${
                     orderStage === 'Preparing in Kitchen' ||
                     orderStage === 'Out for Delivery' ||
+                    orderStage === 'Ready for Pickup' ||
+                    orderStage === 'Picked Up' ||
                     orderStage === 'Delivered'
                       ? 'bg-orange-600 text-white shadow-xs animate-pulse'
                       : 'bg-gray-100 text-gray-400'
@@ -493,29 +826,42 @@ export const CheckoutPage: React.FC = () => {
               <div className="space-y-1">
                 <div
                   className={`w-8 h-8 rounded-full mx-auto flex items-center justify-center font-bold text-xs transition-colors ${
-                    orderStage === 'Out for Delivery' || orderStage === 'Delivered'
+                    orderStage === 'Out for Delivery' ||
+                    orderStage === 'Ready for Pickup' ||
+                    orderStage === 'Picked Up' ||
+                    orderStage === 'Delivered'
                       ? 'bg-orange-600 text-white shadow-xs'
                       : 'bg-gray-100 text-gray-400'
                   }`}
                 >
-                  <Truck className="w-3.5 h-3.5" />
+                  {isOrderPickup ? (
+                    <ShoppingBag className="w-3.5 h-3.5" />
+                  ) : (
+                    <Truck className="w-3.5 h-3.5" />
+                  )}
                 </div>
-                <p className="text-xs font-bold text-gray-900">On The Way</p>
-                <p className="text-[10px] text-gray-400">Insulated Box</p>
+                <p className="text-xs font-bold text-gray-900">
+                  {isOrderPickup ? 'Ready at Counter' : 'On The Way'}
+                </p>
+                <p className="text-[10px] text-gray-400">
+                  {isOrderPickup ? 'Packed Hot' : 'Insulated Box'}
+                </p>
               </div>
 
               {/* Step 4 */}
               <div className="space-y-1">
                 <div
                   className={`w-8 h-8 rounded-full mx-auto flex items-center justify-center font-bold text-xs transition-colors ${
-                    orderStage === 'Delivered'
+                    orderStage === 'Delivered' || orderStage === 'Picked Up'
                       ? 'bg-emerald-600 text-white shadow-xs'
                       : 'bg-gray-100 text-gray-400'
                   }`}
                 >
                   🎉
                 </div>
-                <p className="text-xs font-bold text-gray-900">Delivered</p>
+                <p className="text-xs font-bold text-gray-900">
+                  {isOrderPickup ? 'Picked Up' : 'Delivered'}
+                </p>
                 <p className="text-[10px] text-gray-400">Enjoy Feast</p>
               </div>
             </div>
@@ -525,7 +871,9 @@ export const CheckoutPage: React.FC = () => {
         {/* Invoice & Order Summary Details */}
         <div className="bg-white rounded-2xl border border-gray-200 p-5 sm:p-6 shadow-xs space-y-4">
           <div className="flex items-center justify-between pb-3 border-b border-gray-200">
-            <h3 className="font-bold text-sm text-gray-900">Delivery Invoice Summary</h3>
+            <h3 className="font-bold text-sm text-gray-900">
+              {isOrderPickup ? 'Self-Pickup Invoice Summary' : 'Delivery Invoice Summary'}
+            </h3>
             <button
               type="button"
               onClick={() => window.print()}
@@ -536,29 +884,46 @@ export const CheckoutPage: React.FC = () => {
             </button>
           </div>
 
-          {/* Delivery Address Details */}
+          {/* Fulfillment & Address Details */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs text-stone-600 bg-stone-50 rounded-xl p-3.5 border border-stone-200">
             <div>
-              <p className="font-bold text-stone-900 mb-1">
-                Delivering To (Immutable Snapshot):
-              </p>
-              <p className="font-semibold text-stone-800">{placedOrder.customerDetails.fullName}</p>
-              <p>{placedOrder.customerDetails.address}</p>
-              {placedOrder.customerDetails.landmark && (
-                <p>Landmark: {placedOrder.customerDetails.landmark}</p>
+              {isOrderPickup ? (
+                <>
+                  <p className="font-bold text-stone-900 mb-1 flex items-center gap-1.5">
+                    <Store className="w-3.5 h-3.5 text-amber-800" />
+                    <span>Pickup Location & Kitchen Contact:</span>
+                  </p>
+                  <p className="font-semibold text-stone-800">{placedOrder.outletName}</p>
+                  <p className="text-stone-600">{placedOrder.kitchenAddress || 'Kitchen Main Counter'}</p>
+                  <p className="mt-1.5 font-bold text-amber-900">
+                    Customer: {placedOrder.customerDetails.fullName} (📞 +91 {placedOrder.customerDetails.phone})
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="font-bold text-stone-900 mb-1">
+                    Delivering To (Immutable Snapshot):
+                  </p>
+                  <p className="font-semibold text-stone-800">{placedOrder.customerDetails.fullName}</p>
+                  <p>{placedOrder.customerDetails.address}</p>
+                  {placedOrder.customerDetails.landmark && (
+                    <p>Landmark: {placedOrder.customerDetails.landmark}</p>
+                  )}
+                  <p>
+                    {placedOrder.customerDetails.city}, {placedOrder.customerDetails.state} -{' '}
+                    {placedOrder.customerDetails.pincode}
+                  </p>
+                  <p className="mt-1">📞 +91 {placedOrder.customerDetails.phone}</p>
+                </>
               )}
-              <p>
-                {placedOrder.customerDetails.city}, {placedOrder.customerDetails.state} -{' '}
-                {placedOrder.customerDetails.pincode}
-              </p>
-              <p className="mt-1">📞 +91 {placedOrder.customerDetails.phone}</p>
             </div>
 
             <div>
-              <p className="font-bold text-stone-900 mb-1">Fulfillment Kitchen & Slot:</p>
+              <p className="font-bold text-stone-900 mb-1">Order Details & Mode:</p>
               <p className="text-amber-800 font-bold flex items-center gap-1">
-                <Store className="w-3.5 h-3.5" />
-                <span>{placedOrder.outletName || 'Gaon Ka Swad Kitchen'}</span>
+                <span className="capitalize">
+                  Fulfillment: <strong>{isOrderPickup ? 'Self-Pickup / Takeaway' : 'Doorstep Delivery'}</strong>
+                </span>
               </p>
               <p className="capitalize mt-1">
                 Method: <strong>{placedOrder.customerDetails.paymentMethod.toUpperCase()}</strong> (Demo Test)
@@ -583,13 +948,13 @@ export const CheckoutPage: React.FC = () => {
                 <div key={idx} className="p-2.5 flex items-center justify-between text-xs">
                   <div className="flex items-center gap-2.5">
                     <img
-                      src={item.product.image}
-                      alt={item.product.name}
+                      src={(item as any).image || item.product?.image}
+                      alt={(item as any).name || item.product?.name}
                       className="w-10 h-10 rounded-lg object-cover border border-gray-200"
                       referrerPolicy="no-referrer"
                     />
                     <div>
-                      <h5 className="font-bold text-gray-900">{item.product.name}</h5>
+                      <h5 className="font-bold text-gray-900">{(item as any).name || item.product?.name}</h5>
                       <p className="text-gray-500 text-[10px]">
                         Qty: {item.quantity} {item.selectedVariant ? `• ${item.selectedVariant.name}` : ''}
                       </p>
@@ -952,179 +1317,359 @@ export const CheckoutPage: React.FC = () => {
               )}
             </div>
 
-            {/* 2. Delivery Address */}
-            <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-xs space-y-3">
-              <h3 className="font-bold text-sm text-gray-900 flex items-center gap-1.5">
-                <span className="w-5 h-5 rounded-full bg-orange-600 text-white text-[10px] flex items-center justify-center">
-                  2
-                </span>
-                <span>Delivery Address & Slot</span>
-              </h3>
+            {/* 2. Delivery Address & Fulfillment Method */}
+            <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-xs space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <h3 className="font-bold text-sm text-gray-900 flex items-center gap-1.5">
+                  <span className="w-5 h-5 rounded-full bg-orange-600 text-white text-[10px] flex items-center justify-center">
+                    2
+                  </span>
+                  <span>Fulfillment & Delivery Details</span>
+                </h3>
 
-              <div className="space-y-3">
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">
-                    Complete Address (Flat / House No / Building / Street) <span className="text-rose-600">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    name="address"
-                    value={formData.address}
-                    onChange={handleChange}
-                    onBlur={() => handleBlur('address')}
-                    placeholder="e.g. Flat 301, Silver Heights, MG Road"
-                    className={`w-full px-3 py-2 bg-gray-50 border rounded-xl text-xs sm:text-sm focus:outline-none transition-colors ${
-                      touched.address && errors.address
-                        ? 'border-rose-500 bg-rose-50/40 focus:border-rose-600 text-rose-950'
-                        : 'border-gray-200 focus:border-orange-500 focus:bg-white text-gray-900'
+                {/* Fulfillment Mode Switcher Tabs */}
+                <div className="inline-flex p-1 bg-stone-100 rounded-xl border border-stone-200 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => handleToggleSelfPickup(false)}
+                    className={`px-3 py-1.5 rounded-lg font-bold transition-all flex items-center gap-1.5 ${
+                      !isSelfPickup
+                        ? 'bg-white text-stone-900 shadow-xs'
+                        : 'text-stone-600 hover:text-stone-900'
                     }`}
-                  />
-                  {touched.address && errors.address && (
-                    <p className="mt-1 text-[11px] text-rose-600 font-medium flex items-center gap-1">
-                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                      <span>{errors.address}</span>
-                    </p>
-                  )}
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-gray-700 mb-1">
-                    Landmark <span className="text-stone-400 font-normal">(Optional)</span>
-                  </label>
-                  <input
-                    type="text"
-                    name="landmark"
-                    value={formData.landmark}
-                    onChange={handleChange}
-                    placeholder="e.g. Near Metro Station / Behind Mall"
-                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs sm:text-sm focus:outline-none focus:border-orange-500 focus:bg-white"
-                  />
-                </div>
-
-                <div className="grid grid-cols-3 gap-2.5">
-                  <div>
-                    <label className="block text-xs font-semibold text-gray-700 mb-1">
-                      City <span className="text-rose-600">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      name="city"
-                      placeholder="e.g. Bangalore"
-                      value={formData.city}
-                      onChange={handleChange}
-                      onBlur={() => handleBlur('city')}
-                      className={`w-full px-3 py-2 bg-gray-50 border rounded-xl text-xs sm:text-sm focus:outline-none transition-colors ${
-                        touched.city && errors.city
-                          ? 'border-rose-500 bg-rose-50/40 focus:border-rose-600 text-rose-950'
-                          : 'border-gray-200 focus:border-orange-500 focus:bg-white text-gray-900'
-                      }`}
-                    />
-                    {touched.city && errors.city && (
-                      <p className="mt-1 text-[10px] text-rose-600 font-medium">{errors.city}</p>
-                    )}
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold text-gray-700 mb-1">
-                      State <span className="text-rose-600">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      name="state"
-                      placeholder="e.g. Karnataka"
-                      value={formData.state}
-                      onChange={handleChange}
-                      onBlur={() => handleBlur('state')}
-                      className={`w-full px-3 py-2 bg-gray-50 border rounded-xl text-xs sm:text-sm focus:outline-none transition-colors ${
-                        touched.state && errors.state
-                          ? 'border-rose-500 bg-rose-50/40 focus:border-rose-600 text-rose-950'
-                          : 'border-gray-200 focus:border-orange-500 focus:bg-white text-gray-900'
-                      }`}
-                    />
-                    {touched.state && errors.state && (
-                      <p className="mt-1 text-[10px] text-rose-600 font-medium">{errors.state}</p>
-                    )}
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold text-gray-700 mb-1">
-                      PIN Code <span className="text-rose-600">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      name="pincode"
-                      maxLength={6}
-                      value={formData.pincode}
-                      onChange={handleChange}
-                      onBlur={() => handleBlur('pincode')}
-                      className={`w-full px-3 py-2 bg-gray-50 border rounded-xl text-xs sm:text-sm focus:outline-none transition-colors ${
-                        touched.pincode && errors.pincode
-                          ? 'border-rose-500 bg-rose-50/40 focus:border-rose-600 text-rose-950'
-                          : 'border-gray-200 focus:border-orange-500 focus:bg-white text-gray-900'
-                      }`}
-                    />
-                    {touched.pincode && errors.pincode && (
-                      <p className="mt-1 text-[10px] text-rose-600 font-medium">{errors.pincode}</p>
-                    )}
-                  </div>
-                </div>
-
-                {/* Delivery Slot Choice */}
-                <div className="pt-1">
-                  <label className="block text-xs font-semibold text-gray-700 mb-1.5">
-                    Delivery Speed & Slot
-                  </label>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                    <label
-                      className={`p-2.5 rounded-xl border flex items-center gap-2.5 cursor-pointer transition-all ${
-                        formData.deliverySlot === 'immediate'
-                          ? 'border-orange-600 bg-orange-50/70 ring-1 ring-orange-600/30'
-                          : 'border-gray-200 bg-white'
-                      }`}
-                    >
-                      <input
-                        type="radio"
-                        name="deliverySlot"
-                        value="immediate"
-                        checked={formData.deliverySlot === 'immediate'}
-                        onChange={handleChange}
-                        className="accent-orange-600"
-                      />
-                      <div>
-                        <p className="text-xs font-bold text-gray-900 flex items-center gap-1">
-                          <Truck className="w-3.5 h-3.5 text-orange-600" />
-                          Express 30–40 Mins
-                        </p>
-                        <p className="text-[10px] text-gray-500">Piping hot oven delivery</p>
-                      </div>
-                    </label>
-
-                    <label
-                      className={`p-2.5 rounded-xl border flex items-center gap-2.5 cursor-pointer transition-all ${
-                        formData.deliverySlot === 'dinner'
-                          ? 'border-orange-600 bg-orange-50/70 ring-1 ring-orange-600/30'
-                          : 'border-gray-200 bg-white'
-                      }`}
-                    >
-                      <input
-                        type="radio"
-                        name="deliverySlot"
-                        value="dinner"
-                        checked={formData.deliverySlot === 'dinner'}
-                        onChange={handleChange}
-                        className="accent-orange-600"
-                      />
-                      <div>
-                        <p className="text-xs font-bold text-gray-900 flex items-center gap-1">
-                          <Clock className="w-3.5 h-3.5 text-gray-700" />
-                          Scheduled Slot
-                        </p>
-                        <p className="text-[10px] text-gray-500">Deliver between 8:00 - 9:00 PM</p>
-                      </div>
-                    </label>
-                  </div>
+                  >
+                    <Truck className="w-3.5 h-3.5 text-orange-600" />
+                    <span>Doorstep Delivery</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleToggleSelfPickup(true)}
+                    className={`px-3 py-1.5 rounded-lg font-bold transition-all flex items-center gap-1.5 ${
+                      isSelfPickup
+                        ? 'bg-amber-800 text-white shadow-xs'
+                        : 'text-stone-600 hover:text-stone-900'
+                    }`}
+                  >
+                    <ShoppingBag className="w-3.5 h-3.5" />
+                    <span>Self-Pickup / Takeaway (FREE)</span>
+                  </button>
                 </div>
               </div>
+
+              {/* Self-Pickup Info Card */}
+              {isSelfPickup ? (
+                <div className="p-4 bg-amber-50/80 border border-amber-200 rounded-2xl space-y-3">
+                  <div className="flex items-start gap-3">
+                    <div className="w-10 h-10 rounded-xl bg-amber-800 text-white flex items-center justify-center shrink-0 shadow-xs">
+                      <Store className="w-5 h-5" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <h4 className="font-bold text-sm text-stone-900">
+                          {currentOutlet?.name || selectedLocation?.outletName || 'Gaon Ka Swad Kitchen'}
+                        </h4>
+                        <span className="bg-emerald-100 text-emerald-800 text-[10px] font-extrabold px-2 py-0.5 rounded-full uppercase">
+                          Zero Delivery Fee
+                        </span>
+                      </div>
+                      <p className="text-xs text-stone-700 mt-1 flex items-start gap-1">
+                        <MapPin className="w-3.5 h-3.5 text-amber-800 shrink-0 mt-0.5" />
+                        <span>
+                          {currentOutlet?.address || 'Gaon Ka Swad Kitchen Facility, Main Commercial Hub'}
+                          {currentOutlet?.city ? `, ${currentOutlet.city}` : ''}
+                        </span>
+                      </p>
+                      {currentOutlet?.phone && (
+                        <p className="text-xs text-stone-600 mt-1 flex items-center gap-1">
+                          <PhoneCall className="w-3.5 h-3.5 text-stone-500 shrink-0" />
+                          <span>Kitchen Contact: <strong>{currentOutlet.phone}</strong></span>
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="pt-2 border-t border-amber-200/70 flex flex-col sm:flex-row sm:items-center justify-between text-[11px] text-stone-600 gap-2">
+                    <span className="flex items-center gap-1.5 text-amber-900 font-medium">
+                      <Clock className="w-3.5 h-3.5 text-amber-800" />
+                      Estimated Preparation Time: <strong>~25–30 mins</strong>
+                    </span>
+                    <span className="text-stone-500">
+                      You will receive an SMS/WhatsApp when your clay pot is packed and ready.
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                /* Doorstep Delivery Form Inputs & Serviceability Checks */
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-700 mb-1">
+                      Complete Address (Flat / House No / Building / Street) <span className="text-rose-600">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      name="address"
+                      value={formData.address}
+                      onChange={handleChange}
+                      onBlur={() => handleBlur('address')}
+                      placeholder="e.g. Flat 301, Silver Heights, MG Road"
+                      className={`w-full px-3 py-2 bg-gray-50 border rounded-xl text-xs sm:text-sm focus:outline-none transition-colors ${
+                        touched.address && errors.address
+                          ? 'border-rose-500 bg-rose-50/40 focus:border-rose-600 text-rose-950'
+                          : 'border-gray-200 focus:border-orange-500 focus:bg-white text-gray-900'
+                      }`}
+                    />
+                    {touched.address && errors.address && (
+                      <p className="mt-1 text-[11px] text-rose-600 font-medium flex items-center gap-1">
+                        <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                        <span>{errors.address}</span>
+                      </p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-700 mb-1">
+                      Landmark <span className="text-stone-400 font-normal">(Optional)</span>
+                    </label>
+                    <input
+                      type="text"
+                      name="landmark"
+                      value={formData.landmark}
+                      onChange={handleChange}
+                      placeholder="e.g. Near Metro Station / Behind Mall"
+                      className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs sm:text-sm focus:outline-none focus:border-orange-500 focus:bg-white"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2.5">
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-700 mb-1">
+                        City <span className="text-rose-600">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        name="city"
+                        placeholder="e.g. Bhubaneswar"
+                        value={formData.city}
+                        onChange={handleChange}
+                        onBlur={() => handleBlur('city')}
+                        className={`w-full px-3 py-2 bg-gray-50 border rounded-xl text-xs sm:text-sm focus:outline-none transition-colors ${
+                          touched.city && errors.city
+                            ? 'border-rose-500 bg-rose-50/40 focus:border-rose-600 text-rose-950'
+                            : 'border-gray-200 focus:border-orange-500 focus:bg-white text-gray-900'
+                        }`}
+                      />
+                      {touched.city && errors.city && (
+                        <p className="mt-1 text-[10px] text-rose-600 font-medium">{errors.city}</p>
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-700 mb-1">
+                        State (Odisha) <span className="text-rose-600">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        name="state"
+                        placeholder="Odisha"
+                        value={formData.state}
+                        onChange={handleChange}
+                        onBlur={() => handleBlur('state')}
+                        className={`w-full px-3 py-2 bg-gray-50 border rounded-xl text-xs sm:text-sm focus:outline-none transition-colors ${
+                          touched.state && errors.state
+                            ? 'border-rose-500 bg-rose-50/40 focus:border-rose-600 text-rose-950'
+                            : 'border-gray-200 focus:border-orange-500 focus:bg-white text-gray-900'
+                        }`}
+                      />
+                      {touched.state && errors.state && (
+                        <p className="mt-1 text-[10px] text-rose-600 font-medium">{errors.state}</p>
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-gray-700 mb-1">
+                        PIN Code <span className="text-rose-600">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        name="pincode"
+                        maxLength={6}
+                        placeholder="e.g. 751024"
+                        value={formData.pincode}
+                        onChange={handleChange}
+                        onBlur={() => handleBlur('pincode')}
+                        className={`w-full px-3 py-2 bg-gray-50 border rounded-xl text-xs sm:text-sm focus:outline-none transition-colors ${
+                          touched.pincode && errors.pincode
+                            ? 'border-rose-500 bg-rose-50/40 focus:border-rose-600 text-rose-950'
+                            : 'border-gray-200 focus:border-orange-500 focus:bg-white text-gray-900'
+                        }`}
+                      />
+                      {touched.pincode && errors.pincode && (
+                        <p className="mt-1 text-[10px] text-rose-600 font-medium">{errors.pincode}</p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Dynamic PIN Code Serviceability & Outlet Verification Banner */}
+                  {isPinComplete && (
+                    <div className="pt-1">
+                      {/* Case 1: Serviced by currently selected Kitchen */}
+                      {pinServiceability.status === 'SERVICED_BY_CURRENT' && (
+                        <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-900 flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                            <span>
+                              Delivering to PIN <strong>{pinServiceability.pinCode}</strong> from{' '}
+                              <strong>{pinServiceability.outletName}</strong> (Est. 30–40 mins).
+                            </span>
+                          </div>
+                          <span className="text-[10px] font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full shrink-0">
+                            Kitchen Match
+                          </span>
+                        </div>
+                      )}
+
+                      {/* Case 2: Serviced by a different Kitchen Outlet */}
+                      {pinServiceability.status === 'SERVICED_BY_OTHER' && (
+                        <div className="p-3.5 bg-amber-50 border border-amber-300 rounded-xl text-xs text-amber-950 space-y-2.5 shadow-xs">
+                          <div className="flex items-start gap-2.5">
+                            <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                            <div>
+                              <p className="font-bold text-stone-900">
+                                Kitchen Routing Notice for PIN {pinServiceability.pinCode}
+                              </p>
+                              <p className="text-[11px] text-stone-700 mt-0.5 leading-relaxed">
+                                Your delivery PIN is serviced by{' '}
+                                <strong className="text-amber-900 font-semibold">
+                                  {pinServiceability.altOutlet.name}
+                                </strong>
+                                , not your currently active kitchen (
+                                {pinServiceability.currentOutletName}).
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-amber-200/80">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                handleSwitchToAltKitchen(
+                                  pinServiceability.altOutlet,
+                                  pinServiceability.altZone
+                                )
+                              }
+                              className="px-3 py-1.5 bg-amber-800 hover:bg-amber-900 text-white font-bold rounded-lg transition-colors flex items-center gap-1 text-xs shadow-xs"
+                            >
+                              <RefreshCw className="w-3.5 h-3.5" />
+                              <span>Switch to {pinServiceability.altOutlet.name}</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleToggleSelfPickup(true)}
+                              className="px-3 py-1.5 bg-white border border-stone-300 hover:bg-stone-50 text-stone-800 font-medium rounded-lg transition-colors text-xs"
+                            >
+                              Switch to Self-Pickup
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Case 3: Not serviced by ANY Kitchen Outlet */}
+                      {pinServiceability.status === 'NOT_SERVICED' && (
+                        <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-950 space-y-2.5">
+                          <div className="flex items-start gap-2.5">
+                            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                            <div>
+                              <p className="font-bold text-rose-900">
+                                Delivery Unavailable for PIN {pinServiceability.pinCode}
+                              </p>
+                              <p className="text-[11px] text-rose-800 mt-0.5 leading-relaxed">
+                                We currently do not have delivery partner coverage for this PIN code.
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="p-2.5 bg-white border border-rose-200 rounded-lg space-y-2">
+                            <p className="text-[11px] font-bold text-stone-900">How you can still enjoy our delicacies:</p>
+                            
+                            <label className="flex items-start gap-2 text-stone-800 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={isSelfPickup}
+                                onChange={(e) => handleToggleSelfPickup(e.target.checked)}
+                                className="accent-amber-800 w-4 h-4 mt-0.5 rounded"
+                              />
+                              <div className="text-[11px]">
+                                <span className="font-bold text-amber-900">
+                                  I will take care of delivery by contacting outlet (Self-Pickup / Takeaway)
+                                </span>
+                                <p className="text-stone-500 mt-0.5">
+                                  Pickup directly from {selectedLocation?.outletName || 'our kitchen'} or arrange your own pickup partner (Dunzo / Rapido / Porter). Delivery fee is waived (₹0).
+                                </p>
+                              </div>
+                            </label>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Delivery Slot Choice */}
+                  <div className="pt-1">
+                    <label className="block text-xs font-semibold text-gray-700 mb-1.5">
+                      Delivery Speed & Slot
+                    </label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      <label
+                        className={`p-2.5 rounded-xl border flex items-center gap-2.5 cursor-pointer transition-all ${
+                          formData.deliverySlot === 'immediate'
+                            ? 'border-orange-600 bg-orange-50/70 ring-1 ring-orange-600/30'
+                            : 'border-gray-200 bg-white'
+                        }`}
+                      >
+                        <input
+                          type="radio"
+                          name="deliverySlot"
+                          value="immediate"
+                          checked={formData.deliverySlot === 'immediate'}
+                          onChange={handleChange}
+                          className="accent-orange-600"
+                        />
+                        <div>
+                          <p className="text-xs font-bold text-gray-900 flex items-center gap-1">
+                            <Truck className="w-3.5 h-3.5 text-orange-600" />
+                            Express 30–40 Mins
+                          </p>
+                          <p className="text-[10px] text-gray-500">Piping hot oven delivery</p>
+                        </div>
+                      </label>
+
+                      <label
+                        className={`p-2.5 rounded-xl border flex items-center gap-2.5 cursor-pointer transition-all ${
+                          formData.deliverySlot === 'dinner'
+                            ? 'border-orange-600 bg-orange-50/70 ring-1 ring-orange-600/30'
+                            : 'border-gray-200 bg-white'
+                        }`}
+                      >
+                        <input
+                          type="radio"
+                          name="deliverySlot"
+                          value="dinner"
+                          checked={formData.deliverySlot === 'dinner'}
+                          onChange={handleChange}
+                          className="accent-orange-600"
+                        />
+                        <div>
+                          <p className="text-xs font-bold text-gray-900 flex items-center gap-1">
+                            <Clock className="w-3.5 h-3.5 text-gray-700" />
+                            Scheduled Slot
+                          </p>
+                          <p className="text-[10px] text-gray-500">Deliver between 8:00 - 9:00 PM</p>
+                        </div>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* 3. Payment Method */}
@@ -1314,10 +1859,14 @@ export const CheckoutPage: React.FC = () => {
                 <div className="flex justify-between">
                   <span>Delivery Partner Fee</span>
                   <span>
-                    {deliveryFee === 0 ? (
+                    {isSelfPickup ? (
+                      <span className="text-emerald-700 font-bold bg-emerald-50 px-1.5 py-0.5 rounded text-[11px]">
+                        FREE (Self-Pickup)
+                      </span>
+                    ) : effectiveDeliveryFee === 0 ? (
                       <span className="text-emerald-600 font-bold">FREE</span>
                     ) : (
-                      `₹${deliveryFee}`
+                      `₹${effectiveDeliveryFee}`
                     )}
                   </span>
                 </div>
@@ -1330,18 +1879,23 @@ export const CheckoutPage: React.FC = () => {
                 </div>
               </div>
 
-              {/* Submit CTA */}
               <button
                 type="submit"
                 id="place-order-submit-btn"
-                disabled={isSubmitting}
-                className="w-full py-3 bg-orange-600 hover:bg-orange-700 active:bg-orange-800 disabled:opacity-75 text-white rounded-xl font-bold text-xs sm:text-sm shadow-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
+                disabled={!isPlaceOrderEnabled}
+                className={`w-full py-3 rounded-xl font-bold text-xs sm:text-sm shadow-xs transition-colors flex items-center justify-center gap-1.5 ${
+                  isPlaceOrderEnabled
+                    ? 'bg-orange-600 hover:bg-orange-700 active:bg-orange-800 text-white cursor-pointer'
+                    : 'bg-stone-300 text-stone-600 cursor-not-allowed opacity-75'
+                }`}
               >
                 {isSubmitting ? (
                   <span>Sending to Kitchen...</span>
+                ) : !isPlaceOrderEnabled ? (
+                  <span>{placeOrderValidation.buttonLabel}</span>
                 ) : (
                   <>
-                    <span>Place Order (₹{effectiveTotal})</span>
+                    <span>{placeOrderValidation.buttonLabel}</span>
                     <ArrowRight className="w-3.5 h-3.5" />
                   </>
                 )}

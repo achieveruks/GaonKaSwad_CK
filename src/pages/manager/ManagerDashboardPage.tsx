@@ -18,6 +18,7 @@ import {
   isProductFeaturedAtOutlet,
   isProductBestsellerAtOutlet,
   isProductChefSpecialAtOutlet,
+  getProductPortionsLeftAtOutlet,
 } from '../../lib/locationService';
 import {
   Building2,
@@ -50,6 +51,8 @@ import {
   ShoppingBag,
 } from 'lucide-react';
 
+import { ManagerOrdersTab } from './ManagerOrdersTab';
+
 interface OutletProductItemState {
   productId: string | number;
   isAssigned: boolean;
@@ -57,6 +60,7 @@ interface OutletProductItemState {
   isFeatured: boolean;
   isBestseller: boolean;
   isChefSpecial: boolean;
+  portionsLeft: number | null;
 }
 
 export const ManagerDashboardPage: React.FC = () => {
@@ -69,8 +73,8 @@ export const ManagerDashboardPage: React.FC = () => {
     refreshProducts,
   } = useProducts();
 
-  // Active Tab: 'kitchen' (The one outlet card + manage menu) or 'delivery-zones'
-  const [activeTab, setActiveTab] = useState<'kitchen' | 'delivery-zones'>('kitchen');
+  // Active Tab: 'orders' (Received orders & live kitchen queue), 'kitchen' (Menu & branch settings), or 'delivery-zones'
+  const [activeTab, setActiveTab] = useState<'orders' | 'kitchen' | 'delivery-zones'>('orders');
 
   const [outlets, setOutlets] = useState<Outlet[]>([]);
   const [zones, setZones] = useState<DeliveryZone[]>([]);
@@ -307,6 +311,7 @@ export const ManagerDashboardPage: React.FC = () => {
         isFeatured: isProductFeaturedAtOutlet(p, outletId),
         isBestseller: isProductBestsellerAtOutlet(p, outletId),
         isChefSpecial: isProductChefSpecialAtOutlet(p, outletId),
+        portionsLeft: getProductPortionsLeftAtOutlet(p, outletId),
       };
     });
 
@@ -326,6 +331,22 @@ export const ManagerDashboardPage: React.FC = () => {
         [productId]: {
           ...cur,
           isAssigned: !cur.isAssigned,
+        },
+      };
+    });
+  };
+
+  const handleSetItemPortions = (productId: string | number, portions: number | null) => {
+    setOutletItemStates((prev) => {
+      const cur = prev[productId];
+      if (!cur) return prev;
+      return {
+        ...prev,
+        [productId]: {
+          ...cur,
+          portionsLeft: portions,
+          // If manager sets portions to 0, mark inStock according to convention or keep inStock
+          inStock: portions === 0 ? false : cur.inStock,
         },
       };
     });
@@ -398,6 +419,7 @@ export const ManagerDashboardPage: React.FC = () => {
         isFeatured: s.isFeatured,
         isBestseller: s.isBestseller,
         isChefSpecial: s.isChefSpecial,
+        portionsLeft: s.portionsLeft,
       }));
 
       await batchUpdateOutletProducts(currentOutlet.id, updates);
@@ -617,27 +639,41 @@ export const ManagerDashboardPage: React.FC = () => {
               </div>
             </div>
 
-            {/* Manager Navigation Options: "Dashboard" and "Delivery Zones & PINs" */}
-            <nav className="flex items-center gap-1.5">
+            {/* Manager Navigation Options: "Kitchen Orders", "Menu & Kitchen", and "Delivery Zones & PINs" */}
+            <nav className="flex items-center gap-1.5 overflow-x-auto">
+              <button
+                type="button"
+                id="manager-nav-orders"
+                onClick={() => setActiveTab('orders')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
+                  activeTab === 'orders'
+                    ? 'bg-amber-800 text-white shadow-2xs'
+                    : 'text-stone-300 hover:text-white hover:bg-stone-800'
+                }`}
+              >
+                <ShoppingBag className="w-3.5 h-3.5" />
+                <span>Kitchen Orders</span>
+              </button>
+
               <button
                 type="button"
                 id="manager-nav-dashboard"
                 onClick={() => setActiveTab('kitchen')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
                   activeTab === 'kitchen'
                     ? 'bg-amber-800 text-white shadow-2xs'
                     : 'text-stone-300 hover:text-white hover:bg-stone-800'
                 }`}
               >
                 <Store className="w-3.5 h-3.5" />
-                <span>Dashboard</span>
+                <span>Menu & Kitchen</span>
               </button>
 
               <button
                 type="button"
                 id="manager-nav-delivery-zones"
                 onClick={() => setActiveTab('delivery-zones')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
                   activeTab === 'delivery-zones'
                     ? 'bg-amber-800 text-white shadow-2xs'
                     : 'text-stone-300 hover:text-white hover:bg-stone-800'
@@ -723,6 +759,14 @@ export const ManagerDashboardPage: React.FC = () => {
               ))}
             </select>
           </div>
+        )}
+
+        {/* TAB 0: KITCHEN ORDERS (Live orders, received, prepare, pack, transition, timestamps) */}
+        {activeTab === 'orders' && currentOutlet && (
+          <ManagerOrdersTab
+            currentOutlet={currentOutlet}
+            showFeedback={showFeedback}
+          />
         )}
 
         {/* TAB 1: KITCHEN DASHBOARD (Dedicated Single Outlet Card + Live Status + Manage Menu) */}
@@ -1295,9 +1339,38 @@ export const ManagerDashboardPage: React.FC = () => {
                         </div>
                       </div>
 
-                      {/* Right: Badges & Stock Controls */}
+                      {/* Right: Badges, Portion Limit & Stock Controls */}
                       {state.isAssigned && (
                         <div className="flex flex-wrap items-center gap-1.5 self-end sm:self-center">
+                          {/* Portion Counter Input */}
+                          <div className="flex items-center gap-1 bg-white border border-stone-200 rounded-lg px-2 py-0.5 shadow-2xs">
+                            <span className="text-[10px] font-bold text-stone-600 shrink-0">Portions:</span>
+                            <input
+                              type="number"
+                              min="0"
+                              max="999"
+                              placeholder="∞"
+                              value={state.portionsLeft === null || state.portionsLeft === undefined ? '' : state.portionsLeft}
+                              onChange={(e) => {
+                                const val = e.target.value.trim();
+                                handleSetItemPortions(product.id, val === '' ? null : Math.max(0, parseInt(val, 10) || 0));
+                              }}
+                              className="w-12 text-center text-xs font-extrabold text-stone-900 bg-stone-50 border border-stone-200 rounded px-1 py-0.5 focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-500"
+                              title="Portions left for today (leave blank for unlimited)"
+                            />
+                            {state.portionsLeft === 0 ? (
+                              <span className="text-[9px] font-extrabold text-rose-700 bg-rose-50 px-1 py-0.2 rounded border border-rose-200">
+                                Sold Out
+                              </span>
+                            ) : state.portionsLeft !== null && state.portionsLeft !== undefined ? (
+                              <span className={`text-[9px] font-bold px-1 py-0.2 rounded ${state.portionsLeft <= 5 ? 'text-amber-700 bg-amber-50' : 'text-stone-600'}`}>
+                                left
+                              </span>
+                            ) : (
+                              <span className="text-[9px] text-stone-400 font-medium">unlimited</span>
+                            )}
+                          </div>
+
                           {/* In Stock Toggle */}
                           <button
                             type="button"

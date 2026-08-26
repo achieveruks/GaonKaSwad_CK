@@ -2,7 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useMemo } from '
 import { Product, CartItem, ProductVariant, ProductAddon, Coupon } from '../types';
 import { COUPONS } from '../data/products';
 import { useLocation } from './LocationContext';
-import { isProductAvailableAtOutlet, isProductInStockAtOutlet } from '../lib/locationService';
+import { isProductAvailableAtOutlet, isProductInStockAtOutlet, getProductPortionsLeftAtOutlet } from '../lib/locationService';
 
 interface ToastMessage {
   id: string;
@@ -43,6 +43,11 @@ interface CartContextType {
   toasts: ToastMessage[];
   showToast: (title: string, message: string, type?: 'success' | 'info' | 'error', image?: string) => void;
   removeToast: (id: string) => void;
+  adaptCartForNewOutlet: (newOutletId: string, newOutletName?: string) => {
+    removedItems: { name: string; quantity: number; reason: string }[];
+    adjustedItems: { name: string; oldQty: number; newQty: number; portionsLeft: number }[];
+    keptItemsCount: number;
+  };
   
   // Location & Outlet rules
   currentOutletId: string | null;
@@ -145,16 +150,38 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return false;
     }
 
-    // 2. Check product inStock status (outlet-specific or global)
+    // 2. Check product inStock status and portions left (outlet-specific or global)
     const isInStockHere = isProductInStockAtOutlet(product, selectedLocation.outletId);
-    if (product.inStock === false || !isInStockHere) {
+    const portionsLeft = getProductPortionsLeftAtOutlet(product, selectedLocation.outletId);
+
+    if (product.inStock === false || !isInStockHere || portionsLeft === 0) {
       showToast(
-        'Out of Stock',
-        `${product.name} is currently out of stock at ${selectedLocation.outletName}. Please check back shortly!`,
+        'Sold Out / Out of Stock',
+        `${product.name} is currently sold out at ${selectedLocation.outletName}. Please check back tomorrow!`,
         'error',
         product.image
       );
       return false;
+    }
+
+    // Check existing quantity in cart against portions left
+    if (portionsLeft !== null && portionsLeft !== undefined) {
+      const existingProductQtyInCart = cart
+        .filter((item) => item.product.id === product.id)
+        .reduce((sum, item) => sum + item.quantity, 0);
+
+      if (existingProductQtyInCart + quantity > portionsLeft) {
+        const availableToAdd = Math.max(0, portionsLeft - existingProductQtyInCart);
+        showToast(
+          'Portion Limit Reached',
+          availableToAdd > 0
+            ? `Only ${availableToAdd} more portion${availableToAdd > 1 ? 's' : ''} available to add for ${product.name}.`
+            : `All ${portionsLeft} available portions of ${product.name} are already in your cart.`,
+          'error',
+          product.image
+        );
+        return false;
+      }
     }
 
     // 3. Check product outlet availability
@@ -211,6 +238,25 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const updateQuantity = (cartItemId: string, delta: number) => {
     setCart((prev) => {
+      const itemToUpdate = prev.find((i) => i.id === cartItemId);
+      if (itemToUpdate && delta > 0 && selectedLocation?.outletId) {
+        const portionsLeft = getProductPortionsLeftAtOutlet(itemToUpdate.product, selectedLocation.outletId);
+        if (portionsLeft !== null && portionsLeft !== undefined) {
+          const currentTotalForProduct = prev
+            .filter((i) => i.product.id === itemToUpdate.product.id)
+            .reduce((sum, i) => sum + i.quantity, 0);
+
+          if (currentTotalForProduct + delta > portionsLeft) {
+            showToast(
+              'Max Portions Reached',
+              `Only ${portionsLeft} portions of ${itemToUpdate.product.name} are available for today.`,
+              'info'
+            );
+            return prev;
+          }
+        }
+      }
+
       return prev
         .map((item) => {
           if (item.id === cartItemId) {
@@ -234,6 +280,111 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const clearCart = () => {
     setCart([]);
     setAppliedCoupon(null);
+  };
+
+  /**
+   * Adapts the current cart when switching kitchen outlets:
+   * 1. Removes items not served or completely sold out in the new outlet
+   * 2. Reduces quantities for items exceeding the new outlet's portions left
+   * 3. Retains all compatible items
+   * 4. Shows clear, friendly notifications to the customer
+   */
+  const adaptCartForNewOutlet = (newOutletId: string, newOutletName?: string) => {
+    const removedItems: { name: string; quantity: number; reason: string }[] = [];
+    const adjustedItems: { name: string; oldQty: number; newQty: number; portionsLeft: number }[] = [];
+
+    const updatedCart: CartItem[] = [];
+
+    // Track total allocated portions per product in the new cart to prevent exceeding limits
+    const allocatedPerProduct: Record<string, number> = {};
+
+    for (const item of cart) {
+      const product = item.product;
+      const isServed = isProductAvailableAtOutlet(product, newOutletId);
+      const isInStock = isProductInStockAtOutlet(product, newOutletId);
+      const portionsLeft = getProductPortionsLeftAtOutlet(product, newOutletId);
+
+      if (!isServed) {
+        removedItems.push({
+          name: product.name,
+          quantity: item.quantity,
+          reason: 'Not served at this kitchen outlet',
+        });
+        continue;
+      }
+
+      if (!isInStock || portionsLeft === 0) {
+        removedItems.push({
+          name: product.name,
+          quantity: item.quantity,
+          reason: 'Currently sold out for today at this kitchen',
+        });
+        continue;
+      }
+
+      if (portionsLeft !== null && portionsLeft !== undefined) {
+        const prodIdStr = String(product.id);
+        const alreadyAllocated = allocatedPerProduct[prodIdStr] || 0;
+        const remainingAllowed = Math.max(0, portionsLeft - alreadyAllocated);
+
+        if (remainingAllowed <= 0) {
+          removedItems.push({
+            name: product.name,
+            quantity: item.quantity,
+            reason: `Limited portions available (Only ${portionsLeft} portions left for today)`,
+          });
+          continue;
+        } else if (item.quantity > remainingAllowed) {
+          adjustedItems.push({
+            name: product.name,
+            oldQty: item.quantity,
+            newQty: remainingAllowed,
+            portionsLeft,
+          });
+          allocatedPerProduct[prodIdStr] = alreadyAllocated + remainingAllowed;
+          updatedCart.push({
+            ...item,
+            quantity: remainingAllowed,
+          });
+        } else {
+          allocatedPerProduct[prodIdStr] = alreadyAllocated + item.quantity;
+          updatedCart.push(item);
+        }
+      } else {
+        updatedCart.push(item);
+      }
+    }
+
+    setCart(updatedCart);
+
+    if (removedItems.length > 0 || adjustedItems.length > 0) {
+      const kitchenLabel = newOutletName ? ` (${newOutletName})` : '';
+      if (removedItems.length > 0 && adjustedItems.length === 0) {
+        showToast(
+          'Cart Updated for Kitchen',
+          `${removedItems.length} item(s) removed as they are not available at the new kitchen${kitchenLabel}.`,
+          'info'
+        );
+      } else if (adjustedItems.length > 0 && removedItems.length === 0) {
+        showToast(
+          'Portions Adjusted',
+          `Quantities for ${adjustedItems.map((a) => a.name).join(', ')} were adjusted to match kitchen portion availability.`,
+          'info'
+        );
+      } else {
+        showToast(
+          'Cart Synchronized',
+          `Cart updated for ${newOutletName || 'new kitchen'}: ${removedItems.length} item(s) removed, ${adjustedItems.length} portion(s) adjusted.`,
+          'info'
+        );
+      }
+    }
+
+    return {
+      removedItems,
+      adjustedItems,
+      keptItemsCount: updatedCart.reduce((sum, i) => sum + i.quantity, 0),
+    };
   };
 
   const totalItemsCount = cart.reduce((sum, item) => sum + item.quantity, 0);
@@ -337,6 +488,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
         toasts,
         showToast,
         removeToast,
+        adaptCartForNewOutlet,
         currentOutletId,
         minimumOrderValue: outletMinOrder,
         isMinimumOrderMet,
