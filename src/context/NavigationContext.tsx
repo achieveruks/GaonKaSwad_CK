@@ -7,6 +7,7 @@ export type AppRoute =
   | { path: '/product'; slug: string }
   | { path: '/cart' }
   | { path: '/checkout' }
+  | { path: '/profile' }
   | { path: '/about' }
   | { path: '/contact' }
   | { path: '/order-success'; orderId: string }
@@ -29,6 +30,7 @@ interface NavigationContextType {
   goToProduct: (slug: string) => void;
   goToCart: () => void;
   goToCheckout: () => void;
+  goToProfile: () => void;
   goToAbout: () => void;
   goToContact: () => void;
   goToCategories: () => void;
@@ -118,6 +120,7 @@ function parseHash(hash: string): AppRoute {
 
   if (main === 'cart') return { path: '/cart' };
   if (main === 'checkout') return { path: '/checkout' };
+  if (main === 'profile') return { path: '/profile' };
   if (main === 'about') return { path: '/about' };
   if (main === 'contact') return { path: '/contact' };
 
@@ -148,6 +151,8 @@ function routeToHash(route: AppRoute): string {
       return '#/cart';
     case '/checkout':
       return '#/checkout';
+    case '/profile':
+      return '#/profile';
     case '/about':
       return '#/about';
     case '/contact':
@@ -213,6 +218,7 @@ export const NavigationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const goToProduct = (slug: string) => navigate({ path: '/product', slug });
   const goToCart = () => navigate({ path: '/cart' });
   const goToCheckout = () => navigate({ path: '/checkout' });
+  const goToProfile = () => navigate({ path: '/profile' });
   const goToAbout = () => navigate({ path: '/about' });
   const goToContact = () => navigate({ path: '/contact' });
   const goToCategories = () => navigate({ path: '/categories' });
@@ -241,6 +247,7 @@ export const NavigationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         goToProduct,
         goToCart,
         goToCheckout,
+        goToProfile,
         goToAbout,
         goToContact,
         goToCategories,

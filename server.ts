@@ -469,7 +469,8 @@ async function startServer() {
           );
 
           if (matchedAddr) {
-            const { data: updAddr } = await serverSupabase
+            let updAddr: any = null;
+            const resUpd = await serverSupabase
               .from('customer_addresses')
               .update({
                 label: address.addressLabel || matchedAddr.label || 'Home',
@@ -483,7 +484,28 @@ async function startServer() {
               })
               .eq('id', matchedAddr.id)
               .select()
-              .single();
+              .maybeSingle();
+
+            if (resUpd.error && (resUpd.error.message.includes('full_address') || resUpd.error.message.includes('column') || resUpd.error.code === 'PGRST204')) {
+              const resFallback = await serverSupabase
+                .from('customer_addresses')
+                .update({
+                  label: address.addressLabel || matchedAddr.label || 'Home',
+                  address_line1: cleanFullAddress,
+                  landmark: address.landmark !== undefined ? address.landmark : matchedAddr.landmark,
+                  city: address.city || matchedAddr.city || 'Bhubaneswar',
+                  state: address.state || matchedAddr.state || 'Odisha',
+                  pincode: address.pincode || matchedAddr.pincode || '',
+                  is_default: address.isDefault !== false,
+                  updated_at: now,
+                })
+                .eq('id', matchedAddr.id)
+                .select()
+                .maybeSingle();
+              updAddr = resFallback.data;
+            } else {
+              updAddr = resUpd.data;
+            }
 
             if (updAddr) {
               supaAddress = {
@@ -499,7 +521,8 @@ async function startServer() {
               };
             }
           } else {
-            const { data: insAddr } = await serverSupabase
+            let insAddr: any = null;
+            const resIns = await serverSupabase
               .from('customer_addresses')
               .insert({
                 customer_id: supaCustomer.id,
@@ -514,7 +537,29 @@ async function startServer() {
                 updated_at: now,
               })
               .select()
-              .single();
+              .maybeSingle();
+
+            if (resIns.error && (resIns.error.message.includes('full_address') || resIns.error.message.includes('column') || resIns.error.code === 'PGRST204')) {
+              const resFallback = await serverSupabase
+                .from('customer_addresses')
+                .insert({
+                  customer_id: supaCustomer.id,
+                  label: address.addressLabel || 'Home',
+                  address_line1: cleanFullAddress,
+                  landmark: address.landmark || null,
+                  city: address.city || 'Bhubaneswar',
+                  state: address.state || 'Odisha',
+                  pincode: address.pincode || '',
+                  is_default: address.isDefault !== false,
+                  created_at: now,
+                  updated_at: now,
+                })
+                .select()
+                .maybeSingle();
+              insAddr = resFallback.data;
+            } else {
+              insAddr = resIns.data;
+            }
 
             if (insAddr) {
               supaAddress = {
@@ -564,6 +609,316 @@ async function startServer() {
     } catch (err: any) {
       console.error('Customer profile save error:', err);
       return res.status(400).json({ success: false, error: err.message || 'Failed to save customer profile' });
+    }
+  });
+
+  // Get all addresses for a customer (Always fresh from DB - No Cache)
+  app.get('/api/customers/addresses', async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    try {
+      const customerId = typeof req.query.customerId === 'string' ? req.query.customerId : '';
+      const phone = typeof req.query.phone === 'string' ? req.query.phone : '';
+      const normPhone = phone.replace(/\D/g, '').slice(-10);
+
+      let supaCustId: string | null = null;
+      if (customerId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(customerId)) {
+        supaCustId = customerId;
+      }
+
+      if (!supaCustId && normPhone) {
+        const { data: c } = await serverSupabase
+          .from('customers')
+          .select('id')
+          .eq('phone', normPhone)
+          .maybeSingle();
+        if (c) supaCustId = c.id;
+      }
+
+      if (supaCustId) {
+        const { data: addrs, error } = await serverSupabase
+          .from('customer_addresses')
+          .select('*')
+          .eq('customer_id', supaCustId)
+          .order('is_default', { ascending: false })
+          .order('created_at', { ascending: false });
+
+        if (!error && addrs) {
+          const formatted = addrs.map((a: any) => ({
+            id: String(a.id),
+            customerId: String(a.customer_id),
+            addressLabel: a.label || 'Home',
+            fullAddress: a.full_address || a.address_line1 || '',
+            landmark: a.landmark || undefined,
+            city: a.city || 'Bhubaneswar',
+            state: a.state || 'Odisha',
+            pincode: a.pincode || '',
+            isDefault: a.is_default !== false,
+            createdAt: a.created_at,
+          }));
+          return res.json({ success: true, addresses: formatted });
+        }
+      }
+
+      return res.json({ success: true, addresses: [] });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Insert a new address for a customer
+  app.post('/api/customers/addresses', async (req, res) => {
+    try {
+      const { customerId, phone, address } = req.body;
+      const normPhone = String(phone || '').replace(/\D/g, '').slice(-10);
+
+      let supaCustId: string | null = null;
+
+      // 1. If valid UUID customerId provided, verify it exists
+      if (customerId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(customerId))) {
+        const { data: c } = await serverSupabase
+          .from('customers')
+          .select('id')
+          .eq('id', customerId)
+          .maybeSingle();
+        if (c) supaCustId = c.id;
+      }
+
+      // 2. If not found by ID, look up or create customer by normalized 10-digit phone
+      if (!supaCustId && normPhone) {
+        const { data: c } = await serverSupabase
+          .from('customers')
+          .select('id')
+          .eq('phone', normPhone)
+          .maybeSingle();
+        if (c?.id) {
+          supaCustId = c.id;
+        } else {
+          const { data: newCust, error: newCustErr } = await serverSupabase
+            .from('customers')
+            .insert({
+              phone: normPhone,
+              full_name: address?.fullName || 'Customer',
+              is_phone_verified: true,
+              marketing_consent: false,
+              welcome_discount_used: false,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            })
+            .select('id')
+            .maybeSingle();
+          if (newCust?.id) {
+            supaCustId = newCust.id;
+          } else if (newCustErr) {
+            console.warn('Customer create during address insert warning:', newCustErr);
+            // Re-check in case created in parallel
+            const { data: retryCust } = await serverSupabase
+              .from('customers')
+              .select('id')
+              .eq('phone', normPhone)
+              .maybeSingle();
+            if (retryCust?.id) supaCustId = retryCust.id;
+          }
+        }
+      }
+
+      if (!supaCustId) {
+        return res.status(400).json({ success: false, error: 'Customer could not be resolved. Please enter a valid phone number.' });
+      }
+
+      const now = new Date().toISOString();
+      const cleanFullAddress = (address?.fullAddress || address?.address || '').trim();
+      const isDefault = address?.isDefault !== false;
+
+      if (isDefault) {
+        try {
+          await serverSupabase
+            .from('customer_addresses')
+            .update({ is_default: false, updated_at: now })
+            .eq('customer_id', supaCustId);
+        } catch {}
+      }
+
+      // Prepare payload with standard full_address column
+      const payload: Record<string, any> = {
+        customer_id: supaCustId,
+        label: address?.addressLabel || address?.label || 'Home',
+        full_address: cleanFullAddress,
+        landmark: address?.landmark || null,
+        city: address?.city || 'Bhubaneswar',
+        state: address?.state || 'Odisha',
+        pincode: address?.pincode || '',
+        is_default: isDefault,
+        created_at: now,
+        updated_at: now,
+      };
+
+      let inserted: any = null;
+      let insErr: any = null;
+
+      const resInsert = await serverSupabase
+        .from('customer_addresses')
+        .insert(payload)
+        .select()
+        .maybeSingle();
+
+      inserted = resInsert.data;
+      insErr = resInsert.error;
+
+      // Fallback only if full_address column is named address_line1 in legacy instances
+      if (insErr && insErr.message && insErr.message.includes('full_address')) {
+        delete payload.full_address;
+        payload.address_line1 = cleanFullAddress;
+        const resFallback = await serverSupabase
+          .from('customer_addresses')
+          .insert(payload)
+          .select()
+          .maybeSingle();
+        inserted = resFallback.data;
+        insErr = resFallback.error;
+      }
+
+      if (insErr) {
+        console.error('Customer address insert Supabase error:', JSON.stringify(insErr));
+        return res.status(400).json({
+          success: false,
+          error: insErr.message || insErr.details || 'Failed to insert customer address into database',
+        });
+      }
+
+      return res.json({
+        success: true,
+        address: {
+          id: String(inserted?.id || `addr-${Date.now()}`),
+          customerId: String(inserted?.customer_id || supaCustId),
+          addressLabel: inserted?.label || address?.addressLabel || 'Home',
+          fullAddress: inserted?.full_address || inserted?.address_line1 || cleanFullAddress,
+          landmark: inserted?.landmark || address?.landmark || undefined,
+          city: inserted?.city || address?.city || 'Bhubaneswar',
+          state: inserted?.state || address?.state || 'Odisha',
+          pincode: inserted?.pincode || address?.pincode || '',
+          isDefault: inserted?.is_default !== false,
+        },
+      });
+    } catch (err: any) {
+      console.error('Customer address insert exception:', err);
+      return res.status(400).json({
+        success: false,
+        error: err?.message || 'Unexpected error inserting address',
+      });
+    }
+  });
+
+  // Update an existing address
+  app.put('/api/customers/addresses/:id', async (req, res) => {
+    try {
+      const addressId = req.params.id;
+      const { address } = req.body;
+      const now = new Date().toISOString();
+      const cleanFullAddress = (address?.fullAddress || address?.address || '').trim();
+
+      if (address?.isDefault === true) {
+        try {
+          const { data: currentAddr } = await serverSupabase
+            .from('customer_addresses')
+            .select('customer_id')
+            .eq('id', addressId)
+            .maybeSingle();
+
+          if (currentAddr?.customer_id) {
+            await serverSupabase
+              .from('customer_addresses')
+              .update({ is_default: false, updated_at: now })
+              .eq('customer_id', currentAddr.customer_id);
+          }
+        } catch (e) {
+          console.warn('Server reset default error:', e);
+        }
+      }
+
+      const updatePayload: any = {
+        label: address?.addressLabel || address?.label || 'Home',
+        full_address: cleanFullAddress,
+        landmark: address?.landmark !== undefined ? address.landmark : null,
+        city: address?.city || 'Bhubaneswar',
+        state: address?.state || 'Odisha',
+        pincode: address?.pincode || '',
+        updated_at: now,
+      };
+
+      if (address?.isDefault !== undefined) {
+        updatePayload.is_default = address.isDefault;
+      }
+
+      let updated: any = null;
+      const res1 = await serverSupabase
+        .from('customer_addresses')
+        .update(updatePayload)
+        .eq('id', addressId)
+        .select()
+        .maybeSingle();
+
+      if (res1.error) {
+        if (res1.error.message && (res1.error.message.includes('full_address') || res1.error.message.includes('column') || res1.error.code === 'PGRST204')) {
+          delete updatePayload.full_address;
+          updatePayload.address_line1 = cleanFullAddress;
+          const res2 = await serverSupabase
+            .from('customer_addresses')
+            .update(updatePayload)
+            .eq('id', addressId)
+            .select()
+            .maybeSingle();
+          if (res2.error) throw res2.error;
+          updated = res2.data;
+        } else {
+          throw res1.error;
+        }
+      } else {
+        updated = res1.data;
+      }
+
+      if (!updated) {
+        throw new Error('Address not found or could not be updated');
+      }
+
+      return res.json({
+        success: true,
+        address: {
+          id: String(updated.id),
+          customerId: String(updated.customer_id),
+          addressLabel: updated.label || 'Home',
+          fullAddress: updated.full_address || updated.address_line1 || '',
+          landmark: updated.landmark || undefined,
+          city: updated.city || 'Bhubaneswar',
+          state: updated.state || 'Odisha',
+          pincode: updated.pincode || '',
+          isDefault: updated.is_default !== false,
+        },
+      });
+    } catch (err: any) {
+      return res.status(400).json({ success: false, error: err.message });
+    }
+  });
+
+  // Delete an address directly from Supabase DB
+  app.delete('/api/customers/addresses/:id', async (req, res) => {
+    try {
+      const addressId = req.params.id;
+      if (!addressId) {
+        return res.status(400).json({ success: false, error: 'Address ID is required' });
+      }
+
+      const { error } = await serverSupabase
+        .from('customer_addresses')
+        .delete()
+        .eq('id', addressId);
+
+      if (error) throw error;
+
+      return res.json({ success: true, message: 'Address deleted successfully' });
+    } catch (err: any) {
+      return res.status(400).json({ success: false, error: err.message });
     }
   });
 
@@ -1110,7 +1465,7 @@ async function startServer() {
                   .update({ welcome_discount_used: true, updated_at: new Date().toISOString() })
                   .eq('id', existingSupaCust.id);
               }
-            } else if (payload.customerDetails?.createAccount || payload.customerDetails?.fullName) {
+            } else {
               const { data: newSupaCust, error: createCustErr } = await serverSupabase
                 .from('customers')
                 .insert({
@@ -1124,10 +1479,19 @@ async function startServer() {
                   updated_at: new Date().toISOString(),
                 })
                 .select('id')
-                .single();
+                .maybeSingle();
 
               if (!createCustErr && newSupaCust?.id) {
                 supaCustomerId = newSupaCust.id;
+              } else if (createCustErr) {
+                console.warn('Supabase customer creation during order sync warning:', createCustErr);
+                // Retry lookup in case of race condition
+                const { data: retryCust } = await serverSupabase
+                  .from('customers')
+                  .select('id')
+                  .eq('phone', normPhone)
+                  .maybeSingle();
+                if (retryCust?.id) supaCustomerId = retryCust.id;
               }
             }
           } catch (custErr) {
@@ -1141,22 +1505,24 @@ async function startServer() {
             const cleanAddr = payload.customerDetails.address.trim();
             const { data: existingAddrs } = await serverSupabase
               .from('customer_addresses')
-              .select('id, address_line1')
+              .select('*')
               .eq('customer_id', supaCustomerId);
 
             const matchedAddr = existingAddrs?.find(
-              (a: any) => (a.address_line1 || '').trim().toLowerCase() === cleanAddr.toLowerCase()
+              (a: any) =>
+                (a.full_address || a.address_line1 || '').trim().toLowerCase() === cleanAddr.toLowerCase() ||
+                (payload.addressId && a.id === payload.addressId)
             );
 
             if (matchedAddr?.id) {
               supaAddressId = matchedAddr.id;
             } else {
-              const { data: newSupaAddr, error: createAddrErr } = await serverSupabase
+              let insAddrRes = await serverSupabase
                 .from('customer_addresses')
                 .insert({
                   customer_id: supaCustomerId,
-                  label: 'Home',
-                  address_line1: cleanAddr,
+                  label: payload.customerDetails?.addressLabel || 'Home',
+                  full_address: cleanAddr,
                   landmark: payload.customerDetails?.landmark || null,
                   city: payload.customerDetails?.city || 'Bhubaneswar',
                   state: payload.customerDetails?.state || 'Odisha',
@@ -1166,10 +1532,31 @@ async function startServer() {
                   updated_at: new Date().toISOString(),
                 })
                 .select('id')
-                .single();
+                .maybeSingle();
 
-              if (!createAddrErr && newSupaAddr?.id) {
-                supaAddressId = newSupaAddr.id;
+              if (insAddrRes.error && (insAddrRes.error.message.includes('full_address') || insAddrRes.error.message.includes('column') || insAddrRes.error.code === 'PGRST204')) {
+                insAddrRes = await serverSupabase
+                  .from('customer_addresses')
+                  .insert({
+                    customer_id: supaCustomerId,
+                    label: payload.customerDetails?.addressLabel || 'Home',
+                    address_line1: cleanAddr,
+                    landmark: payload.customerDetails?.landmark || null,
+                    city: payload.customerDetails?.city || 'Bhubaneswar',
+                    state: payload.customerDetails?.state || 'Odisha',
+                    pincode: order.deliveryPinCode || payload.customerDetails?.pincode || '',
+                    is_default: true,
+                    created_at: new Date().toISOString(),
+                    updated_at: new Date().toISOString(),
+                  })
+                  .select('id')
+                  .maybeSingle();
+              }
+
+              if (insAddrRes.data?.id) {
+                supaAddressId = insAddrRes.data.id;
+              } else if (insAddrRes.error) {
+                console.warn('Supabase address creation error in order:', insAddrRes.error);
               }
             }
           } catch (addrErr) {
@@ -1177,9 +1564,15 @@ async function startServer() {
           }
         }
 
-        // 3. Insert order into Supabase orders table with fresh normalized payload
         const isUUID = (str?: string | null) =>
           typeof str === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(str);
+
+        // Fallback: Check if payload.addressId is a valid UUID
+        if (!supaAddressId && payload.addressId && isUUID(payload.addressId)) {
+          supaAddressId = payload.addressId;
+        }
+
+        // 3. Insert order into Supabase orders table with fresh normalized payload
 
         const safeOutletId = order.outletId || (order as any).outlet_id || payload.outletId || 'outlet-1';
         const safeItems = Array.isArray(order.items)
@@ -1203,6 +1596,74 @@ async function startServer() {
           (order.deliveryAddressSnapshot as any)?.deliveryNotes ||
           payload.customerDetails?.deliveryNotes ||
           null;
+
+        const isScheduled =
+          order.deliveryType === 'scheduled' ||
+          order.customerDetails?.deliveryType === 'scheduled' ||
+          payload.deliveryType === 'scheduled' ||
+          payload.customerDetails?.deliveryType === 'scheduled';
+
+        const deliveryType = isScheduled ? 'scheduled' : 'immediate';
+
+        let scheduledAt: string | null = null;
+        if (isScheduled) {
+          const rawDate =
+            order.scheduledAt ||
+            order.customerDetails?.scheduledAt ||
+            payload.scheduledAt ||
+            payload.customerDetails?.scheduledAt ||
+            order.customerDetails?.scheduledDate ||
+            payload.customerDetails?.scheduledDate;
+
+          const rawTime =
+            order.customerDetails?.scheduledTimeSlot ||
+            payload.customerDetails?.scheduledTimeSlot;
+
+          if (rawDate && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(rawDate)) {
+            const d = new Date(rawDate);
+            scheduledAt = isNaN(d.getTime()) ? null : d.toISOString();
+          } else if (rawDate) {
+            let hours = 12;
+            let minutes = 0;
+            if (rawTime) {
+              const startTimeStr = rawTime.split('–')[0].split('-')[0].trim();
+              const match = startTimeStr.match(/^(\d{1,2}):?(\d{2})?\s*(AM|PM)?$/i);
+              if (match) {
+                hours = parseInt(match[1], 10);
+                minutes = match[2] ? parseInt(match[2], 10) : 0;
+                const meridiem = (match[3] || '').toUpperCase();
+                if (meridiem === 'PM' && hours < 12) hours += 12;
+                if (meridiem === 'AM' && hours === 12) hours = 0;
+              }
+            }
+            const ymdMatch = String(rawDate).match(/^(\d{4})-(\d{2})-(\d{2})/);
+            if (ymdMatch) {
+              const scheduledDate = new Date(
+                parseInt(ymdMatch[1], 10),
+                parseInt(ymdMatch[2], 10) - 1,
+                parseInt(ymdMatch[3], 10),
+                hours,
+                minutes,
+                0,
+                0
+              );
+              scheduledAt = !isNaN(scheduledDate.getTime()) ? scheduledDate.toISOString() : null;
+            } else {
+              const parsed = new Date(rawDate);
+              if (!isNaN(parsed.getTime())) {
+                parsed.setHours(hours, minutes, 0, 0);
+                scheduledAt = parsed.toISOString();
+              } else {
+                const currentYear = new Date().getFullYear();
+                const parsedWithYear = new Date(`${rawDate} ${currentYear}`);
+                if (!isNaN(parsedWithYear.getTime())) {
+                  parsedWithYear.setHours(hours, minutes, 0, 0);
+                  scheduledAt = parsedWithYear.toISOString();
+                }
+              }
+            }
+          }
+        }
 
         const supaPayload: any = {
           id: order.id || `order-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
@@ -1230,7 +1691,8 @@ async function startServer() {
           discount_code: order.couponCode || null,
           payment_method: order.customerDetails?.paymentMethod || 'cod',
           payment_status: 'PENDING',
-          delivery_slot: order.customerDetails?.deliverySlot || 'immediate',
+          delivery_type: deliveryType,
+          scheduled_at: scheduledAt,
           delivery_notes: supaDeliveryInstructions,
           delivery_instructions: supaDeliveryInstructions,
           status: order.status || 'Received',

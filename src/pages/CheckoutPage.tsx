@@ -4,6 +4,7 @@ import { useNavigation } from '../context/NavigationContext';
 import { useLocation } from '../context/LocationContext';
 import { useCustomer } from '../context/CustomerContext';
 import { CheckoutFormData, Order } from '../types';
+import { computeScheduledIsoTimestamp, formatScheduledAt } from '../utils/dateUtils';
 import {
   getProductPortionsLeftAtOutlet,
   doesOutletDeliverToPinCode,
@@ -43,8 +44,93 @@ import {
   Info,
   PackageCheck,
   Navigation,
+  Edit3,
+  Plus,
+  RotateCcw,
+  Zap,
+  Home,
+  Briefcase,
+  Bookmark,
+  Trash2,
+  Calendar,
+  Sun,
+  Moon,
+  X,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+
+interface ScheduleTimeSlot {
+  id: string;
+  timeRange: string;
+  category: 'Lunch' | 'Evening Dining' | 'Dinner';
+  categoryLabel: string;
+  label: string;
+  description: string;
+  isPopular?: boolean;
+}
+
+const SCHEDULE_TIME_SLOTS: ScheduleTimeSlot[] = [
+  // Lunch Slots
+  {
+    id: 'lunch-1',
+    timeRange: '12:30 PM – 1:30 PM',
+    category: 'Lunch',
+    categoryLabel: 'lunch delivery',
+    label: 'Early Lunch',
+    description: 'Fresh noon meal dispatch',
+  },
+  {
+    id: 'lunch-2',
+    timeRange: '1:30 PM – 2:30 PM',
+    category: 'Lunch',
+    categoryLabel: 'lunch delivery',
+    label: 'Prime Lunch',
+    description: 'Hot clay pot arrival',
+    isPopular: true,
+  },
+  {
+    id: 'lunch-3',
+    timeRange: '2:30 PM – 3:30 PM',
+    category: 'Lunch',
+    categoryLabel: 'lunch delivery',
+    label: 'Late Lunch',
+    description: 'Post-afternoon feast',
+  },
+  // Evening & Dinner Slots
+  {
+    id: 'dinner-1',
+    timeRange: '7:00 PM – 8:00 PM',
+    category: 'Evening Dining',
+    categoryLabel: 'evening delivery',
+    label: 'Early Dinner',
+    description: 'Sunset kitchen cooking',
+  },
+  {
+    id: 'dinner-2',
+    timeRange: '8:00 PM – 9:00 PM',
+    category: 'Evening Dining',
+    categoryLabel: 'evening delivery',
+    label: 'Evening Dining',
+    description: 'Prime evening family feast',
+    isPopular: true,
+  },
+  {
+    id: 'dinner-3',
+    timeRange: '9:00 PM – 10:00 PM',
+    category: 'Dinner',
+    categoryLabel: 'dinner delivery',
+    label: 'Late Dinner',
+    description: 'Night dining dispatch',
+  },
+  {
+    id: 'dinner-4',
+    timeRange: '10:00 PM – 10:30 PM',
+    category: 'Dinner',
+    categoryLabel: 'dinner delivery',
+    label: 'Late Night Dum',
+    description: 'Midnight celebration',
+  },
+];
 
 export const CheckoutPage: React.FC = () => {
   const {
@@ -61,7 +147,7 @@ export const CheckoutPage: React.FC = () => {
     adaptCartForNewOutlet,
   } = useCart();
 
-  const { goToHome, goToShop } = useNavigation();
+  const { goToHome, goToShop, goToProfile } = useNavigation();
   const {
     selectedLocation,
     outlets,
@@ -73,16 +159,81 @@ export const CheckoutPage: React.FC = () => {
   const {
     customer,
     defaultAddress,
+    savedAddresses,
     isCustomerLoggedIn,
     isWelcomeDiscountEligible,
     lookupCustomer,
     openOtpModal,
+    sendOtp,
     saveProfile,
+    fetchCustomerAddresses,
+    saveNewAddress,
+    updateAddress,
+    deleteAddress,
+    setDefaultDeliveryAddress,
   } = useCustomer();
 
   // Delivery vs Self-Pickup Mode
   const [orderType, setOrderType] = useState<'delivery' | 'pickup'>('delivery');
   const [isSelfPickup, setIsSelfPickup] = useState(false);
+
+  // Next 10 Days Calculation for Scheduled Slot
+  const next10Days = useMemo(() => {
+    const days: Array<{
+      dateStr: string;
+      dayName: string;
+      dayNumber: number;
+      monthName: string;
+      formatted: string;
+      isToday: boolean;
+      isTomorrow: boolean;
+    }> = [];
+    const today = new Date();
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+    for (let i = 0; i < 10; i++) {
+      const d = new Date(today);
+      d.setDate(today.getDate() + i);
+      const dayName = dayNames[d.getDay()];
+      const dayNumber = d.getDate();
+      const monthName = monthNames[d.getMonth()];
+      const year = d.getFullYear();
+      const monthPadded = String(d.getMonth() + 1).padStart(2, '0');
+      const dayPadded = String(dayNumber).padStart(2, '0');
+      const dateStr = `${year}-${monthPadded}-${dayPadded}`;
+      const formatted = `${dayName}, ${dayNumber} ${monthName}`;
+
+      days.push({
+        dateStr,
+        dayName,
+        dayNumber,
+        monthName,
+        formatted,
+        isToday: i === 0,
+        isTomorrow: i === 1,
+      });
+    }
+    return days;
+  }, []);
+
+  const defaultScheduleDate = next10Days[0]?.formatted || 'Today';
+  const defaultScheduleDateStr = next10Days[0]?.dateStr || '';
+  const defaultScheduleTime = '8:00 PM – 9:00 PM';
+  const defaultScheduleCategory = 'evening delivery';
+
+  // Schedule Slot Modal & Selected Values State
+  const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false);
+  const [selectedScheduleDate, setSelectedScheduleDate] = useState(defaultScheduleDate);
+  const [selectedScheduleDateStr, setSelectedScheduleDateStr] = useState(defaultScheduleDateStr);
+  const [selectedScheduleTime, setSelectedScheduleTime] = useState(defaultScheduleTime);
+  const [selectedScheduleCategory, setSelectedScheduleCategory] = useState(defaultScheduleCategory);
+
+  // Modal temporary selection state
+  const [modalScheduleDate, setModalScheduleDate] = useState(defaultScheduleDate);
+  const [modalScheduleDateStr, setModalScheduleDateStr] = useState(defaultScheduleDateStr);
+  const [modalScheduleTime, setModalScheduleTime] = useState(defaultScheduleTime);
+  const [modalScheduleCategory, setModalScheduleCategory] = useState(defaultScheduleCategory);
 
   // Form State
   const [formData, setFormData] = useState<CheckoutFormData>({
@@ -94,7 +245,12 @@ export const CheckoutPage: React.FC = () => {
     city: defaultAddress?.city || '',
     state: defaultAddress?.state || '',
     pincode: defaultAddress?.pincode || '',
-    deliverySlot: 'immediate',
+    deliveryType: 'immediate',
+    scheduledAt: undefined,
+    scheduledDate: defaultScheduleDate,
+    scheduledTimeSlot: defaultScheduleTime,
+    scheduledSlotCategory: defaultScheduleCategory,
+    scheduledSlotLabel: `Scheduled for ${defaultScheduleCategory} (Delivery between ${defaultScheduleTime} on ${defaultScheduleDate})`,
     deliveryNotes: specialInstructions || '',
     paymentMethod: 'upi',
     includeCutlery,
@@ -104,6 +260,43 @@ export const CheckoutPage: React.FC = () => {
     orderType: 'delivery',
     isSelfPickup: false,
   });
+
+  const handleOpenScheduleModal = () => {
+    setModalScheduleDate(selectedScheduleDate || defaultScheduleDate);
+    setModalScheduleDateStr(selectedScheduleDateStr || defaultScheduleDateStr);
+    setModalScheduleTime(selectedScheduleTime || defaultScheduleTime);
+    setModalScheduleCategory(selectedScheduleCategory || defaultScheduleCategory);
+    setIsScheduleModalOpen(true);
+  };
+
+  const handleConfirmScheduleSlot = () => {
+    setSelectedScheduleDate(modalScheduleDate);
+    setSelectedScheduleDateStr(modalScheduleDateStr);
+    setSelectedScheduleTime(modalScheduleTime);
+    setSelectedScheduleCategory(modalScheduleCategory);
+
+    const slotLabel = `Scheduled for ${modalScheduleCategory} (Delivery between ${modalScheduleTime} on ${modalScheduleDate})`;
+    const isoTimestamp = computeScheduledIsoTimestamp(modalScheduleDateStr || modalScheduleDate, modalScheduleTime);
+
+    setFormData((prev) => ({
+      ...prev,
+      deliveryType: 'scheduled',
+      scheduledAt: isoTimestamp || undefined,
+      scheduledDate: modalScheduleDate,
+      scheduledTimeSlot: modalScheduleTime,
+      scheduledSlotCategory: modalScheduleCategory,
+      scheduledSlotLabel: slotLabel,
+    }));
+
+    setIsScheduleModalOpen(false);
+  };
+
+  const scheduledSlotSummaryText = useMemo(() => {
+    if (formData.scheduledSlotLabel) {
+      return formData.scheduledSlotLabel;
+    }
+    return `Scheduled for ${selectedScheduleCategory} (Delivery between ${selectedScheduleTime} on ${selectedScheduleDate})`;
+  }, [formData.scheduledSlotLabel, selectedScheduleCategory, selectedScheduleTime, selectedScheduleDate]);
 
   // Keep isSelfPickup in sync with orderType
   const handleToggleSelfPickup = (checked: boolean) => {
@@ -130,24 +323,271 @@ export const CheckoutPage: React.FC = () => {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [touched, setTouched] = useState<Record<string, boolean>>({});
 
+  // Address Presentation States (Card vs Edit vs Custom Address)
+  const [isCustomAddressMode, setIsCustomAddressMode] = useState(false);
+  const [isEditingSavedAddress, setIsEditingSavedAddress] = useState(false);
+  const [isAddressSwitchModalOpen, setIsAddressSwitchModalOpen] = useState(false);
+  const [selectedAddressId, setSelectedAddressId] = useState<string | null>(defaultAddress?.id || null);
+
+  // Address Label and Tag State for adding/editing addresses
+  const [addressLabelType, setAddressLabelType] = useState<'Home' | 'Work' | 'Other'>('Home');
+  const [customAddressTagline, setCustomAddressTagline] = useState('');
+  const [shouldSaveAddressToAccount, setShouldSaveAddressToAccount] = useState(true);
+  const [isSavingAddressInProgress, setIsSavingAddressInProgress] = useState(false);
+
+  // Active saved address resolution
+  const activeSavedAddress = useMemo(() => {
+    if (selectedAddressId && Array.isArray(savedAddresses) && savedAddresses.length > 0) {
+      const match = savedAddresses.find((a) => a.id === selectedAddressId);
+      if (match) return match;
+    }
+    if (formData.address && Array.isArray(savedAddresses) && savedAddresses.length > 0) {
+      const matchByContent = savedAddresses.find(
+        (a) => a.fullAddress === formData.address && a.pincode === formData.pincode
+      );
+      if (matchByContent) return matchByContent;
+    }
+    if (isCustomerLoggedIn) {
+      return defaultAddress || (savedAddresses.length > 0 ? savedAddresses[0] : null);
+    }
+    return returningCustomerFound?.addressData || defaultAddress || null;
+  }, [selectedAddressId, savedAddresses, formData.address, formData.pincode, isCustomerLoggedIn, defaultAddress, returningCustomerFound]);
+
+  const hasSavedAddress = Boolean(
+    activeSavedAddress &&
+      activeSavedAddress.fullAddress &&
+      activeSavedAddress.fullAddress.trim().length > 0 &&
+      activeSavedAddress.pincode
+  );
+
+  // Unique list of saved addresses for Switch Address modal directly from database
+  const modalAddresses = useMemo(() => {
+    if (Array.isArray(savedAddresses) && savedAddresses.length > 0) {
+      return savedAddresses;
+    }
+    if (activeSavedAddress) {
+      return [activeSavedAddress];
+    }
+    return [];
+  }, [savedAddresses, activeSavedAddress]);
+
+  // Address Handler Actions
+  const handleStartEditAddress = () => {
+    setIsEditingSavedAddress(true);
+    setIsCustomAddressMode(false);
+    setIsAddressSwitchModalOpen(false);
+    const currentLabel = activeSavedAddress?.addressLabel || 'Home';
+    if (currentLabel === 'Home' || currentLabel === 'Work') {
+      setAddressLabelType(currentLabel);
+      setCustomAddressTagline('');
+    } else {
+      setAddressLabelType('Other');
+      setCustomAddressTagline(currentLabel);
+    }
+  };
+
+  const handleStartNewAddress = () => {
+    setIsCustomAddressMode(true);
+    setIsEditingSavedAddress(false);
+    setIsAddressSwitchModalOpen(false);
+    setAddressLabelType('Home');
+    setCustomAddressTagline('');
+    setFormData((prev) => ({
+      ...prev,
+      address: '',
+      landmark: '',
+      city: 'Bhubaneswar',
+      state: 'Odisha',
+      pincode: '',
+    }));
+  };
+
+  const handleSelectSavedAddress = (addr: any) => {
+    if (!addr) return;
+    if (addr.id) {
+      setSelectedAddressId(addr.id);
+    }
+    setDefaultDeliveryAddress(addr);
+    if (returningCustomerFound) {
+      setReturningCustomerFound((prev) => prev ? { ...prev, addressData: addr } : null);
+    }
+    const label = addr.addressLabel || 'Home';
+    if (label.toLowerCase() === 'home') {
+      setAddressLabelType('Home');
+      setCustomAddressTagline('');
+    } else if (label.toLowerCase() === 'work') {
+      setAddressLabelType('Work');
+      setCustomAddressTagline('');
+    } else {
+      setAddressLabelType('Other');
+      setCustomAddressTagline(label);
+    }
+    setFormData((prev) => ({
+      ...prev,
+      address: addr.fullAddress || '',
+      landmark: addr.landmark || '',
+      city: addr.city || 'Bhubaneswar',
+      state: addr.state || 'Odisha',
+      pincode: addr.pincode || '',
+    }));
+    setIsCustomAddressMode(false);
+    setIsEditingSavedAddress(false);
+    setIsAddressSwitchModalOpen(false);
+  };
+
+  const [isSyncingAddresses, setIsSyncingAddresses] = useState(false);
+
+  const handleRefreshAddressesFromDB = async () => {
+    const targetCustId = customer?.id || returningCustomerFound?.addressData?.customerId;
+    const targetPhone = customer?.phone || formData.phone;
+    if (!targetCustId && !targetPhone) return;
+
+    setIsSyncingAddresses(true);
+    try {
+      await fetchCustomerAddresses(targetCustId, targetPhone);
+    } finally {
+      setIsSyncingAddresses(false);
+    }
+  };
+
+  const handleSaveEditedAddress = async () => {
+    const addressErr = validateField('address', formData.address);
+    const cityErr = validateField('city', formData.city);
+    const stateErr = validateField('state', formData.state);
+    const pinErr = validateField('pincode', formData.pincode);
+
+    if (addressErr || cityErr || stateErr || pinErr) {
+      setTouched((prev) => ({ ...prev, address: true, city: true, state: true, pincode: true }));
+      setErrors((prev) => ({
+        ...prev,
+        address: addressErr,
+        city: cityErr,
+        state: stateErr,
+        pincode: pinErr,
+      }));
+      return;
+    }
+
+    const effectiveLabel =
+      addressLabelType === 'Other'
+        ? customAddressTagline.trim() || 'Other'
+        : addressLabelType;
+
+    setIsSavingAddressInProgress(true);
+    try {
+      if (activeSavedAddress?.id) {
+        await updateAddress(activeSavedAddress.id, {
+          addressLabel: effectiveLabel,
+          fullAddress: formData.address.trim(),
+          landmark: formData.landmark?.trim() || '',
+          city: formData.city.trim(),
+          state: formData.state.trim(),
+          pincode: formData.pincode.trim(),
+        });
+      }
+    } catch (e) {
+      console.warn('Update address error:', e);
+    } finally {
+      setIsSavingAddressInProgress(false);
+      setIsEditingSavedAddress(false);
+    }
+  };
+
+  const handleSaveNewAddress = async () => {
+    const addressErr = validateField('address', formData.address);
+    const cityErr = validateField('city', formData.city);
+    const stateErr = validateField('state', formData.state);
+    const pinErr = validateField('pincode', formData.pincode);
+
+    // Also check if phone is available so we can link the address in Supabase
+    const rawPhone = (formData.phone || customer?.phone || '').replace(/\D/g, '').slice(-10);
+    const phoneErr = rawPhone.length !== 10 ? 'Please enter a valid 10-digit mobile number to save your address' : undefined;
+
+    if (addressErr || cityErr || stateErr || pinErr || (!customer && phoneErr)) {
+      setTouched((prev) => ({ ...prev, address: true, city: true, state: true, pincode: true, phone: true }));
+      setErrors((prev) => ({
+        ...prev,
+        address: addressErr,
+        city: cityErr,
+        state: stateErr,
+        pincode: pinErr,
+        phone: !customer ? phoneErr : prev.phone,
+      }));
+      return;
+    }
+
+    const effectiveLabel =
+      addressLabelType === 'Other'
+        ? customAddressTagline.trim() || 'Other'
+        : addressLabelType;
+
+    setIsSavingAddressInProgress(true);
+    try {
+      const targetCustId = customer?.id || returningCustomerFound?.addressData?.customerId;
+      const targetPhone = customer?.phone || formData.phone || rawPhone;
+      
+      const newAddrData = {
+        addressLabel: effectiveLabel,
+        fullAddress: formData.address.trim(),
+        landmark: formData.landmark?.trim() || '',
+        city: formData.city.trim(),
+        state: formData.state.trim(),
+        pincode: formData.pincode.trim(),
+        isDefault: true,
+      };
+
+      const saved = await saveNewAddress(
+        newAddrData,
+        targetCustId,
+        targetPhone
+      );
+
+      if (saved) {
+        if (saved.id) {
+          setSelectedAddressId(saved.id);
+        }
+        setDefaultDeliveryAddress(saved);
+        setFormData((prev) => ({
+          ...prev,
+          address: saved.fullAddress || prev.address,
+          landmark: saved.landmark || prev.landmark,
+          city: saved.city || prev.city,
+          state: saved.state || prev.state,
+          pincode: saved.pincode || prev.pincode,
+        }));
+      }
+    } catch (e) {
+      console.warn('Save new address error:', e);
+    } finally {
+      setIsSavingAddressInProgress(false);
+      setIsCustomAddressMode(false);
+    }
+  };
+
   // Sync if customer logs in or defaultAddress is loaded
   useEffect(() => {
     if (customer) {
-      setFormData((prev) => ({
-        ...prev,
-        fullName: customer.fullName || prev.fullName || '',
-        email: customer.email || prev.email || '',
-        phone: customer.phone || prev.phone,
-        address: defaultAddress?.fullAddress || prev.address || '',
-        landmark: defaultAddress?.landmark || prev.landmark || '',
-        city: defaultAddress?.city || prev.city || '',
-        state: defaultAddress?.state || prev.state || '',
-        pincode: defaultAddress?.pincode || prev.pincode || '',
-        createAccount: false,
-        isPhoneVerified: true,
-      }));
+      setFormData((prev) => {
+        const hasAddress = !!(prev.address && prev.address.trim().length > 0);
+        return {
+          ...prev,
+          fullName: customer.fullName || prev.fullName || '',
+          email: customer.email || prev.email || '',
+          phone: customer.phone || prev.phone,
+          address: hasAddress ? prev.address : (defaultAddress?.fullAddress || ''),
+          landmark: hasAddress ? prev.landmark : (defaultAddress?.landmark || ''),
+          city: hasAddress ? prev.city : (defaultAddress?.city || 'Bhubaneswar'),
+          state: hasAddress ? prev.state : (defaultAddress?.state || 'Odisha'),
+          pincode: hasAddress ? prev.pincode : (defaultAddress?.pincode || ''),
+          createAccount: false,
+          isPhoneVerified: true,
+        };
+      });
+      if (defaultAddress?.id && !selectedAddressId) {
+        setSelectedAddressId(defaultAddress.id);
+      }
     }
-  }, [customer, defaultAddress]);
+  }, [customer, defaultAddress, selectedAddressId]);
 
   // Dynamic Returning Customer Phone Lookup
   useEffect(() => {
@@ -166,8 +606,34 @@ export const CheckoutPage: React.FC = () => {
             addressData: res.defaultAddress,
             welcomeEligible: !!res.welcomeDiscountEligible,
           });
+          if (res.customer.id || res.customer.phone) {
+            fetchCustomerAddresses(res.customer.id, res.customer.phone);
+          }
+          setFormData((prev) => ({
+            ...prev,
+            fullName: res.customer.fullName || prev.fullName,
+            email: res.customer.email || prev.email,
+            address: res.defaultAddress?.fullAddress || prev.address,
+            landmark: res.defaultAddress?.landmark || prev.landmark,
+            city: res.defaultAddress?.city || prev.city,
+            state: res.defaultAddress?.state || prev.state,
+            pincode: res.defaultAddress?.pincode || prev.pincode,
+            createAccount: false,
+          }));
         } else {
+          // If 10-digit mobile number is not found in server:
+          // Clear all profile and address data
           setReturningCustomerFound(null);
+          setFormData((prev) => ({
+            ...prev,
+            fullName: '',
+            email: '',
+            address: '',
+            landmark: '',
+            pincode: '',
+            isPhoneVerified: false,
+            createAccount: false,
+          }));
         }
       });
       return () => {
@@ -289,9 +755,40 @@ export const CheckoutPage: React.FC = () => {
       };
     }
 
-    // Check 3: Delivery Mode validations (Outlet cannot deliver outside its zone)
+    // Check 3: Registered customer phone found on server but user is NOT authenticated yet
+    if (!isCustomerLoggedIn && returningCustomerFound !== null) {
+      return {
+        canPlaceOrder: false,
+        reason: `Please sign in with OTP to verify your account (${returningCustomerFound.name}) and place your order.`,
+        buttonLabel: 'Sign In to Place Order',
+        actionRequired: 'SIGN_IN_REQUIRED' as const,
+      };
+    }
+
+    // Check 4: Address being edited or newly added (Doorstep Delivery mode only)
     if (!isSelfPickup && orderType === 'delivery') {
-      // 3a. Incomplete PIN
+      if (isEditingSavedAddress) {
+        return {
+          canPlaceOrder: false,
+          reason: 'Please click "Save Changes & Deliver Here" or "Cancel" before placing your order.',
+          buttonLabel: 'Save Address Changes to Proceed',
+          actionRequired: 'SAVE_EDITED_ADDRESS' as const,
+        };
+      }
+
+      if (isCustomAddressMode) {
+        return {
+          canPlaceOrder: false,
+          reason: 'Please click "Save & Deliver Here" to confirm your delivery address before placing order.',
+          buttonLabel: 'Save / Confirm Delivery Address',
+          actionRequired: 'SAVE_NEW_ADDRESS' as const,
+        };
+      }
+    }
+
+    // Check 5: Delivery Mode validations (Outlet cannot deliver outside its zone)
+    if (!isSelfPickup && orderType === 'delivery') {
+      // 5a. Incomplete PIN
       if (!isPinComplete) {
         return {
           canPlaceOrder: false,
@@ -301,7 +798,7 @@ export const CheckoutPage: React.FC = () => {
         };
       }
 
-      // 3b. PIN is serviced by a DIFFERENT active outlet
+      // 5b. PIN is serviced by a DIFFERENT active outlet
       if (pinServiceability.status === 'SERVICED_BY_OTHER') {
         const altName = pinServiceability.altOutlet?.name || 'another kitchen';
         return {
@@ -312,7 +809,7 @@ export const CheckoutPage: React.FC = () => {
         };
       }
 
-      // 3c. PIN is NOT serviced by ANY outlet (outside delivery coverage)
+      // 5c. PIN is NOT serviced by ANY outlet (outside delivery coverage)
       if (pinServiceability.status === 'NOT_SERVICED') {
         return {
           canPlaceOrder: false,
@@ -322,7 +819,7 @@ export const CheckoutPage: React.FC = () => {
         };
       }
 
-      // 3d. Guarantee PIN is served by current outlet
+      // 5d. Guarantee PIN is served by current outlet
       if (pinServiceability.status !== 'SERVICED_BY_CURRENT') {
         return {
           canPlaceOrder: false,
@@ -345,8 +842,12 @@ export const CheckoutPage: React.FC = () => {
   }, [
     cart.length,
     isSubmitting,
+    isCustomerLoggedIn,
+    returningCustomerFound,
     isSelfPickup,
     orderType,
+    isEditingSavedAddress,
+    isCustomAddressMode,
     isPinComplete,
     enteredPin,
     pinServiceability,
@@ -505,6 +1006,9 @@ export const CheckoutPage: React.FC = () => {
     }
 
     const nextForm = { ...formData, [name]: nextValue };
+    if (name === 'phone' && nextValue !== formData.phone) {
+      nextForm.isPhoneVerified = false;
+    }
     setFormData(nextForm);
 
     if (touched[name]) {
@@ -532,25 +1036,31 @@ export const CheckoutPage: React.FC = () => {
     }));
   };
 
-  const handleTriggerOtpVerification = () => {
+  const handleTriggerOtpVerification = async () => {
     const cleanPhone = formData.phone.replace(/\D/g, '').slice(0, 10);
     if (!cleanPhone || cleanPhone.length !== 10) {
       setTouched((prev) => ({ ...prev, phone: true }));
       setErrors((prev) => ({ ...prev, phone: 'Please enter 10-digit mobile number first' }));
       return;
     }
-    openOtpModal(cleanPhone, formData.createAccount ? 'create_account' : 'signin', (cust, addr) => {
+    // Send OTP immediately so user sees the 6-digit OTP verification screen directly
+    try {
+      await sendOtp(cleanPhone);
+    } catch (e) {
+      console.warn('sendOtp failed:', e);
+    }
+    openOtpModal(cleanPhone, 'direct_otp', (cust, addr) => {
       if (cust) {
         setFormData((prev) => ({
           ...prev,
-          fullName: prev.fullName || cust.fullName,
-          email: prev.email || cust.email || '',
+          fullName: cust.fullName || prev.fullName,
+          email: cust.email || prev.email || '',
           phone: cust.phone,
-          address: prev.address || addr?.fullAddress || '',
-          landmark: prev.landmark || addr?.landmark || '',
-          city: prev.city || addr?.city || prev.city,
-          state: prev.state || addr?.state || prev.state,
-          pincode: prev.pincode || addr?.pincode || prev.pincode,
+          address: addr?.fullAddress || prev.address || '',
+          landmark: addr?.landmark || prev.landmark || '',
+          city: addr?.city || prev.city,
+          state: addr?.state || prev.state,
+          pincode: addr?.pincode || prev.pincode,
           isPhoneVerified: true,
           createAccount: false,
         }));
@@ -676,7 +1186,7 @@ export const CheckoutPage: React.FC = () => {
 
     // Automatically persist customer profile and address for 1-click future reorders
     let resolvedCustId = customer?.id;
-    let resolvedAddrId = defaultAddress?.id;
+    let resolvedAddrId = activeSavedAddress?.id || defaultAddress?.id;
 
     if (formData.phone && (!isSelfPickup ? formData.address : true)) {
       try {
@@ -687,7 +1197,7 @@ export const CheckoutPage: React.FC = () => {
           marketingConsent: formData.marketingConsent,
           address: !isSelfPickup
             ? {
-                addressLabel: 'Home',
+                addressLabel: activeSavedAddress?.addressLabel || 'Home',
                 fullAddress: formData.address,
                 landmark: formData.landmark || undefined,
                 city: formData.city,
@@ -700,6 +1210,10 @@ export const CheckoutPage: React.FC = () => {
         if (profRes?.customer?.id) {
           resolvedCustId = profRes.customer.id;
           newOrder.customerId = profRes.customer.id;
+        }
+        if (profRes?.address?.id) {
+          resolvedAddrId = profRes.address.id;
+          newOrder.addressId = profRes.address.id;
         }
       } catch (err) {
         console.warn('Customer address auto-persist notice:', err);
@@ -928,8 +1442,15 @@ export const CheckoutPage: React.FC = () => {
               <p className="capitalize mt-1">
                 Method: <strong>{placedOrder.customerDetails.paymentMethod.toUpperCase()}</strong> (Demo Test)
               </p>
-              <p className="capitalize">
-                Slot: <strong>{placedOrder.customerDetails.deliverySlot}</strong>
+              <p className="mt-1">
+                Delivery Type:{' '}
+                <strong>
+                  {placedOrder.deliveryType === 'scheduled' ||
+                  placedOrder.customerDetails.deliveryType === 'scheduled'
+                    ? placedOrder.customerDetails.scheduledSlotLabel ||
+                      formatScheduledAt(placedOrder.scheduledAt || placedOrder.customerDetails.scheduledAt)
+                    : 'Express Delivery (30–40 Mins)'}
+                </strong>
               </p>
               <p>
                 Customer Type:{' '}
@@ -1101,7 +1622,7 @@ export const CheckoutPage: React.FC = () => {
                 </span>
               </h4>
               <p className="text-xs text-stone-600 mt-0.5">
-                We found your saved profile. Would you like to prefill your delivery address?
+                Your saved profile info and delivery address will be automatically fetched once you sign in.
               </p>
             </div>
           </div>
@@ -1109,17 +1630,11 @@ export const CheckoutPage: React.FC = () => {
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={handlePrefillReturningCustomer}
-              className="px-3.5 py-1.5 bg-amber-800 hover:bg-amber-900 text-white text-xs font-bold rounded-xl transition-colors shadow-xs"
-            >
-              Prefill Saved Address
-            </button>
-            <button
-              type="button"
               onClick={handleTriggerOtpVerification}
-              className="px-3.5 py-1.5 bg-white border border-stone-200 hover:bg-stone-50 text-stone-700 text-xs font-bold rounded-xl transition-colors"
+              className="px-4 py-2 bg-amber-800 hover:bg-amber-900 text-white text-xs font-bold rounded-xl transition-colors shadow-xs flex items-center gap-1.5 cursor-pointer"
             >
-              Sign In (OTP)
+              <UserCheck className="w-3.5 h-3.5" />
+              <span>Sign In Now</span>
             </button>
           </div>
         </motion.div>
@@ -1173,11 +1688,12 @@ export const CheckoutPage: React.FC = () => {
                       type="tel"
                       name="phone"
                       maxLength={10}
+                      disabled={isCustomerLoggedIn}
                       value={formData.phone}
                       onChange={handleChange}
                       onBlur={() => handleBlur('phone')}
                       placeholder="10-digit mobile number"
-                      className={`w-full pl-10 pr-9 py-2 bg-gray-50 border rounded-xl text-xs sm:text-sm focus:outline-none transition-colors ${
+                      className={`w-full pl-10 pr-9 py-2 bg-gray-50 border rounded-xl text-xs sm:text-sm focus:outline-none transition-colors disabled:bg-stone-100 disabled:text-stone-700 disabled:cursor-not-allowed disabled:border-stone-200 disabled:select-none ${
                         touched.phone && errors.phone
                           ? 'border-rose-500 bg-rose-50/40 focus:border-rose-600 text-rose-950'
                           : 'border-gray-200 focus:border-orange-500 focus:bg-white text-gray-900'
@@ -1202,11 +1718,12 @@ export const CheckoutPage: React.FC = () => {
                   <input
                     type="text"
                     name="fullName"
+                    disabled={isCustomerLoggedIn || !!returningCustomerFound}
                     value={formData.fullName}
                     onChange={handleChange}
                     onBlur={() => handleBlur('fullName')}
                     placeholder="e.g. Rahul Sharma"
-                    className={`w-full px-3 py-2 bg-gray-50 border rounded-xl text-xs sm:text-sm focus:outline-none transition-colors ${
+                    className={`w-full px-3 py-2 bg-gray-50 border rounded-xl text-xs sm:text-sm focus:outline-none transition-colors disabled:bg-stone-100 disabled:text-stone-700 disabled:cursor-not-allowed disabled:border-stone-200 disabled:select-none ${
                       touched.fullName && errors.fullName
                         ? 'border-rose-500 bg-rose-50/40 focus:border-rose-600 text-rose-950'
                         : 'border-gray-200 focus:border-orange-500 focus:bg-white text-gray-900'
@@ -1232,11 +1749,12 @@ export const CheckoutPage: React.FC = () => {
                   <input
                     type="email"
                     name="email"
+                    disabled={isCustomerLoggedIn || !!returningCustomerFound}
                     value={formData.email}
                     onChange={handleChange}
                     onBlur={() => handleBlur('email')}
                     placeholder="e.g. name@example.com (optional)"
-                    className={`w-full px-3 py-2 bg-gray-50 border rounded-xl text-xs sm:text-sm focus:outline-none transition-colors ${
+                    className={`w-full px-3 py-2 bg-gray-50 border rounded-xl text-xs sm:text-sm focus:outline-none transition-colors disabled:bg-stone-100 disabled:text-stone-700 disabled:cursor-not-allowed disabled:border-stone-200 disabled:select-none ${
                       touched.email && errors.email
                         ? 'border-rose-500 bg-rose-50/40 focus:border-rose-600 text-rose-950'
                         : 'border-gray-200 focus:border-orange-500 focus:bg-white text-gray-900'
@@ -1249,10 +1767,74 @@ export const CheckoutPage: React.FC = () => {
                     </p>
                   )}
                 </div>
+
+                {(isCustomerLoggedIn || returningCustomerFound) && (
+                  <div className="sm:col-span-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 p-3 bg-amber-50/70 border border-amber-200/80 rounded-xl text-xs text-stone-700">
+                    <div className="flex items-center gap-2">
+                      <UserCheck className="w-4 h-4 text-amber-800 shrink-0" />
+                      <span>
+                        {isCustomerLoggedIn ? (
+                          <>You can edit this (personal info) in Profile page.</>
+                        ) : (
+                          <>
+                            Saved details for <strong>{returningCustomerFound?.name}</strong> found. You can edit this (personal info) in Profile page after signing in.
+                          </>
+                        )}
+                      </span>
+                    </div>
+                    {isCustomerLoggedIn ? (
+                      <button
+                        type="button"
+                        onClick={goToProfile}
+                        className="text-xs font-bold text-amber-900 bg-white hover:bg-amber-100/60 border border-amber-300 px-3 py-1 rounded-lg transition-colors cursor-pointer shrink-0 self-start sm:self-auto shadow-2xs"
+                      >
+                        Edit in Profile →
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={handleTriggerOtpVerification}
+                        className="text-xs font-bold text-white bg-amber-800 hover:bg-amber-900 px-3 py-1 rounded-lg transition-colors cursor-pointer shrink-0 self-start sm:self-auto shadow-2xs flex items-center gap-1"
+                      >
+                        <UserCheck className="w-3.5 h-3.5" />
+                        <span>Sign In Now</span>
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {/* When 10-digit mobile number is not found on server & not logged in */}
+                {!isCustomerLoggedIn && !returningCustomerFound && formData.phone.length === 10 && (
+                  <div className="sm:col-span-2">
+                    {!formData.isPhoneVerified ? (
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 p-3 bg-amber-50/70 border border-amber-200/80 rounded-xl text-xs text-stone-700">
+                        <div className="flex items-center gap-2">
+                          <ShieldCheck className="w-4 h-4 text-amber-800 shrink-0" />
+                          <span>
+                            Verify mobile number <strong>+91 {formData.phone}</strong> via OTP to secure order
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleTriggerOtpVerification}
+                          className="text-xs font-bold text-white bg-orange-600 hover:bg-orange-700 px-3.5 py-1.5 rounded-lg transition-colors cursor-pointer shrink-0 self-start sm:self-auto shadow-2xs flex items-center gap-1.5"
+                        >
+                          <ShieldCheck className="w-3.5 h-3.5" />
+                          <span>Verify Mobile Number</span>
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2 p-3 bg-emerald-50 border border-emerald-200/90 rounded-xl text-xs text-emerald-900 font-semibold">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                        <span>Mobile Number (+91 {formData.phone}) verified via OTP</span>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
-              {/* Optional Account Creation & Welcome Discount Box */}
-              {!isCustomerLoggedIn && (
+              {/* Optional Account Creation & Welcome Discount Box - ONLY shown for new customers not found on server */}
+              {!isCustomerLoggedIn && !returningCustomerFound && (
                 <div className="mt-3 pt-3 border-t border-gray-100 space-y-2.5">
                   <label className="flex items-start gap-2.5 p-3 rounded-xl border border-amber-200/90 bg-amber-50/60 hover:bg-amber-50 cursor-pointer transition-colors">
                     <input
@@ -1292,9 +1874,9 @@ export const CheckoutPage: React.FC = () => {
                         <button
                           type="button"
                           onClick={handleTriggerOtpVerification}
-                          className="px-2.5 py-1 bg-amber-800 hover:bg-amber-900 text-white font-bold text-[11px] rounded-lg transition-colors flex items-center gap-1"
+                          className="px-2.5 py-1 bg-amber-800 hover:bg-amber-900 text-white font-bold text-[11px] rounded-lg transition-colors flex items-center gap-1 cursor-pointer"
                         >
-                          <span>Verify via OTP (951753)</span>
+                          <span>Verify via OTP</span>
                         </button>
                       )}
                     </div>
@@ -1321,7 +1903,7 @@ export const CheckoutPage: React.FC = () => {
             <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-xs space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <h3 className="font-bold text-sm text-gray-900 flex items-center gap-1.5">
-                  <span className="w-5 h-5 rounded-full bg-orange-600 text-white text-[10px] flex items-center justify-center">
+                  <span className="w-5 h-5 rounded-full bg-orange-600 text-white text-[10px] flex items-center justify-center font-bold">
                     2
                   </span>
                   <span>Fulfillment & Delivery Details</span>
@@ -1332,7 +1914,7 @@ export const CheckoutPage: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => handleToggleSelfPickup(false)}
-                    className={`px-3 py-1.5 rounded-lg font-bold transition-all flex items-center gap-1.5 ${
+                    className={`px-3 py-1.5 rounded-lg font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
                       !isSelfPickup
                         ? 'bg-white text-stone-900 shadow-xs'
                         : 'text-stone-600 hover:text-stone-900'
@@ -1344,7 +1926,7 @@ export const CheckoutPage: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => handleToggleSelfPickup(true)}
-                    className={`px-3 py-1.5 rounded-lg font-bold transition-all flex items-center gap-1.5 ${
+                    className={`px-3 py-1.5 rounded-lg font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
                       isSelfPickup
                         ? 'bg-amber-800 text-white shadow-xs'
                         : 'text-stone-600 hover:text-stone-900'
@@ -1399,115 +1981,391 @@ export const CheckoutPage: React.FC = () => {
                   </div>
                 </div>
               ) : (
-                /* Doorstep Delivery Form Inputs & Serviceability Checks */
-                <div className="space-y-3">
-                  <div>
-                    <label className="block text-xs font-semibold text-gray-700 mb-1">
-                      Complete Address (Flat / House No / Building / Street) <span className="text-rose-600">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      name="address"
-                      value={formData.address}
-                      onChange={handleChange}
-                      onBlur={() => handleBlur('address')}
-                      placeholder="e.g. Flat 301, Silver Heights, MG Road"
-                      className={`w-full px-3 py-2 bg-gray-50 border rounded-xl text-xs sm:text-sm focus:outline-none transition-colors ${
-                        touched.address && errors.address
-                          ? 'border-rose-500 bg-rose-50/40 focus:border-rose-600 text-rose-950'
-                          : 'border-gray-200 focus:border-orange-500 focus:bg-white text-gray-900'
-                      }`}
-                    />
-                    {touched.address && errors.address && (
-                      <p className="mt-1 text-[11px] text-rose-600 font-medium flex items-center gap-1">
-                        <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                        <span>{errors.address}</span>
-                      </p>
-                    )}
-                  </div>
+                /* Doorstep Delivery Section */
+                <div className="space-y-4">
+                  {/* CASE A: Saved Address Available & in View/Card Mode */}
+                  {hasSavedAddress && !isCustomAddressMode && !isEditingSavedAddress ? (
+                    <div className="p-4 bg-amber-50/60 border border-amber-200/90 rounded-2xl space-y-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-start gap-3 flex-1 min-w-0">
+                          <div className="w-9 h-9 rounded-xl bg-amber-800 text-white flex items-center justify-center shrink-0 shadow-2xs">
+                            {activeSavedAddress?.addressLabel?.toLowerCase() === 'home' ? (
+                              <Home className="w-4 h-4" />
+                            ) : activeSavedAddress?.addressLabel?.toLowerCase() === 'work' ? (
+                              <Briefcase className="w-4 h-4" />
+                            ) : (
+                              <Bookmark className="w-4 h-4" />
+                            )}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h4 className="font-bold text-xs sm:text-sm text-stone-900 flex items-center gap-1.5">
+                                <span>{activeSavedAddress?.addressLabel || 'Primary Delivery Address'}</span>
+                              </h4>
+                              <span className="text-[10px] font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full flex items-center gap-1">
+                                <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                <span>Deliver to this address</span>
+                              </span>
+                            </div>
 
-                  <div>
-                    <label className="block text-xs font-semibold text-gray-700 mb-1">
-                      Landmark <span className="text-stone-400 font-normal">(Optional)</span>
-                    </label>
-                    <input
-                      type="text"
-                      name="landmark"
-                      value={formData.landmark}
-                      onChange={handleChange}
-                      placeholder="e.g. Near Metro Station / Behind Mall"
-                      className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs sm:text-sm focus:outline-none focus:border-orange-500 focus:bg-white"
-                    />
-                  </div>
+                            <p className="text-xs text-stone-800 mt-1 font-medium leading-relaxed">
+                              {formData.address || activeSavedAddress?.fullAddress}
+                            </p>
+                            {(formData.landmark || activeSavedAddress?.landmark) && (
+                              <p className="text-[11px] text-stone-600 mt-0.5">
+                                Landmark: {formData.landmark || activeSavedAddress?.landmark}
+                              </p>
+                            )}
+                            <p className="text-[11px] text-stone-700 font-mono mt-0.5">
+                              {formData.city || activeSavedAddress?.city || 'Bhubaneswar'}, {formData.state || activeSavedAddress?.state || 'Odisha'} - {formData.pincode || activeSavedAddress?.pincode}
+                            </p>
+                          </div>
+                        </div>
 
-                  <div className="grid grid-cols-3 gap-2.5">
-                    <div>
-                      <label className="block text-xs font-semibold text-gray-700 mb-1">
-                        City <span className="text-rose-600">*</span>
-                      </label>
-                      <input
-                        type="text"
-                        name="city"
-                        placeholder="e.g. Bhubaneswar"
-                        value={formData.city}
-                        onChange={handleChange}
-                        onBlur={() => handleBlur('city')}
-                        className={`w-full px-3 py-2 bg-gray-50 border rounded-xl text-xs sm:text-sm focus:outline-none transition-colors ${
-                          touched.city && errors.city
-                            ? 'border-rose-500 bg-rose-50/40 focus:border-rose-600 text-rose-950'
-                            : 'border-gray-200 focus:border-orange-500 focus:bg-white text-gray-900'
-                        }`}
-                      />
-                      {touched.city && errors.city && (
-                        <p className="mt-1 text-[10px] text-rose-600 font-medium">{errors.city}</p>
+                        {/* Top right hyperlink: Switch Address */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const targetId = customer?.id || returningCustomerFound?.addressData?.customerId;
+                            const targetPhone = customer?.phone || formData.phone;
+                            if (targetId || targetPhone) {
+                              fetchCustomerAddresses(targetId, targetPhone);
+                            }
+                            setIsAddressSwitchModalOpen(true);
+                          }}
+                          className="text-xs font-bold text-amber-900 hover:text-amber-950 underline cursor-pointer shrink-0 py-1"
+                        >
+                          Switch Address
+                        </button>
+                      </div>
+
+                      {/* Actions: Deliver to different address OR edit this address */}
+                      <div className="pt-2 border-t border-amber-200/70 flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={handleStartEditAddress}
+                            className="px-3 py-1.5 bg-white border border-stone-300 hover:bg-stone-50 text-stone-800 font-bold rounded-xl text-xs flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
+                          >
+                            <Edit3 className="w-3.5 h-3.5 text-amber-800" />
+                            <span>Edit this Address</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={handleStartNewAddress}
+                            className="px-3 py-1.5 bg-white border border-stone-300 hover:bg-stone-50 text-stone-800 font-bold rounded-xl text-xs flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
+                          >
+                            <Plus className="w-3.5 h-3.5 text-amber-800" />
+                            <span>+ Add New Address</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    /* CASE B: Address Input Form (for New Address, Editing Saved Address, or Guests) */
+                    <div className="space-y-3">
+                      {/* Context Banner if entering new address */}
+                      {isCustomAddressMode && (
+                        <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                          <div className="flex items-center gap-2 text-stone-800">
+                            <Plus className="w-4 h-4 text-amber-800 shrink-0" />
+                            <span>
+                              Adding a <strong>new delivery address</strong> for this order.
+                            </span>
+                          </div>
+                          {activeSavedAddress && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIsCustomAddressMode(false);
+                                setIsEditingSavedAddress(false);
+                                setFormData((prev) => ({
+                                  ...prev,
+                                  address: activeSavedAddress.fullAddress || '',
+                                  landmark: activeSavedAddress.landmark || '',
+                                  city: activeSavedAddress.city || prev.city,
+                                  state: activeSavedAddress.state || prev.state,
+                                  pincode: activeSavedAddress.pincode || prev.pincode,
+                                }));
+                              }}
+                              className="text-xs font-bold text-amber-900 hover:text-amber-950 underline flex items-center gap-1 cursor-pointer self-start sm:self-auto"
+                            >
+                              <RotateCcw className="w-3.5 h-3.5" />
+                              <span>Cancel & Use Saved Address</span>
+                            </button>
+                          )}
+                        </div>
+                      )}
+
+                      {/* Context Banner if editing saved address */}
+                      {isEditingSavedAddress && (
+                        <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-between gap-2 text-xs">
+                          <div className="flex items-center gap-2 text-stone-800">
+                            <Edit3 className="w-4 h-4 text-amber-800 shrink-0" />
+                            <span>Editing delivery address. Save changes when done.</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsEditingSavedAddress(false);
+                              if (activeSavedAddress) {
+                                setFormData((prev) => ({
+                                  ...prev,
+                                  address: activeSavedAddress.fullAddress || '',
+                                  landmark: activeSavedAddress.landmark || '',
+                                  city: activeSavedAddress.city || prev.city,
+                                  state: activeSavedAddress.state || prev.state,
+                                  pincode: activeSavedAddress.pincode || prev.pincode,
+                                }));
+                              }
+                            }}
+                            className="text-xs font-bold text-stone-600 hover:text-stone-900 underline cursor-pointer"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Address Label Selector (Home, Work, Other) */}
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-700 mb-1.5">
+                          Address Tag / Label <span className="text-rose-600">*</span>
+                        </label>
+                        <div className="flex flex-wrap items-center gap-2 mb-2">
+                          <button
+                            type="button"
+                            onClick={() => setAddressLabelType('Home')}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer ${
+                              addressLabelType === 'Home'
+                                ? 'bg-amber-800 text-white shadow-2xs'
+                                : 'bg-gray-100 hover:bg-gray-200 text-stone-700'
+                            }`}
+                          >
+                            <Home className="w-3.5 h-3.5" />
+                            <span>Home</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setAddressLabelType('Work')}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer ${
+                              addressLabelType === 'Work'
+                                ? 'bg-amber-800 text-white shadow-2xs'
+                                : 'bg-gray-100 hover:bg-gray-200 text-stone-700'
+                            }`}
+                          >
+                            <Briefcase className="w-3.5 h-3.5" />
+                            <span>Work</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setAddressLabelType('Other')}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer ${
+                              addressLabelType === 'Other'
+                                ? 'bg-amber-800 text-white shadow-2xs'
+                                : 'bg-gray-100 hover:bg-gray-200 text-stone-700'
+                            }`}
+                          >
+                            <Bookmark className="w-3.5 h-3.5" />
+                            <span>Other</span>
+                          </button>
+                        </div>
+
+                        {addressLabelType === 'Other' && (
+                          <div className="mt-1">
+                            <input
+                              type="text"
+                              value={customAddressTagline}
+                              onChange={(e) => setCustomAddressTagline(e.target.value)}
+                              placeholder="e.g. Mom's House, Farmhouse, Guest House, Office 2"
+                              className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs sm:text-sm focus:outline-none focus:border-amber-800 focus:bg-white text-gray-900"
+                            />
+                          </div>
+                        )}
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-700 mb-1">
+                          Complete Address (Flat / House No / Building / Street) <span className="text-rose-600">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          name="address"
+                          value={formData.address}
+                          onChange={handleChange}
+                          onBlur={() => handleBlur('address')}
+                          placeholder="e.g. Flat 301, Silver Heights, MG Road"
+                          className={`w-full px-3 py-2 bg-gray-50 border rounded-xl text-xs sm:text-sm focus:outline-none transition-colors ${
+                            touched.address && errors.address
+                              ? 'border-rose-500 bg-rose-50/40 focus:border-rose-600 text-rose-950'
+                              : 'border-gray-200 focus:border-orange-500 focus:bg-white text-gray-900'
+                          }`}
+                        />
+                        {touched.address && errors.address && (
+                          <p className="mt-1 text-[11px] text-rose-600 font-medium flex items-center gap-1">
+                            <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                            <span>{errors.address}</span>
+                          </p>
+                        )}
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-700 mb-1">
+                          Landmark <span className="text-stone-400 font-normal">(Optional)</span>
+                        </label>
+                        <input
+                          type="text"
+                          name="landmark"
+                          value={formData.landmark}
+                          onChange={handleChange}
+                          placeholder="e.g. Near Metro Station / Behind Mall"
+                          className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs sm:text-sm focus:outline-none focus:border-orange-500 focus:bg-white"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-2.5">
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-700 mb-1">
+                            City <span className="text-rose-600">*</span>
+                          </label>
+                          <input
+                            type="text"
+                            name="city"
+                            placeholder="e.g. Bhubaneswar"
+                            value={formData.city}
+                            onChange={handleChange}
+                            onBlur={() => handleBlur('city')}
+                            className={`w-full px-3 py-2 bg-gray-50 border rounded-xl text-xs sm:text-sm focus:outline-none transition-colors ${
+                              touched.city && errors.city
+                                ? 'border-rose-500 bg-rose-50/40 focus:border-rose-600 text-rose-950'
+                                : 'border-gray-200 focus:border-orange-500 focus:bg-white text-gray-900'
+                            }`}
+                          />
+                          {touched.city && errors.city && (
+                            <p className="mt-1 text-[10px] text-rose-600 font-medium">{errors.city}</p>
+                          )}
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-700 mb-1">
+                            State (Odisha) <span className="text-rose-600">*</span>
+                          </label>
+                          <input
+                            type="text"
+                            name="state"
+                            placeholder="Odisha"
+                            value={formData.state}
+                            onChange={handleChange}
+                            onBlur={() => handleBlur('state')}
+                            className={`w-full px-3 py-2 bg-gray-50 border rounded-xl text-xs sm:text-sm focus:outline-none transition-colors ${
+                              touched.state && errors.state
+                                ? 'border-rose-500 bg-rose-50/40 focus:border-rose-600 text-rose-950'
+                                : 'border-gray-200 focus:border-orange-500 focus:bg-white text-gray-900'
+                            }`}
+                          />
+                          {touched.state && errors.state && (
+                            <p className="mt-1 text-[10px] text-rose-600 font-medium">{errors.state}</p>
+                          )}
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-700 mb-1">
+                            PIN Code <span className="text-rose-600">*</span>
+                          </label>
+                          <input
+                            type="text"
+                            name="pincode"
+                            maxLength={6}
+                            placeholder="e.g. 751024"
+                            value={formData.pincode}
+                            onChange={handleChange}
+                            onBlur={() => handleBlur('pincode')}
+                            className={`w-full px-3 py-2 bg-gray-50 border rounded-xl text-xs sm:text-sm focus:outline-none transition-colors ${
+                              touched.pincode && errors.pincode
+                                ? 'border-rose-500 bg-rose-50/40 focus:border-rose-600 text-rose-950'
+                                : 'border-gray-200 focus:border-orange-500 focus:bg-white text-gray-900'
+                            }`}
+                          />
+                          {touched.pincode && errors.pincode && (
+                            <p className="mt-1 text-[10px] text-rose-600 font-medium">{errors.pincode}</p>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Save address checkbox when adding new address & logged in */}
+                      {isCustomAddressMode && isCustomerLoggedIn && (
+                        <label className="flex items-center gap-2 p-2.5 bg-amber-50/70 border border-amber-200/80 rounded-xl cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={shouldSaveAddressToAccount}
+                            onChange={(e) => setShouldSaveAddressToAccount(e.target.checked)}
+                            className="rounded text-amber-800 focus:ring-amber-800"
+                          />
+                          <span className="text-xs text-stone-800 font-medium">
+                            Save this address to my account as{' '}
+                            <strong>
+                              {addressLabelType === 'Other' ? customAddressTagline.trim() || 'Other' : addressLabelType}
+                            </strong>
+                          </span>
+                        </label>
+                      )}
+
+                      {/* Action buttons for Edit vs New address */}
+                      {isEditingSavedAddress && (
+                        <div className="pt-2 flex items-center justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setIsEditingSavedAddress(false)}
+                            className="px-3 py-1.5 bg-stone-100 hover:bg-stone-200 text-stone-700 font-bold rounded-xl text-xs transition-colors cursor-pointer"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleSaveEditedAddress}
+                            disabled={isSavingAddressInProgress}
+                            className="px-4 py-1.5 bg-amber-800 hover:bg-amber-900 text-white font-bold rounded-xl text-xs shadow-xs transition-colors cursor-pointer flex items-center gap-1.5"
+                          >
+                            <Check className="w-3.5 h-3.5" />
+                            <span>{isSavingAddressInProgress ? 'Saving...' : 'Save Changes & Deliver Here'}</span>
+                          </button>
+                        </div>
+                      )}
+
+                      {isCustomAddressMode && (
+                        <div className="pt-2 flex items-center justify-end gap-2">
+                          {activeSavedAddress && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setIsCustomAddressMode(false);
+                                setFormData((prev) => ({
+                                  ...prev,
+                                  address: activeSavedAddress.fullAddress || '',
+                                  landmark: activeSavedAddress.landmark || '',
+                                  city: activeSavedAddress.city || prev.city,
+                                  state: activeSavedAddress.state || prev.state,
+                                  pincode: activeSavedAddress.pincode || prev.pincode,
+                                }));
+                              }}
+                              className="px-3 py-1.5 bg-stone-100 hover:bg-stone-200 text-stone-700 font-bold rounded-xl text-xs transition-colors cursor-pointer"
+                            >
+                              Cancel
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={handleSaveNewAddress}
+                            disabled={isSavingAddressInProgress}
+                            className="px-4 py-1.5 bg-amber-800 hover:bg-amber-900 text-white font-bold rounded-xl text-xs shadow-xs transition-colors cursor-pointer flex items-center gap-1.5"
+                          >
+                            <Check className="w-3.5 h-3.5" />
+                            <span>{isSavingAddressInProgress ? 'Saving...' : 'Save & Deliver Here'}</span>
+                          </button>
+                        </div>
                       )}
                     </div>
-
-                    <div>
-                      <label className="block text-xs font-semibold text-gray-700 mb-1">
-                        State (Odisha) <span className="text-rose-600">*</span>
-                      </label>
-                      <input
-                        type="text"
-                        name="state"
-                        placeholder="Odisha"
-                        value={formData.state}
-                        onChange={handleChange}
-                        onBlur={() => handleBlur('state')}
-                        className={`w-full px-3 py-2 bg-gray-50 border rounded-xl text-xs sm:text-sm focus:outline-none transition-colors ${
-                          touched.state && errors.state
-                            ? 'border-rose-500 bg-rose-50/40 focus:border-rose-600 text-rose-950'
-                            : 'border-gray-200 focus:border-orange-500 focus:bg-white text-gray-900'
-                        }`}
-                      />
-                      {touched.state && errors.state && (
-                        <p className="mt-1 text-[10px] text-rose-600 font-medium">{errors.state}</p>
-                      )}
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-semibold text-gray-700 mb-1">
-                        PIN Code <span className="text-rose-600">*</span>
-                      </label>
-                      <input
-                        type="text"
-                        name="pincode"
-                        maxLength={6}
-                        placeholder="e.g. 751024"
-                        value={formData.pincode}
-                        onChange={handleChange}
-                        onBlur={() => handleBlur('pincode')}
-                        className={`w-full px-3 py-2 bg-gray-50 border rounded-xl text-xs sm:text-sm focus:outline-none transition-colors ${
-                          touched.pincode && errors.pincode
-                            ? 'border-rose-500 bg-rose-50/40 focus:border-rose-600 text-rose-950'
-                            : 'border-gray-200 focus:border-orange-500 focus:bg-white text-gray-900'
-                        }`}
-                      />
-                      {touched.pincode && errors.pincode && (
-                        <p className="mt-1 text-[10px] text-rose-600 font-medium">{errors.pincode}</p>
-                      )}
-                    </div>
-                  </div>
+                  )}
 
                   {/* Dynamic PIN Code Serviceability & Outlet Verification Banner */}
                   {isPinComplete && (
@@ -1557,7 +2415,7 @@ export const CheckoutPage: React.FC = () => {
                                   pinServiceability.altZone
                                 )
                               }
-                              className="px-3 py-1.5 bg-amber-800 hover:bg-amber-900 text-white font-bold rounded-lg transition-colors flex items-center gap-1 text-xs shadow-xs"
+                              className="px-3 py-1.5 bg-amber-800 hover:bg-amber-900 text-white font-bold rounded-lg transition-colors flex items-center gap-1 text-xs shadow-xs cursor-pointer"
                             >
                               <RefreshCw className="w-3.5 h-3.5" />
                               <span>Switch to {pinServiceability.altOutlet.name}</span>
@@ -1565,7 +2423,7 @@ export const CheckoutPage: React.FC = () => {
                             <button
                               type="button"
                               onClick={() => handleToggleSelfPickup(true)}
-                              className="px-3 py-1.5 bg-white border border-stone-300 hover:bg-stone-50 text-stone-800 font-medium rounded-lg transition-colors text-xs"
+                              className="px-3 py-1.5 bg-white border border-stone-300 hover:bg-stone-50 text-stone-800 font-medium rounded-lg transition-colors text-xs cursor-pointer"
                             >
                               Switch to Self-Pickup
                             </button>
@@ -1612,72 +2470,151 @@ export const CheckoutPage: React.FC = () => {
                       )}
                     </div>
                   )}
+                </div>
+              )}
+            </div>
 
-                  {/* Delivery Slot Choice */}
-                  <div className="pt-1">
-                    <label className="block text-xs font-semibold text-gray-700 mb-1.5">
-                      Delivery Speed & Slot
-                    </label>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                      <label
-                        className={`p-2.5 rounded-xl border flex items-center gap-2.5 cursor-pointer transition-all ${
-                          formData.deliverySlot === 'immediate'
-                            ? 'border-orange-600 bg-orange-50/70 ring-1 ring-orange-600/30'
-                            : 'border-gray-200 bg-white'
-                        }`}
-                      >
-                        <input
-                          type="radio"
-                          name="deliverySlot"
-                          value="immediate"
-                          checked={formData.deliverySlot === 'immediate'}
-                          onChange={handleChange}
-                          className="accent-orange-600"
-                        />
-                        <div>
-                          <p className="text-xs font-bold text-gray-900 flex items-center gap-1">
-                            <Truck className="w-3.5 h-3.5 text-orange-600" />
-                            Express 30–40 Mins
-                          </p>
-                          <p className="text-[10px] text-gray-500">Piping hot oven delivery</p>
-                        </div>
-                      </label>
+            {/* 3. Dedicated Delivery Speed & Slot Banner */}
+            <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-xs space-y-3.5">
+              <div className="flex items-center justify-between">
+                <h3 className="font-bold text-sm text-gray-900 flex items-center gap-1.5">
+                  <span className="w-5 h-5 rounded-full bg-orange-600 text-white text-[10px] flex items-center justify-center font-bold">
+                    3
+                  </span>
+                  <span>Delivery Speed & Slot</span>
+                </h3>
+                <span className="text-[11px] text-stone-500 flex items-center gap-1 font-medium">
+                  <Clock className="w-3.5 h-3.5 text-orange-600" />
+                  <span>Fresh Handi Dispatch</span>
+                </span>
+              </div>
 
-                      <label
-                        className={`p-2.5 rounded-xl border flex items-center gap-2.5 cursor-pointer transition-all ${
-                          formData.deliverySlot === 'dinner'
-                            ? 'border-orange-600 bg-orange-50/70 ring-1 ring-orange-600/30'
-                            : 'border-gray-200 bg-white'
-                        }`}
-                      >
-                        <input
-                          type="radio"
-                          name="deliverySlot"
-                          value="dinner"
-                          checked={formData.deliverySlot === 'dinner'}
-                          onChange={handleChange}
-                          className="accent-orange-600"
-                        />
-                        <div>
-                          <p className="text-xs font-bold text-gray-900 flex items-center gap-1">
-                            <Clock className="w-3.5 h-3.5 text-gray-700" />
-                            Scheduled Slot
-                          </p>
-                          <p className="text-[10px] text-gray-500">Deliver between 8:00 - 9:00 PM</p>
-                        </div>
-                      </label>
+              {isSelfPickup ? (
+                <div className="p-3.5 bg-amber-50/70 border border-amber-200 rounded-xl flex items-center justify-between gap-3 text-xs text-stone-800">
+                  <div className="flex items-center gap-2.5">
+                    <Store className="w-4 h-4 text-amber-800 shrink-0" />
+                    <div>
+                      <p className="font-bold text-stone-900">Takeaway / Self-Pickup Readiness</p>
+                      <p className="text-[11px] text-stone-600 mt-0.5">
+                        Estimated kitchen preparation time is <strong>~25–30 mins</strong>.
+                      </p>
                     </div>
+                  </div>
+                  <span className="text-[11px] font-bold bg-amber-100 text-amber-900 px-2.5 py-1 rounded-lg shrink-0">
+                    Instant Preparation
+                  </span>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <label
+                      className={`p-3.5 rounded-xl border flex items-start gap-3 cursor-pointer transition-all ${
+                        formData.deliveryType === 'immediate'
+                          ? 'border-orange-600 bg-orange-50/70 ring-1 ring-orange-600/30'
+                          : 'border-gray-200 bg-white hover:bg-gray-50'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="deliveryType"
+                        value="immediate"
+                        checked={formData.deliveryType === 'immediate'}
+                        onChange={() => {
+                          setFormData((prev) => ({
+                            ...prev,
+                            deliveryType: 'immediate',
+                            scheduledAt: undefined,
+                          }));
+                        }}
+                        className="accent-orange-600 mt-0.5"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-1">
+                          <p className="text-xs font-bold text-gray-900 flex items-center gap-1.5">
+                            <Zap className="w-3.5 h-3.5 text-orange-600 fill-orange-500 shrink-0" />
+                            <span>Express Delivery</span>
+                          </p>
+                          <span className="text-[10px] font-extrabold text-orange-700 bg-orange-100 px-2 py-0.5 rounded-full shrink-0">
+                            30–40 Mins
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-gray-600 mt-1 leading-relaxed">
+                          Piping hot dum-cooked clay pot dispatched right away from the live kitchen.
+                        </p>
+                      </div>
+                    </label>
+
+                    <div
+                      onClick={handleOpenScheduleModal}
+                      className={`p-3.5 rounded-xl border flex items-start gap-3 cursor-pointer transition-all ${
+                        formData.deliveryType === 'scheduled'
+                          ? 'border-orange-600 bg-orange-50/70 ring-1 ring-orange-600/30'
+                          : 'border-gray-200 bg-white hover:bg-gray-50'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="deliveryType"
+                        value="scheduled"
+                        checked={formData.deliveryType === 'scheduled'}
+                        onChange={handleOpenScheduleModal}
+                        className="accent-orange-600 mt-0.5 cursor-pointer"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-1">
+                          <p className="text-xs font-bold text-gray-900 flex items-center gap-1.5">
+                            <Clock className="w-3.5 h-3.5 text-amber-800 shrink-0" />
+                            <span>Scheduled Slot</span>
+                          </p>
+                          <div className="flex items-center gap-1.5">
+                            {formData.deliveryType === 'scheduled' && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleOpenScheduleModal();
+                                }}
+                                className="text-[10px] font-bold text-amber-900 underline hover:text-amber-950 cursor-pointer"
+                              >
+                                Change Slot
+                              </button>
+                            )}
+                            <span className="text-[10px] font-extrabold text-amber-800 bg-amber-100 px-2 py-0.5 rounded-full shrink-0">
+                              Next 10 Days
+                            </span>
+                          </div>
+                        </div>
+                        <p className="text-[11px] text-gray-700 mt-1 leading-relaxed font-medium">
+                          {scheduledSlotSummaryText}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Cooking / Delivery Instructions */}
+                  <div className="pt-2 border-t border-gray-100">
+                    <label className="block text-[11px] font-semibold text-gray-700 mb-1">
+                      Cooking or Delivery Instructions <span className="text-stone-400 font-normal">(Optional)</span>
+                    </label>
+                    <input
+                      type="text"
+                      name="deliveryNotes"
+                      value={formData.deliveryNotes}
+                      onChange={handleChange}
+                      placeholder="e.g. Ring doorbell, leave at security gate, make gravies mild spicy"
+                      className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs focus:outline-none focus:border-orange-500 focus:bg-white text-gray-900 transition-colors"
+                    />
                   </div>
                 </div>
               )}
             </div>
 
-            {/* 3. Payment Method */}
+            {/* 4. Payment Method */}
             <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-xs space-y-3">
               <div className="flex items-center justify-between">
                 <h3 className="font-bold text-sm text-gray-900 flex items-center gap-1.5">
-                  <span className="w-5 h-5 rounded-full bg-orange-600 text-white text-[10px] flex items-center justify-center">
-                    3
+                  <span className="w-5 h-5 rounded-full bg-orange-600 text-white text-[10px] flex items-center justify-center font-bold">
+                    4
                   </span>
                   <span>Payment Method (Demo Mode)</span>
                 </h3>
@@ -1879,27 +2816,60 @@ export const CheckoutPage: React.FC = () => {
                 </div>
               </div>
 
-              <button
-                type="submit"
-                id="place-order-submit-btn"
-                disabled={!isPlaceOrderEnabled}
-                className={`w-full py-3 rounded-xl font-bold text-xs sm:text-sm shadow-xs transition-colors flex items-center justify-center gap-1.5 ${
-                  isPlaceOrderEnabled
-                    ? 'bg-orange-600 hover:bg-orange-700 active:bg-orange-800 text-white cursor-pointer'
-                    : 'bg-stone-300 text-stone-600 cursor-not-allowed opacity-75'
-                }`}
-              >
-                {isSubmitting ? (
-                  <span>Sending to Kitchen...</span>
-                ) : !isPlaceOrderEnabled ? (
-                  <span>{placeOrderValidation.buttonLabel}</span>
-                ) : (
-                  <>
+              {placeOrderValidation.actionRequired === 'SIGN_IN_REQUIRED' ? (
+                <button
+                  type="button"
+                  onClick={handleTriggerOtpVerification}
+                  id="place-order-submit-btn"
+                  className="w-full py-3 rounded-xl font-bold text-xs sm:text-sm shadow-xs transition-colors flex items-center justify-center gap-2 bg-amber-800 hover:bg-amber-900 active:bg-amber-950 text-white cursor-pointer"
+                >
+                  <Lock className="w-4 h-4 text-amber-200" />
+                  <span>Sign In with OTP to Place Order</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              ) : placeOrderValidation.actionRequired === 'SAVE_EDITED_ADDRESS' ? (
+                <button
+                  type="button"
+                  onClick={handleSaveEditedAddress}
+                  id="place-order-submit-btn"
+                  className="w-full py-3 rounded-xl font-bold text-xs sm:text-sm shadow-xs transition-colors flex items-center justify-center gap-2 bg-amber-800 hover:bg-amber-900 active:bg-amber-950 text-white cursor-pointer"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>Save Address Changes to Proceed</span>
+                </button>
+              ) : placeOrderValidation.actionRequired === 'SAVE_NEW_ADDRESS' ? (
+                <button
+                  type="button"
+                  onClick={handleSaveNewAddress}
+                  id="place-order-submit-btn"
+                  className="w-full py-3 rounded-xl font-bold text-xs sm:text-sm shadow-xs transition-colors flex items-center justify-center gap-2 bg-amber-800 hover:bg-amber-900 active:bg-amber-950 text-white cursor-pointer"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>Save & Confirm Address to Proceed</span>
+                </button>
+              ) : (
+                <button
+                  type="submit"
+                  id="place-order-submit-btn"
+                  disabled={!isPlaceOrderEnabled}
+                  className={`w-full py-3 rounded-xl font-bold text-xs sm:text-sm shadow-xs transition-colors flex items-center justify-center gap-1.5 ${
+                    isPlaceOrderEnabled
+                      ? 'bg-orange-600 hover:bg-orange-700 active:bg-orange-800 text-white cursor-pointer'
+                      : 'bg-stone-300 text-stone-600 cursor-not-allowed opacity-75'
+                  }`}
+                >
+                  {isSubmitting ? (
+                    <span>Sending to Kitchen...</span>
+                  ) : !isPlaceOrderEnabled ? (
                     <span>{placeOrderValidation.buttonLabel}</span>
-                    <ArrowRight className="w-3.5 h-3.5" />
-                  </>
-                )}
-              </button>
+                  ) : (
+                    <>
+                      <span>{placeOrderValidation.buttonLabel}</span>
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </>
+                  )}
+                </button>
+              )}
 
               <p className="text-center text-[10px] text-gray-400">
                 By placing your order, you agree to Gaon Ka Swad terms & gourmet delivery policy.
@@ -1908,6 +2878,407 @@ export const CheckoutPage: React.FC = () => {
           </div>
         </div>
       </form>
+
+      {/* Switch Address Modal Popup */}
+      <AnimatePresence>
+        {isAddressSwitchModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              transition={{ duration: 0.2 }}
+              className="w-full max-w-lg bg-white rounded-2xl shadow-2xl border border-stone-200 overflow-hidden flex flex-col max-h-[85vh]"
+            >
+              {/* Modal Header */}
+              <div className="px-5 py-4 bg-stone-900 text-white flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-amber-800 flex items-center justify-center text-white shrink-0 shadow-2xs">
+                    <MapPin className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-sm text-white">Select Delivery Address</h3>
+                    <p className="text-[11px] text-stone-300">Fetched live from database</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={handleRefreshAddressesFromDB}
+                    disabled={isSyncingAddresses}
+                    className="p-1.5 rounded-lg hover:bg-white/10 text-stone-300 hover:text-white transition-colors cursor-pointer disabled:opacity-50"
+                    title="Refresh fresh from database"
+                    aria-label="Refresh addresses from database"
+                  >
+                    <RefreshCw className={`w-4 h-4 ${isSyncingAddresses ? 'animate-spin text-amber-400' : ''}`} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsAddressSwitchModalOpen(false)}
+                    className="w-8 h-8 rounded-full hover:bg-white/10 text-stone-300 hover:text-white flex items-center justify-center transition-colors cursor-pointer"
+                    aria-label="Close"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Modal Body - Address List */}
+              <div className="p-5 overflow-y-auto space-y-3 flex-1">
+                {isSyncingAddresses ? (
+                  <div className="text-center py-8 px-4 bg-stone-50 rounded-xl border border-stone-200">
+                    <RefreshCw className="w-6 h-6 text-amber-800 animate-spin mx-auto mb-2" />
+                    <p className="text-xs font-bold text-stone-800">Fetching addresses from database...</p>
+                  </div>
+                ) : modalAddresses && modalAddresses.length > 0 ? (
+                  modalAddresses.map((addr) => {
+                    const isSelected =
+                      (Boolean(addr.id) && (addr.id === selectedAddressId || addr.id === activeSavedAddress?.id)) ||
+                      (addr.fullAddress === formData.address && addr.pincode === formData.pincode);
+                    const label = addr.addressLabel || 'Home';
+                    const isHome = label.toLowerCase() === 'home';
+                    const isWork = label.toLowerCase() === 'work';
+
+                    return (
+                      <div
+                        key={addr.id || `${addr.fullAddress}-${addr.pincode}`}
+                        onClick={() => handleSelectSavedAddress(addr)}
+                        className={`p-4 rounded-xl border transition-all cursor-pointer relative ${
+                          isSelected
+                            ? 'border-amber-800 bg-amber-50/70 shadow-2xs ring-1 ring-amber-800/40'
+                            : 'border-stone-200 bg-white hover:border-amber-400 hover:bg-stone-50/80'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex items-start gap-3 flex-1 min-w-0">
+                            <div
+                              className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
+                                isSelected ? 'bg-amber-800 text-white' : 'bg-stone-100 text-stone-700'
+                              }`}
+                            >
+                              {isHome ? (
+                                <Home className="w-4 h-4" />
+                              ) : isWork ? (
+                                <Briefcase className="w-4 h-4" />
+                              ) : (
+                                <Bookmark className="w-4 h-4" />
+                              )}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="font-bold text-xs text-stone-900">{label}</span>
+                                {addr.isDefault && (
+                                  <span className="text-[10px] font-bold bg-stone-200 text-stone-800 px-2 py-0.5 rounded-full">
+                                    Default
+                                  </span>
+                                )}
+                                {isSelected && (
+                                  <span className="text-[10px] font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full flex items-center gap-1">
+                                    <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                    Selected
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-xs text-stone-800 mt-1 font-medium leading-relaxed">
+                                {addr.fullAddress}
+                              </p>
+                              {addr.landmark && (
+                                <p className="text-[11px] text-stone-600 mt-0.5">
+                                  Landmark: {addr.landmark}
+                                </p>
+                              )}
+                              <p className="text-[11px] text-stone-600 font-mono mt-0.5">
+                                {addr.city || 'Bhubaneswar'}, {addr.state || 'Odisha'} - {addr.pincode}
+                              </p>
+                            </div>
+                          </div>
+
+                          {!isSelected && (
+                            <div className="flex items-center shrink-0 self-center">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleSelectSavedAddress(addr);
+                                }}
+                                className="px-3 py-1.5 rounded-xl text-xs font-bold transition-colors cursor-pointer bg-stone-100 text-stone-700 hover:bg-amber-800 hover:text-white"
+                              >
+                                Deliver Here
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className="text-center py-6 px-4 bg-stone-50 rounded-xl border border-stone-200">
+                    <MapPin className="w-8 h-8 text-stone-400 mx-auto mb-2" />
+                    <p className="text-xs font-bold text-stone-800">No saved addresses found in database</p>
+                    <p className="text-[11px] text-stone-500 mt-1">
+                      Add a new delivery address to save it to your account.
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* Modal Footer */}
+              <div className="p-4 bg-stone-50 border-t border-stone-200 flex items-center justify-between gap-3">
+                <button
+                  type="button"
+                  onClick={() => setIsAddressSwitchModalOpen(false)}
+                  className="px-4 py-2 bg-white border border-stone-300 hover:bg-stone-100 text-stone-700 font-bold rounded-xl text-xs transition-colors cursor-pointer"
+                >
+                  Close
+                </button>
+                <button
+                  type="button"
+                  onClick={handleStartNewAddress}
+                  className="px-4 py-2 bg-amber-800 hover:bg-amber-900 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>+ Add New Address</span>
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* SCHEDULED DELIVERY SLOT POPUP MODAL (NEXT 10 DAYS + TIME SLOTS)           */}
+        {/* ========================================================================= */}
+        {isScheduleModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-stone-900/60 backdrop-blur-xs">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 12 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 12 }}
+              className="bg-white rounded-2xl border border-stone-200 shadow-2xl max-w-md sm:max-w-lg w-full overflow-hidden flex flex-col max-h-[88vh]"
+            >
+              {/* Modal Header */}
+              <div className="p-3 sm:p-3.5 border-b border-stone-100 flex items-center justify-between bg-amber-50/50">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-amber-800 text-white flex items-center justify-center shrink-0 shadow-2xs">
+                    <Calendar className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-xs sm:text-sm text-stone-900 flex items-center gap-1.5">
+                      <span>Choose Delivery Date & Time Slot</span>
+                      <span className="text-[9px] font-extrabold bg-amber-200/80 text-amber-900 px-1.5 py-0.2 rounded-full uppercase tracking-wider">
+                        Next 10 Days
+                      </span>
+                    </h3>
+                    <p className="text-[11px] text-stone-600 flex items-center flex-wrap gap-1 mt-0.5">
+                      <span>Fresh food dispatch,</span>
+                      <span className="font-semibold text-amber-900 bg-amber-100/90 border border-amber-300/80 px-1.5 py-0.5 rounded text-[10px] tracking-wide inline-flex items-center gap-1 shadow-2xs">
+                        <Sparkles className="w-2.5 h-2.5 text-amber-700 shrink-0" />
+                        scheduled at your convenience.
+                      </span>
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsScheduleModalOpen(false)}
+                  className="w-7 h-7 rounded-full bg-stone-100 hover:bg-stone-200 text-stone-600 flex items-center justify-center transition-colors cursor-pointer"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              {/* Modal Body */}
+              <div className="p-3 sm:p-4 overflow-y-auto space-y-4 flex-1">
+                {/* Step 1: Date Selection */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[11px] font-bold text-stone-900 flex items-center gap-1.5 uppercase tracking-wider">
+                      <span className="w-3.5 h-3.5 rounded-full bg-amber-800 text-white text-[8px] flex items-center justify-center font-bold">1</span>
+                      <span>Select Date (Next 10 Days)</span>
+                    </label>
+                    <span className="text-[10px] font-semibold text-amber-900">
+                      Selected: <strong>{modalScheduleDate}</strong>
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-5 gap-1.5">
+                    {next10Days.map((day) => {
+                      const isSelected = modalScheduleDate === day.formatted;
+                      return (
+                        <button
+                          key={day.dateStr}
+                          type="button"
+                          onClick={() => {
+                            setModalScheduleDate(day.formatted);
+                            setModalScheduleDateStr(day.dateStr);
+                          }}
+                          className={`p-1.5 sm:p-2 rounded-xl border text-center transition-all flex flex-col items-center justify-center relative cursor-pointer ${
+                            isSelected
+                              ? 'border-amber-800 bg-amber-50/90 ring-1.5 ring-amber-800 text-amber-950 shadow-2xs'
+                              : 'border-stone-200 bg-white hover:border-stone-300 hover:bg-stone-50 text-stone-700'
+                          }`}
+                        >
+                          {day.isToday && (
+                            <span className="text-[8px] font-extrabold uppercase bg-orange-600 text-white px-1 py-0.2 rounded-full absolute -top-1.5 leading-none">
+                              Today
+                            </span>
+                          )}
+                          {day.isTomorrow && (
+                            <span className="text-[8px] font-bold uppercase bg-stone-700 text-white px-1 py-0.2 rounded-full absolute -top-1.5 leading-none">
+                              Tmrw
+                            </span>
+                          )}
+                          <span className="text-[9px] font-bold tracking-wider uppercase opacity-75 leading-none">
+                            {day.dayName}
+                          </span>
+                          <span className="text-sm sm:text-base font-black my-0.5 leading-none">
+                            {day.dayNumber}
+                          </span>
+                          <span className="text-[9px] font-semibold opacity-80 uppercase leading-none">
+                            {day.monthName}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Step 2: Time Slot Selection */}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[11px] font-bold text-stone-900 flex items-center gap-1.5 uppercase tracking-wider">
+                      <span className="w-3.5 h-3.5 rounded-full bg-amber-800 text-white text-[8px] flex items-center justify-center font-bold">2</span>
+                      <span>Select Preferred Time Slot</span>
+                    </label>
+                    <span className="text-[10px] font-semibold text-amber-900">
+                      {modalScheduleTime}
+                    </span>
+                  </div>
+
+                  {/* Lunch Group */}
+                  <div className="space-y-1.5">
+                    <div className="flex items-center gap-1 text-[11px] font-bold text-stone-700">
+                      <Sun className="w-3 h-3 text-amber-600" />
+                      <span>Lunch Dining (12:30 PM – 3:30 PM)</span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      {SCHEDULE_TIME_SLOTS.filter((s) => s.category === 'Lunch').map((slot) => {
+                        const isSelected = modalScheduleTime === slot.timeRange;
+                        return (
+                          <button
+                            key={slot.id}
+                            type="button"
+                            onClick={() => {
+                              setModalScheduleTime(slot.timeRange);
+                              setModalScheduleCategory(slot.categoryLabel);
+                            }}
+                            className={`p-2 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
+                              isSelected
+                                ? 'border-amber-800 bg-amber-50/90 ring-1.5 ring-amber-800 text-amber-950 shadow-2xs'
+                                : 'border-stone-200 bg-white hover:border-stone-300 hover:bg-stone-50 text-stone-700'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-1 mb-0.5">
+                              <span className="text-[11px] font-bold leading-tight">{slot.label}</span>
+                              {isSelected ? (
+                                <CheckCircle2 className="w-3 h-3 text-amber-800 shrink-0" />
+                              ) : slot.isPopular ? (
+                                <span className="text-[8px] font-bold bg-amber-100 text-amber-900 px-1 py-0.2 rounded">
+                                  Top
+                                </span>
+                              ) : null}
+                            </div>
+                            <p className="text-[10px] font-mono font-bold text-stone-900">
+                              {slot.timeRange}
+                            </p>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Evening & Dinner Group */}
+                  <div className="space-y-1.5">
+                    <div className="flex items-center gap-1 text-[11px] font-bold text-stone-700">
+                      <Moon className="w-3 h-3 text-indigo-700" />
+                      <span>Evening Dining & Dinner (7:00 PM – 10:30 PM)</span>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                      {SCHEDULE_TIME_SLOTS.filter((s) => s.category !== 'Lunch').map((slot) => {
+                        const isSelected = modalScheduleTime === slot.timeRange;
+                        return (
+                          <button
+                            key={slot.id}
+                            type="button"
+                            onClick={() => {
+                              setModalScheduleTime(slot.timeRange);
+                              setModalScheduleCategory(slot.categoryLabel);
+                            }}
+                            className={`p-2 rounded-xl border text-left transition-all cursor-pointer flex items-center justify-between gap-2 ${
+                              isSelected
+                                ? 'border-amber-800 bg-amber-50/90 ring-1.5 ring-amber-800 text-amber-950 shadow-2xs'
+                                : 'border-stone-200 bg-white hover:border-stone-300 hover:bg-stone-50 text-stone-700'
+                            }`}
+                          >
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-1">
+                                <span className="text-[11px] font-bold text-stone-900">{slot.label}</span>
+                                {slot.isPopular && (
+                                  <span className="text-[8px] font-extrabold bg-orange-100 text-orange-800 px-1 py-0.2 rounded-full">
+                                    ★ Popular
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-[10px] font-mono font-bold text-stone-900 mt-0.2">
+                                {slot.timeRange}
+                              </p>
+                              <p className="text-[9px] text-stone-500 truncate">{slot.description}</p>
+                            </div>
+                            {isSelected && (
+                              <CheckCircle2 className="w-3.5 h-3.5 text-amber-800 shrink-0" />
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Live Slot Summary Message Preview */}
+                <div className="p-2.5 bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-300/80 rounded-xl flex items-start gap-2">
+                  <Sparkles className="w-3.5 h-3.5 text-amber-800 shrink-0 mt-0.5" />
+                  <div className="text-[11px] leading-tight">
+                    <p className="font-bold text-stone-900">
+                      Scheduled for {modalScheduleCategory} (Delivery between {modalScheduleTime} on {modalScheduleDate})
+                    </p>
+                    <p className="text-[10px] text-stone-600 mt-0.5">
+                      Kitchen will cook your order fresh and aim to deliver it hot right within this window.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Modal Footer */}
+              <div className="p-3 bg-stone-50 border-t border-stone-200 flex items-center justify-between gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setIsScheduleModalOpen(false)}
+                  className="px-3.5 py-1.5 bg-white border border-stone-300 hover:bg-stone-100 text-stone-700 font-bold rounded-lg text-xs transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmScheduleSlot}
+                  className="px-5 py-1.5 bg-amber-800 hover:bg-amber-900 text-white font-bold rounded-lg text-xs flex items-center gap-1.5 shadow-2xs transition-colors cursor-pointer"
+                >
+                  <Check className="w-3.5 h-3.5" />
+                  <span>Done (Confirm Slot)</span>
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

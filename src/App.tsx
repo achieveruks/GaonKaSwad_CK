@@ -19,6 +19,7 @@ import { ShopPage } from './pages/ShopPage';
 import { ProductDetailPage } from './pages/ProductDetailPage';
 import { CartPage } from './pages/CartPage';
 import { CheckoutPage } from './pages/CheckoutPage';
+import { ProfilePage } from './pages/ProfilePage';
 import { AboutPage } from './pages/AboutPage';
 import { ContactPage } from './pages/ContactPage';
 import { CategoriesPage } from './pages/CategoriesPage';
@@ -130,6 +131,8 @@ const AppContent: React.FC = () => {
         return <CartPage />;
       case '/checkout':
         return <CheckoutPage />;
+      case '/profile':
+        return <ProfilePage />;
       case '/about':
         return <AboutPage />;
       case '/contact':

@@ -1217,6 +1217,8 @@ class AppStorage {
       gst: orderData.gst || 0,
       total: orderData.total || 0,
       couponCode: orderData.couponCode,
+      deliveryType: orderData.deliveryType || 'immediate',
+      scheduledAt: orderData.scheduledAt,
       customerDetails: orderData.customerDetails || {
         fullName: 'Customer',
         email: '',
@@ -1225,7 +1227,8 @@ class AppStorage {
         city: addressSnapshot.city,
         state: addressSnapshot.state,
         pincode: addressSnapshot.pincode,
-        deliverySlot: 'immediate',
+        deliveryType: orderData.deliveryType || 'immediate',
+        scheduledAt: orderData.scheduledAt,
         paymentMethod: 'cod',
         includeCutlery: true,
       },

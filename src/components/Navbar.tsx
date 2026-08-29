@@ -22,7 +22,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { CATEGORIES } from '../data/products';
 
 export const Navbar: React.FC = () => {
-  const { currentRoute, goToHome, goToShop, goToCategories, goToAbout, goToContact } =
+  const { currentRoute, goToHome, goToShop, goToCategories, goToAbout, goToContact, goToProfile } =
     useNavigation();
   const { totalItemsCount, setIsCartDrawerOpen } = useCart();
   const { selectedLocation, setIsLocationModalOpen, currentOutlet, currentZone } = useLocation();
@@ -329,9 +329,20 @@ export const Navbar: React.FC = () => {
                           type="button"
                           onClick={() => {
                             setIsUserMenuOpen(false);
+                            goToProfile();
+                          }}
+                          className="w-full text-left px-3.5 py-2.5 text-xs font-bold text-stone-800 hover:bg-amber-50/70 hover:text-amber-900 flex items-center gap-2 transition-colors border-b border-stone-100 cursor-pointer"
+                        >
+                          <User className="w-3.5 h-3.5 text-amber-800" />
+                          <span>My Profile & Info</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsUserMenuOpen(false);
                             logoutCustomer();
                           }}
-                          className="w-full text-left px-3.5 py-2.5 text-xs font-bold text-rose-600 hover:bg-rose-50 flex items-center gap-2 transition-colors"
+                          className="w-full text-left px-3.5 py-2.5 text-xs font-bold text-rose-600 hover:bg-rose-50 flex items-center gap-2 transition-colors cursor-pointer"
                         >
                           <LogOut className="w-3.5 h-3.5" />
                           <span>Sign Out</span>

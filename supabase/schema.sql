@@ -234,7 +234,8 @@ CREATE TABLE IF NOT EXISTS public.orders (
   delivery_pincode TEXT,                                                 -- Delivery PIN code
   delivery_instructions TEXT,                                            -- Gate/cooking delivery notes
   delivery_notes TEXT,                                                   -- Compatible alias for delivery_instructions
-  delivery_slot VARCHAR(50) DEFAULT 'immediate',                         -- immediate | lunch | dinner | custom
+  delivery_type VARCHAR(50) DEFAULT 'immediate',                         -- immediate | scheduled
+  scheduled_at TIMESTAMPTZ,                                              -- Scheduled delivery timestamp (TIMESTAMPTZ)
   estimated_delivery_minutes INTEGER DEFAULT 35,
 
   -- Payment Gateway Integration (Razorpay ready)
@@ -265,6 +266,9 @@ CREATE TABLE IF NOT EXISTS public.orders (
 ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS order_number TEXT;
 ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS customer_address_id UUID REFERENCES public.customer_addresses(id) ON DELETE SET NULL;
 ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS order_status VARCHAR(50) DEFAULT 'confirmed';
+ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS delivery_type VARCHAR(50) DEFAULT 'immediate';
+ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMPTZ;
+ALTER TABLE IF EXISTS public.orders DROP COLUMN IF EXISTS delivery_slot;
 ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS discount_amount NUMERIC NOT NULL DEFAULT 0;
 ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS tax_amount NUMERIC NOT NULL DEFAULT 0;
 ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS total_amount NUMERIC NOT NULL DEFAULT 0;

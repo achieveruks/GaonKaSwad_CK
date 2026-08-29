@@ -8,7 +8,7 @@ interface OtpModalProps {
   isOpen?: boolean;
   onClose?: () => void;
   phone?: string;
-  mode?: 'signin' | 'create_account' | 'verify_review';
+  mode?: 'signin' | 'create_account' | 'verify_review' | 'direct_otp' | 'signin_otp';
   onVerify?: (phone: string, otp: string, extraData?: { fullName?: string; email?: string }) => Promise<any>;
   onSuccess?: (customer: Customer | null, address: CustomerAddress | null) => void;
 }
@@ -67,13 +67,21 @@ export const OtpModal: React.FC<OtpModalProps> = ({
 
       if (modalMode === 'create_account') {
         setView('signup');
+        setTimeout(() => {
+          firstInputRef.current?.focus();
+        }, 100);
+      } else if (modalMode === 'direct_otp' || modalMode === 'signin_otp') {
+        setView('otp');
+        setInfoNotice(`A 6-digit OTP code has been sent via SMS to +91 ${cleanPhone}.`);
+        setTimeout(() => {
+          otpInputRefs.current[0]?.focus();
+        }, 150);
       } else {
         setView('signin');
+        setTimeout(() => {
+          firstInputRef.current?.focus();
+        }, 100);
       }
-
-      setTimeout(() => {
-        firstInputRef.current?.focus();
-      }, 100);
     }
   }, [isModalOpen, modalPhone, modalMode, context.customer]);
 
@@ -238,8 +246,9 @@ export const OtpModal: React.FC<OtpModalProps> = ({
     setVerifiedName(cName);
     setIsSuccess(true);
 
-    if (propOnSuccess) {
-      propOnSuccess(result.customer || null, result.defaultAddress || null);
+    const callback = propOnSuccess || context.otpModalOnSuccess;
+    if (callback) {
+      callback(result.customer || null, result.defaultAddress || null);
     }
 
     setTimeout(() => {

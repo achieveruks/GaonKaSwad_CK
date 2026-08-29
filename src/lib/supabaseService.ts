@@ -896,8 +896,178 @@ export async function upsertSupabaseCustomer(customerData: {
 }
 
 /**
+ * Fetch all saved delivery addresses for a customer from Supabase
+ */
+export async function fetchSupabaseCustomerAddresses(customerId: string): Promise<CustomerAddress[]> {
+  if (!isSupabaseConfigured() || !customerId) return [];
+
+  try {
+    const { data, error } = await supabase
+      .from('customer_addresses')
+      .select('*')
+      .eq('customer_id', customerId)
+      .order('is_default', { ascending: false })
+      .order('created_at', { ascending: false });
+
+    if (error || !data) return [];
+    return data.map(mapDbAddressToCustomerAddress);
+  } catch (err) {
+    console.warn('fetchSupabaseCustomerAddresses error:', err);
+    return [];
+  }
+}
+
+/**
+ * Insert a brand new delivery address row into Supabase customer_addresses
+ */
+export async function insertSupabaseCustomerAddress(
+  customerId: string,
+  addressData: Partial<CustomerAddress>
+): Promise<CustomerAddress> {
+  if (!isSupabaseConfigured()) throw new Error('Supabase not configured');
+
+  const now = new Date().toISOString();
+  const cleanFullAddress = (addressData.fullAddress || '').trim();
+  const isDefault = addressData.isDefault !== false;
+
+  if (isDefault) {
+    try {
+      await supabase
+        .from('customer_addresses')
+        .update({ is_default: false, updated_at: now })
+        .eq('customer_id', customerId);
+    } catch {}
+  }
+
+  const payload: any = {
+    customer_id: customerId,
+    label: addressData.addressLabel || 'Home',
+    full_address: cleanFullAddress,
+    landmark: addressData.landmark || null,
+    city: addressData.city || 'Bhubaneswar',
+    state: addressData.state || 'Odisha',
+    pincode: addressData.pincode || '',
+    is_default: isDefault,
+    created_at: now,
+    updated_at: now,
+  };
+
+  let inserted: any = null;
+  const res1 = await supabase
+    .from('customer_addresses')
+    .insert(payload)
+    .select()
+    .maybeSingle();
+
+  if (res1.error) {
+    // If error mentions full_address or column name, attempt fallback with address_line1
+    if (res1.error.message && (res1.error.message.includes('full_address') || res1.error.message.includes('column') || res1.error.code === 'PGRST204')) {
+      delete payload.full_address;
+      payload.address_line1 = cleanFullAddress;
+      const res2 = await supabase
+        .from('customer_addresses')
+        .insert(payload)
+        .select()
+        .maybeSingle();
+      if (res2.error) throw res2.error;
+      inserted = res2.data;
+    } else {
+      throw res1.error;
+    }
+  } else {
+    inserted = res1.data;
+  }
+
+  if (!inserted) {
+    throw new Error('Customer address insert returned empty result');
+  }
+
+  return mapDbAddressToCustomerAddress(inserted);
+}
+
+/**
+ * Update an existing delivery address row in Supabase customer_addresses
+ */
+export async function updateSupabaseCustomerAddress(
+  addressId: string,
+  addressData: Partial<CustomerAddress>
+): Promise<CustomerAddress> {
+  if (!isSupabaseConfigured()) throw new Error('Supabase not configured');
+
+  const now = new Date().toISOString();
+  const cleanFullAddress = (addressData.fullAddress || '').trim();
+
+  // If setting as default, unmark other addresses for the customer
+  if (addressData.isDefault === true) {
+    try {
+      const { data: currentAddr } = await supabase
+        .from('customer_addresses')
+        .select('customer_id')
+        .eq('id', addressId)
+        .maybeSingle();
+
+      if (currentAddr?.customer_id) {
+        await supabase
+          .from('customer_addresses')
+          .update({ is_default: false, updated_at: now })
+          .eq('customer_id', currentAddr.customer_id);
+      }
+    } catch (e) {
+      console.warn('Resetting previous default address error:', e);
+    }
+  }
+
+  const updatePayload: any = {
+    label: addressData.addressLabel || 'Home',
+    full_address: cleanFullAddress,
+    landmark: addressData.landmark !== undefined ? (addressData.landmark || null) : null,
+    city: addressData.city || 'Bhubaneswar',
+    state: addressData.state || 'Odisha',
+    pincode: addressData.pincode || '',
+    updated_at: now,
+  };
+
+  if (addressData.isDefault !== undefined) {
+    updatePayload.is_default = addressData.isDefault;
+  }
+
+  let updated: any = null;
+  const res1 = await supabase
+    .from('customer_addresses')
+    .update(updatePayload)
+    .eq('id', addressId)
+    .select()
+    .maybeSingle();
+
+  if (res1.error) {
+    if (res1.error.message && (res1.error.message.includes('full_address') || res1.error.message.includes('column') || res1.error.code === 'PGRST204')) {
+      delete updatePayload.full_address;
+      updatePayload.address_line1 = cleanFullAddress;
+      const res2 = await supabase
+        .from('customer_addresses')
+        .update(updatePayload)
+        .eq('id', addressId)
+        .select()
+        .maybeSingle();
+      if (res2.error) throw res2.error;
+      updated = res2.data;
+    } else {
+      throw res1.error;
+    }
+  } else {
+    updated = res1.data;
+  }
+
+  if (!updated) {
+    throw new Error('Customer address update returned empty result');
+  }
+
+  return mapDbAddressToCustomerAddress(updated);
+}
+
+/**
  * Upsert customer delivery address to Supabase public.customer_addresses table
- * Deduplicates by checking if customer already has this address_line1 / pincode
+ * Deduplicates by checking if customer already has this address / pincode
  */
 export async function upsertSupabaseCustomerAddress(
   customerId: string,
@@ -934,47 +1104,36 @@ export async function upsertSupabaseCustomerAddress(
 
   if (existingMatch) {
     // 3. Update existing address
-    const { data: updated, error: updateErr } = await supabase
-      .from('customer_addresses')
-      .update({
-        label: addressData.addressLabel || existingMatch.label || 'Home',
-        full_address: cleanFullAddress || existingMatch.full_address || existingMatch.address_line1,
-        landmark: addressData.landmark !== undefined ? (addressData.landmark || null) : existingMatch.landmark,
-        city: addressData.city || existingMatch.city || 'Bhubaneswar',
-        state: addressData.state || existingMatch.state || 'Odisha',
-        pincode: addressData.pincode || existingMatch.pincode || '',
-        is_default: isDefault,
-        updated_at: now,
-      })
-      .eq('id', existingMatch.id)
-      .select()
-      .single();
-
-    if (updateErr) throw updateErr;
-    return mapDbAddressToCustomerAddress(updated);
+    return updateSupabaseCustomerAddress(existingMatch.id, {
+      ...addressData,
+      isDefault,
+    });
   } else {
     // 4. Insert new address only if no existing match
-    const payload: any = {
-      customer_id: customerId,
-      label: addressData.addressLabel || 'Home',
-      full_address: cleanFullAddress,
-      landmark: addressData.landmark || null,
-      city: addressData.city || 'Bhubaneswar',
-      state: addressData.state || 'Odisha',
-      pincode: addressData.pincode || '',
-      is_default: isDefault,
-      created_at: now,
-      updated_at: now,
-    };
+    return insertSupabaseCustomerAddress(customerId, {
+      ...addressData,
+      isDefault,
+    });
+  }
+}
 
-    const { data: inserted, error: insertErr } = await supabase
+/**
+ * Delete a delivery address row from Supabase customer_addresses
+ */
+export async function deleteSupabaseCustomerAddress(addressId: string): Promise<boolean> {
+  if (!isSupabaseConfigured() || !addressId) return false;
+
+  try {
+    const { error } = await supabase
       .from('customer_addresses')
-      .insert(payload)
-      .select()
-      .single();
+      .delete()
+      .eq('id', addressId);
 
-    if (insertErr) throw insertErr;
-    return mapDbAddressToCustomerAddress(inserted);
+    if (error) throw error;
+    return true;
+  } catch (err) {
+    console.warn('deleteSupabaseCustomerAddress error:', err);
+    return false;
   }
 }
 
@@ -1181,8 +1340,21 @@ export function deserializeOrderItem(it: any): OrderItem {
   };
 }
 
+import { computeScheduledIsoTimestamp } from '../utils/dateUtils';
+
 export function mapDbOrderToOrder(row: any): Order {
   const isPickup = row.order_type === 'pickup' || !!row.is_self_pickup;
+  const deliveryType: 'immediate' | 'scheduled' =
+    row.delivery_type === 'scheduled' ||
+    row.customer_details?.deliveryType === 'scheduled'
+      ? 'scheduled'
+      : 'immediate';
+
+  const scheduledAt =
+    row.scheduled_at ||
+    row.customer_details?.scheduledAt ||
+    undefined;
+
   return {
     id: row.id,
     orderId: row.order_id || row.order_number || row.id,
@@ -1192,6 +1364,8 @@ export function mapDbOrderToOrder(row: any): Order {
     orderType: isPickup ? 'pickup' : 'delivery',
     isSelfPickup: isPickup,
     isGuestCheckout: !row.customer_id,
+    deliveryType,
+    scheduledAt,
     outletName: row.outlet_name || 'Gaon Ka Swad Kitchen',
     deliveryPinCode: row.delivery_pincode || row.customer_details?.pincode || '',
     createdAt: row.created_at,
@@ -1213,7 +1387,12 @@ export function mapDbOrderToOrder(row: any): Order {
       city: row.delivery_address_snapshot?.city || 'Bhubaneswar',
       state: row.delivery_address_snapshot?.state || 'Odisha',
       pincode: row.delivery_pincode || '',
-      deliverySlot: row.delivery_slot || 'immediate',
+      deliveryType,
+      scheduledAt,
+      scheduledDate: row.customer_details?.scheduledDate,
+      scheduledTimeSlot: row.customer_details?.scheduledTimeSlot,
+      scheduledSlotCategory: row.customer_details?.scheduledSlotCategory,
+      scheduledSlotLabel: row.customer_details?.scheduledSlotLabel,
       paymentMethod: row.payment_method || 'cod',
       deliveryNotes: row.delivery_instructions || row.delivery_notes || undefined,
       includeCutlery: true,
@@ -1260,6 +1439,23 @@ export async function fetchSupabaseOrders(outletId?: string, customerId?: string
   } catch (err) {
     console.warn('fetchSupabaseOrders exception:', err);
     return [];
+  }
+}
+
+export async function fetchSupabaseOrdersByPhone(phone: string): Promise<{ orders: Order[] }> {
+  if (!isSupabaseConfigured()) return { orders: [] };
+  const cleanPhone = phone.replace(/\D/g, '').slice(-10);
+  try {
+    const { data, error } = await supabase
+      .from('orders')
+      .select('*')
+      .ilike('customer_phone', `%${cleanPhone}%`)
+      .order('created_at', { ascending: false });
+    if (error || !data) return { orders: [] };
+    return { orders: data.map(mapDbOrderToOrder) };
+  } catch (err) {
+    console.warn('fetchSupabaseOrdersByPhone error:', err);
+    return { orders: [] };
   }
 }
 
@@ -1387,6 +1583,19 @@ export async function createSupabaseOrder(orderData: Partial<Order>): Promise<Or
     (orderData.deliveryAddressSnapshot as any)?.deliveryNotes ||
     null;
 
+  const isScheduled =
+    orderData.deliveryType === 'scheduled' ||
+    orderData.customerDetails?.deliveryType === 'scheduled';
+
+  const deliveryType: 'immediate' | 'scheduled' = isScheduled ? 'scheduled' : 'immediate';
+
+  const scheduledAt = isScheduled
+    ? (computeScheduledIsoTimestamp(
+        orderData.scheduledAt || orderData.customerDetails?.scheduledAt || orderData.customerDetails?.scheduledDate,
+        orderData.customerDetails?.scheduledTimeSlot
+      ) || orderData.scheduledAt || null)
+    : null;
+
   const payload: any = {
     id,
     order_id: orderId,
@@ -1413,7 +1622,8 @@ export async function createSupabaseOrder(orderData: Partial<Order>): Promise<Or
     discount_code: orderData.couponCode || null,
     payment_method: orderData.customerDetails?.paymentMethod || 'cod',
     payment_status: 'PENDING',
-    delivery_slot: orderData.customerDetails?.deliverySlot || 'immediate',
+    delivery_type: deliveryType,
+    scheduled_at: scheduledAt,
     delivery_notes: supaDeliveryInstructions,
     delivery_instructions: supaDeliveryInstructions,
     status: orderData.status || 'Received',

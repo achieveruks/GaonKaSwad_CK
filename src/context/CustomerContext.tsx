@@ -1,7 +1,11 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { Customer, CustomerAddress } from '../types';
 import {
   fetchSupabaseCustomerByPhone,
+  fetchSupabaseCustomerAddresses,
+  insertSupabaseCustomerAddress,
+  updateSupabaseCustomerAddress,
+  deleteSupabaseCustomerAddress,
   upsertSupabaseCustomer,
   upsertSupabaseCustomerAddress,
 } from '../lib/supabaseService';
@@ -10,15 +14,16 @@ import { isSupabaseConfigured } from '../lib/supabase';
 interface CustomerContextType {
   customer: Customer | null;
   defaultAddress: CustomerAddress | null;
+  savedAddresses: CustomerAddress[];
   isCustomerLoggedIn: boolean;
   isWelcomeDiscountEligible: boolean;
   isOtpModalOpen: boolean;
   otpModalPhone: string;
-  otpModalMode: 'signin' | 'create_account' | 'verify_review';
+  otpModalMode: 'signin' | 'create_account' | 'verify_review' | 'direct_otp' | 'signin_otp';
   otpModalOnSuccess?: (customer: Customer | null, address: CustomerAddress | null) => void;
   openOtpModal: (
     phone: string,
-    mode: 'signin' | 'create_account' | 'verify_review',
+    mode: 'signin' | 'create_account' | 'verify_review' | 'direct_otp' | 'signin_otp',
     onSuccess?: (customer: Customer | null, address: CustomerAddress | null) => void
   ) => void;
   closeOtpModal: () => void;
@@ -41,13 +46,33 @@ interface CustomerContextType {
     defaultAddress?: CustomerAddress | null;
     welcomeDiscountEligible?: boolean;
   }>;
+  fetchCustomerAddresses: (customerId?: string, phone?: string) => Promise<CustomerAddress[]>;
+  saveNewAddress: (
+    addressData: Partial<CustomerAddress>,
+    customerId?: string,
+    phone?: string
+  ) => Promise<CustomerAddress | null>;
+  updateAddress: (
+    addressId: string,
+    addressData: Partial<CustomerAddress>,
+    customerId?: string,
+    phone?: string
+  ) => Promise<CustomerAddress | null>;
+  deleteAddress: (addressId: string, customerId?: string, phone?: string) => Promise<boolean>;
+  setAddressAsDefault: (addressId: string, customerId?: string, phone?: string) => Promise<boolean>;
+  setDefaultDeliveryAddress: (address: CustomerAddress) => void;
   saveProfile: (data: {
     phone: string;
     fullName?: string;
     email?: string;
     marketingConsent?: boolean;
     address?: Partial<CustomerAddress>;
-  }) => Promise<{ success: boolean; customer?: Customer; error?: string }>;
+  }) => Promise<{
+    success: boolean;
+    customer?: Customer;
+    address?: CustomerAddress | null;
+    error?: string;
+  }>;
   logoutCustomer: () => void;
   checkReviewEligibility: (
     productId: string | number,
@@ -68,7 +93,27 @@ interface CustomerContextType {
 const CustomerContext = createContext<CustomerContextType | undefined>(undefined);
 
 const STORAGE_KEY_CUSTOMER = 'gaonkaswad_customer_v1';
-const STORAGE_KEY_ADDRESS = 'gaonkaswad_cust_address_v1';
+
+// Helper to deduplicate address arrays by ID and normalized text
+const deduplicateAddresses = (addresses: CustomerAddress[]): CustomerAddress[] => {
+  const seenIds = new Set<string>();
+  const seenKeys = new Set<string>();
+  const result: CustomerAddress[] = [];
+
+  for (const addr of addresses) {
+    if (!addr) continue;
+    const addrId = String(addr.id || '').trim();
+    const key = `${(addr.fullAddress || '').trim().toLowerCase()}|${(addr.pincode || '').trim()}`;
+
+    if (addrId && seenIds.has(addrId)) continue;
+    if (key && seenKeys.has(key)) continue;
+
+    if (addrId) seenIds.add(addrId);
+    if (key) seenKeys.add(key);
+    result.push(addr);
+  }
+  return result;
+};
 
 export const CustomerProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [customer, setCustomer] = useState<Customer | null>(() => {
@@ -80,14 +125,20 @@ export const CustomerProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   });
 
-  const [defaultAddress, setDefaultAddress] = useState<CustomerAddress | null>(() => {
+  // Default address is loaded dynamically from database only (no localStorage)
+  const [defaultAddress, setDefaultAddress] = useState<CustomerAddress | null>(null);
+
+  // Saved addresses are loaded directly from the database (no caching)
+  const [savedAddresses, setSavedAddresses] = useState<CustomerAddress[]>([]);
+
+  // Clear any legacy client-side address cache from previous app versions
+  useEffect(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY_ADDRESS);
-      return saved ? JSON.parse(saved) : null;
-    } catch {
-      return null;
-    }
-  });
+      localStorage.removeItem('gaonkaswad_cust_address_v1');
+      localStorage.removeItem('gaonkaswad_cust_all_addresses_v1');
+      localStorage.removeItem('gaonkaswad_address_cache');
+    } catch {}
+  }, []);
 
   const [isWelcomeDiscountEligible, setIsWelcomeDiscountEligible] = useState<boolean>(() => {
     if (!customer) return true;
@@ -97,7 +148,7 @@ export const CustomerProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   // Modal State
   const [isOtpModalOpen, setIsOtpModalOpen] = useState(false);
   const [otpModalPhone, setOtpModalPhone] = useState('');
-  const [otpModalMode, setOtpModalMode] = useState<'signin' | 'create_account' | 'verify_review'>('signin');
+  const [otpModalMode, setOtpModalMode] = useState<'signin' | 'create_account' | 'verify_review' | 'direct_otp' | 'signin_otp'>('signin');
   const [otpModalCallback, setOtpModalCallback] = useState<
     ((cust: Customer | null, addr: CustomerAddress | null) => void) | undefined
   >(undefined);
@@ -112,17 +163,265 @@ export const CustomerProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   }, [customer]);
 
-  useEffect(() => {
-    if (defaultAddress) {
-      localStorage.setItem(STORAGE_KEY_ADDRESS, JSON.stringify(defaultAddress));
-    } else {
-      localStorage.removeItem(STORAGE_KEY_ADDRESS);
+  // Load customer addresses directly from database (always fresh, zero client cache)
+  const fetchCustomerAddresses = useCallback(async (customerId?: string, phone?: string): Promise<CustomerAddress[]> => {
+    const targetCustId = customerId || customer?.id;
+    const targetPhone = phone || customer?.phone;
+
+    if (!targetCustId && !targetPhone) {
+      setSavedAddresses([]);
+      setDefaultAddress(null);
+      return [];
     }
-  }, [defaultAddress]);
+
+    try {
+      // 1. Direct Supabase fetch if configured
+      if (isSupabaseConfigured()) {
+        try {
+          let supaCustUuid = targetCustId;
+          // If custId is not a UUID, try to resolve via phone first
+          if (!supaCustUuid || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(supaCustUuid)) {
+            if (targetPhone) {
+              const norm = targetPhone.replace(/\D/g, '').slice(-10);
+              const { customer: foundCust } = await fetchSupabaseCustomerByPhone(norm);
+              if (foundCust?.id) {
+                supaCustUuid = foundCust.id;
+              }
+            }
+          }
+
+          if (supaCustUuid && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(supaCustUuid)) {
+            const addrs = await fetchSupabaseCustomerAddresses(supaCustUuid);
+            const unique = deduplicateAddresses(addrs || []);
+            setSavedAddresses(unique);
+            if (unique.length > 0) {
+              setDefaultAddress((prev) => {
+                if (prev?.id) {
+                  const match = unique.find((a) => a.id === prev.id);
+                  if (match) return match;
+                }
+                return unique.find((a) => a.isDefault) || unique[0];
+              });
+            } else {
+              setDefaultAddress(null);
+            }
+            return unique;
+          }
+        } catch (e) {
+          console.warn('Supabase fetchCustomerAddresses warning:', e);
+        }
+      }
+
+      // 2. Server API query with cache-busting timestamp
+      const q = new URLSearchParams();
+      if (targetCustId) q.append('customerId', targetCustId);
+      if (targetPhone) q.append('phone', targetPhone);
+      q.append('_t', Date.now().toString());
+
+      const res = await fetch(`/api/customers/addresses?${q.toString()}`, {
+        headers: { 'Cache-Control': 'no-cache' },
+      });
+      const data = await res.json();
+      if (data.success && Array.isArray(data.addresses)) {
+        const unique = deduplicateAddresses(data.addresses);
+        setSavedAddresses(unique);
+        if (unique.length > 0) {
+          setDefaultAddress((prev) => {
+            if (prev?.id) {
+              const match = unique.find((a) => a.id === prev.id);
+              if (match) return match;
+            }
+            return unique.find((a) => a.isDefault) || unique[0];
+          });
+        } else {
+          setDefaultAddress(null);
+        }
+        return unique;
+      }
+    } catch (err) {
+      console.warn('Failed to fetch customer addresses:', err);
+    }
+    return [];
+  }, [customer?.id, customer?.phone]);
+
+  useEffect(() => {
+    if (customer?.id || customer?.phone) {
+      fetchCustomerAddresses(customer?.id, customer?.phone);
+    }
+  }, [customer?.id, customer?.phone, fetchCustomerAddresses]);
+
+  const saveNewAddress = async (
+    addressData: Partial<CustomerAddress>,
+    optCustId?: string,
+    optPhone?: string
+  ): Promise<CustomerAddress | null> => {
+    const custId = optCustId || customer?.id;
+    const phone = optPhone || customer?.phone;
+
+    let savedAddr: CustomerAddress | null = null;
+
+    // 1. Direct Supabase insert if configured & customerId is a valid UUID
+    if (
+      isSupabaseConfigured() &&
+      custId &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(custId)
+    ) {
+      try {
+        savedAddr = await insertSupabaseCustomerAddress(custId, addressData);
+      } catch (err) {
+        console.warn('Direct Supabase saveNewAddress error, falling back to server API:', err);
+      }
+    }
+
+    // 2. Server API fallback if direct Supabase insert didn't complete
+    if (!savedAddr) {
+      try {
+        const res = await fetch('/api/customers/addresses', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            customerId: custId,
+            phone,
+            address: addressData,
+          }),
+        });
+        const data = await res.json();
+        if (data.success && data.address) {
+          savedAddr = data.address;
+        } else if (data.error) {
+          console.warn('Server saveNewAddress error message:', data.error);
+        }
+      } catch (err) {
+        console.warn('Server saveNewAddress network error:', err);
+      }
+    }
+
+    // 3. Immediately re-fetch all addresses fresh from database
+    await fetchCustomerAddresses(custId, phone);
+
+    if (savedAddr && (savedAddr.isDefault || !defaultAddress)) {
+      setDefaultAddress(savedAddr);
+    }
+
+    return savedAddr;
+  };
+
+  const updateAddress = async (
+    addressId: string,
+    addressData: Partial<CustomerAddress>,
+    optCustId?: string,
+    optPhone?: string
+  ): Promise<CustomerAddress | null> => {
+    const custId = optCustId || customer?.id;
+    const phone = optPhone || customer?.phone;
+
+    let updatedAddr: CustomerAddress | null = null;
+
+    if (isSupabaseConfigured() && addressId && !addressId.startsWith('addr-')) {
+      try {
+        updatedAddr = await updateSupabaseCustomerAddress(addressId, addressData);
+      } catch (err) {
+        console.warn('Direct Supabase updateAddress error:', err);
+      }
+    }
+
+    if (!updatedAddr) {
+      try {
+        const res = await fetch(`/api/customers/addresses/${encodeURIComponent(addressId)}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ address: addressData }),
+        });
+        const data = await res.json();
+        if (data.success && data.address) {
+          updatedAddr = data.address;
+        }
+      } catch (err) {
+        console.warn('Server updateAddress error:', err);
+      }
+    }
+
+    // Immediately re-fetch fresh state from the database
+    await fetchCustomerAddresses(custId, phone);
+
+    if (updatedAddr && defaultAddress?.id === addressId) {
+      setDefaultAddress(updatedAddr);
+    }
+
+    return updatedAddr;
+  };
+
+  const deleteAddress = async (
+    addressId: string,
+    optCustId?: string,
+    optPhone?: string
+  ): Promise<boolean> => {
+    const custId = optCustId || customer?.id;
+    const phone = optPhone || customer?.phone;
+
+    let success = false;
+
+    if (isSupabaseConfigured() && addressId && !addressId.startsWith('addr-')) {
+      try {
+        success = await deleteSupabaseCustomerAddress(addressId);
+      } catch (err) {
+        console.warn('Direct Supabase deleteAddress error:', err);
+      }
+    }
+
+    if (!success) {
+      try {
+        const res = await fetch(`/api/customers/addresses/${encodeURIComponent(addressId)}`, {
+          method: 'DELETE',
+        });
+        const data = await res.json();
+        if (data.success) {
+          success = true;
+        }
+      } catch (err) {
+        console.warn('Server deleteAddress error:', err);
+      }
+    }
+
+    // Always fetch fresh list directly from database after deletion
+    await fetchCustomerAddresses(custId, phone);
+
+    return success;
+  };
+
+  const setAddressAsDefault = async (
+    addressId: string,
+    optCustId?: string,
+    optPhone?: string
+  ): Promise<boolean> => {
+    const custId = optCustId || customer?.id;
+    const phone = optPhone || customer?.phone;
+
+    try {
+      const updated = await updateAddress(addressId, { isDefault: true }, custId, phone);
+      if (updated) {
+        setDefaultAddress(updated);
+        return true;
+      }
+    } catch (err) {
+      console.warn('setAddressAsDefault error:', err);
+    }
+    return false;
+  };
+
+  const setDefaultDeliveryAddress = (address: CustomerAddress) => {
+    setDefaultAddress(address);
+    setSavedAddresses((prev) =>
+      prev.map((a) => ({
+        ...a,
+        isDefault: a.id === address.id,
+      }))
+    );
+  };
 
   const openOtpModal = (
     phone: string,
-    mode: 'signin' | 'create_account' | 'verify_review',
+    mode: 'signin' | 'create_account' | 'verify_review' | 'direct_otp' | 'signin_otp',
     onSuccess?: (cust: Customer | null, addr: CustomerAddress | null) => void
   ) => {
     setOtpModalPhone(phone);
@@ -299,6 +598,9 @@ export const CustomerProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   }) => {
     const normPhone = String(data.phone || '').replace(/\D/g, '').slice(-10);
 
+    let directSupaCust: Customer | null = null;
+    let directSupaAddr: CustomerAddress | null = null;
+
     // If Supabase is active, persist directly
     if (isSupabaseConfigured() && normPhone) {
       try {
@@ -308,14 +610,17 @@ export const CustomerProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           email: data.email,
           marketingConsent: data.marketingConsent,
         });
+        directSupaCust = supaCust;
 
-        let supaAddr: CustomerAddress | null = null;
         if (data.address && data.address.fullAddress && supaCust.id) {
-          supaAddr = await upsertSupabaseCustomerAddress(supaCust.id, data.address);
+          directSupaAddr = await upsertSupabaseCustomerAddress(supaCust.id, data.address);
         }
 
         setCustomer(supaCust);
-        if (supaAddr) setDefaultAddress(supaAddr);
+        if (directSupaAddr) {
+          setDefaultAddress(directSupaAddr);
+          setSavedAddresses((prev) => deduplicateAddresses([directSupaAddr!, ...prev.filter((a) => a.id !== directSupaAddr!.id)]));
+        }
       } catch (err) {
         console.warn('Direct Supabase profile save failed:', err);
       }
@@ -330,7 +635,12 @@ export const CustomerProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       const resData = await res.json();
 
       if (!res.ok || !resData.success) {
-        return { success: false, error: resData.error || 'Failed to save customer profile' };
+        return {
+          success: false,
+          customer: directSupaCust || undefined,
+          address: directSupaAddr || null,
+          error: resData.error || 'Failed to save customer profile',
+        };
       }
 
       if (resData.customer) {
@@ -338,20 +648,34 @@ export const CustomerProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       }
       if (resData.defaultAddress) {
         setDefaultAddress(resData.defaultAddress);
+        setSavedAddresses((prev) => deduplicateAddresses([resData.defaultAddress, ...prev.filter((a) => a.id !== resData.defaultAddress.id)]));
       }
 
-      return { success: true, customer: resData.customer };
+      return {
+        success: true,
+        customer: resData.customer || directSupaCust || undefined,
+        address: resData.defaultAddress || directSupaAddr || null,
+      };
     } catch (err: any) {
-      return { success: false, error: err.message || 'Network error saving profile' };
+      return {
+        success: !!directSupaCust,
+        customer: directSupaCust || undefined,
+        address: directSupaAddr || null,
+        error: err.message || 'Network error saving profile',
+      };
     }
   };
 
   const logoutCustomer = () => {
     setCustomer(null);
     setDefaultAddress(null);
+    setSavedAddresses([]);
     setIsWelcomeDiscountEligible(true);
     localStorage.removeItem(STORAGE_KEY_CUSTOMER);
-    localStorage.removeItem(STORAGE_KEY_ADDRESS);
+    try {
+      localStorage.removeItem('gaonkaswad_cust_address_v1');
+      localStorage.removeItem('gaonkaswad_cust_all_addresses_v1');
+    } catch {}
   };
 
   const checkReviewEligibility = async (productId: string | number, phoneOrId?: string) => {
@@ -415,6 +739,7 @@ export const CustomerProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       value={{
         customer,
         defaultAddress,
+        savedAddresses,
         isCustomerLoggedIn: !!customer,
         isWelcomeDiscountEligible,
         isOtpModalOpen,
@@ -426,6 +751,12 @@ export const CustomerProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         sendOtp,
         verifyOtp,
         lookupCustomer,
+        fetchCustomerAddresses,
+        saveNewAddress,
+        updateAddress,
+        deleteAddress,
+        setAddressAsDefault,
+        setDefaultDeliveryAddress,
         saveProfile,
         logoutCustomer,
         checkReviewEligibility,

@@ -262,7 +262,12 @@ export interface CheckoutFormData {
   city: string;
   state: string;
   pincode: string;
-  deliverySlot: 'immediate' | 'lunch' | 'dinner' | 'custom';
+  deliveryType: 'immediate' | 'scheduled';
+  scheduledAt?: string; // ISO 8601 Timestamp e.g. "2026-08-29T20:00:00.000Z"
+  scheduledDate?: string;
+  scheduledTimeSlot?: string;
+  scheduledSlotCategory?: string;
+  scheduledSlotLabel?: string;
   deliveryNotes?: string;
   paymentMethod: 'cod' | 'upi' | 'card' | 'netbanking';
   includeCutlery: boolean;
@@ -315,6 +320,8 @@ export interface Order {
   outletName?: string;
   orderType?: 'delivery' | 'pickup';
   isSelfPickup?: boolean;
+  deliveryType?: 'immediate' | 'scheduled';
+  scheduledAt?: string; // ISO 8601 Timestamp
   kitchenAddress?: string;
   deliveryPinCode: string;
   createdAt: string;

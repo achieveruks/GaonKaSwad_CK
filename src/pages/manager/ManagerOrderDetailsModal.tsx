@@ -19,6 +19,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { Order } from '../../types';
+import { formatScheduledAt } from '../../utils/dateUtils';
 
 interface ManagerOrderDetailsModalProps {
   order: Order | null;
@@ -113,6 +114,38 @@ export const ManagerOrderDetailsModal: React.FC<ManagerOrderDetailsModalProps> =
 
         {/* Modal Body / Printable Content */}
         <div className="p-6 overflow-y-auto space-y-6 flex-1" ref={printAreaRef}>
+          {/* Scheduled Order Attention Banner */}
+          {(order.deliveryType === 'scheduled' || order.customerDetails?.deliveryType === 'scheduled') && (
+            <div className="bg-gradient-to-r from-amber-100 via-amber-50 to-orange-50 rounded-xl border-2 border-amber-400 p-4 flex items-center justify-between gap-3 text-amber-950 shadow-2xs">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-900 text-amber-100 flex items-center justify-center shrink-0 shadow-xs">
+                  <Calendar className="w-5 h-5 text-amber-300" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-black uppercase tracking-wider bg-amber-300 text-amber-950 px-2 py-0.5 rounded border border-amber-400">
+                      Scheduled Delivery Booking
+                    </span>
+                  </div>
+                  <p className="text-sm font-black text-amber-950 mt-0.5 font-mono">
+                    Target Window: {order.customerDetails?.scheduledSlotLabel || formatScheduledAt(order.scheduledAt || order.customerDetails?.scheduledAt)}
+                  </p>
+                  <p className="text-[11px] text-amber-900 font-medium">
+                    Please cook fresh and prepare dispatch in time for this specific slot.
+                  </p>
+                </div>
+              </div>
+              {order.customerDetails?.scheduledTimeSlot && (
+                <div className="text-right shrink-0">
+                  <span className="text-[10px] text-amber-800 font-bold uppercase tracking-wider block">Slot Time</span>
+                  <span className="inline-block px-3 py-1 bg-amber-900 text-white font-mono font-bold text-xs rounded-lg shadow-xs">
+                    {order.customerDetails.scheduledTimeSlot}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Printable KOT Header */}
           <div className="bg-amber-50/60 rounded-xl border border-amber-200/80 p-4 space-y-3">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-amber-200">
@@ -147,10 +180,18 @@ export const ManagerOrderDetailsModal: React.FC<ManagerOrderDetailsModalProps> =
                 </span>
               </div>
               <div>
-                <span className="text-[10px] text-stone-500 font-semibold block">DELIVERY SLOT</span>
+                <span className="text-[10px] text-stone-500 font-semibold block">DELIVERY TYPE</span>
                 <span className="font-bold text-stone-800 capitalize">
-                  {order.customerDetails?.deliverySlot || 'Immediate'}
+                  {order.deliveryType === 'scheduled' || order.customerDetails?.deliveryType === 'scheduled'
+                    ? 'Scheduled'
+                    : 'Immediate'}
                 </span>
+                {(order.deliveryType === 'scheduled' || order.customerDetails?.deliveryType === 'scheduled') && (
+                  <span className="text-[10px] text-amber-900 font-semibold block mt-0.5 leading-tight">
+                    {order.customerDetails?.scheduledSlotLabel ||
+                      formatScheduledAt(order.scheduledAt || order.customerDetails?.scheduledAt)}
+                  </span>
+                )}
               </div>
               <div>
                 <span className="text-[10px] text-stone-500 font-semibold block">TOTAL BILL</span>
