@@ -218,11 +218,53 @@ export interface CartItem {
 }
 
 export interface Coupon {
+  id?: string;
   code: string;
+  title?: string;
+  name?: string;
+  description: string;
   discountType: 'percentage' | 'fixed';
   discountValue: number;
+  maxDiscountAmount?: number;
   minOrderValue: number;
-  description: string;
+  applicableOutlets?: string[];
+  outletIds?: string[];
+  usageLimitTotal?: number;
+  usageLimit?: number;
+  usageLimitPerUser?: number;
+  usedCount?: number;
+  requiresLogin?: boolean;
+  isFirstOrderOnly?: boolean;
+  userEligibility?: 'all' | 'first_order' | 'registered' | 'logged_in';
+  isActive?: boolean;
+  isPublic?: boolean;
+  validFrom?: string;
+  validUntil?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  success?: boolean;
+  error?: string;
+}
+
+export interface CouponRedemption {
+  id?: string;
+  couponId: string;
+  couponCode: string;
+  customerId?: string;
+  customerPhone?: string;
+  orderId?: string;
+  discountAmount: number;
+  redeemedAt?: string;
+  createdAt?: string;
+}
+
+export interface CouponValidationResult {
+  isValid: boolean;
+  valid?: boolean;
+  coupon?: Coupon;
+  discountAmount?: number;
+  message?: string;
+  error?: string;
 }
 
 export interface Customer {
@@ -335,6 +377,8 @@ export interface Order {
   gst: number;
   total: number;
   couponCode?: string;
+  couponId?: string;
+  couponDiscountAmount?: number;
   customerDetails: CheckoutFormData;
   deliveryAddressSnapshot?: {
     fullAddress: string;

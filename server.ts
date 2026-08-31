@@ -1402,6 +1402,570 @@ async function startServer() {
   });
 
   // =====================
+  // COUPONS ENDPOINTS (DIRECT DATABASE FIRST)
+  // =====================
+
+  function mapDbCoupon(row: any) {
+    if (!row) return null;
+    return {
+      id: row.id,
+      code: (row.code || '').trim().toUpperCase(),
+      name: row.name || row.code,
+      title: row.name || row.code,
+      description: row.description || '',
+      discountType: row.discount_type || 'percentage',
+      discountValue: Number(row.discount_value || 0),
+      maxDiscountAmount: row.max_discount_amount != null ? Number(row.max_discount_amount) : undefined,
+      minOrderValue: Number(row.minimum_order_value || 0),
+      userEligibility: row.user_eligibility || 'all',
+      isFirstOrderOnly: row.user_eligibility === 'first_order',
+      usageLimit: row.usage_limit != null ? Number(row.usage_limit) : undefined,
+      usageLimitTotal: row.usage_limit != null ? Number(row.usage_limit) : undefined,
+      usageLimitPerUser: row.usage_limit_per_user != null ? Number(row.usage_limit_per_user) : undefined,
+      outletIds: Array.isArray(row.outlet_ids) ? row.outlet_ids : [],
+      applicableOutlets: Array.isArray(row.outlet_ids) ? row.outlet_ids : [],
+      validFrom: row.valid_from,
+      validUntil: row.valid_until,
+      isActive: row.is_active ?? true,
+      isPublic: true,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      success: true,
+    };
+  }
+
+  // 21a. Coupons: Get All Coupons (from Database)
+  app.get('/api/coupons', async (req, res) => {
+    try {
+      const includeInactive = req.query.includeInactive === 'true';
+
+      let query = serverSupabase
+        .from('coupons')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (!includeInactive) {
+        query = query.eq('is_active', true);
+      }
+
+      const { data, error } = await query;
+      if (!error && Array.isArray(data)) {
+        const coupons = data.map(mapDbCoupon);
+        return res.json({ success: true, coupons, source: 'database' });
+      }
+
+      if (error) {
+        console.warn('Database coupons query notice:', error.message);
+      }
+
+      return res.json({ success: true, coupons: [], source: 'database' });
+    } catch (err: any) {
+      console.error('Fetch coupons error:', err);
+      return res.status(500).json({ success: false, error: 'Failed to fetch coupons from database' });
+    }
+  });
+
+  // 21b. Coupons: Get Available Active Coupons for Customer / Subtotal / Outlet (Live Database)
+  app.get('/api/coupons/available', async (req, res) => {
+    try {
+      const outletId = (req.query.outletId as string) || undefined;
+
+      const { data, error } = await serverSupabase
+        .from('coupons')
+        .select('*')
+        .eq('is_active', true);
+
+      if (error || !Array.isArray(data)) {
+        console.warn('Fetch available coupons db notice:', error?.message);
+        return res.json({ success: true, coupons: [] });
+      }
+
+      const now = new Date();
+      const eligibleCoupons = [];
+
+      for (const row of data) {
+        // 1. Date window
+        if (row.valid_from && new Date(row.valid_from) > now) continue;
+        if (row.valid_until && new Date(row.valid_until) < now) continue;
+
+        // 2. Outlet check
+        const outlets = Array.isArray(row.outlet_ids) ? row.outlet_ids : [];
+        if (outletId && outlets.length > 0 && !outlets.includes(outletId)) continue;
+
+        // Show all active valid coupons in the available list so users can see and try them
+        eligibleCoupons.push(mapDbCoupon(row));
+      }
+
+      return res.json({ success: true, coupons: eligibleCoupons });
+    } catch (err: any) {
+      console.error('Fetch available coupons error:', err);
+      return res.status(500).json({ success: false, error: 'Failed to fetch available coupons' });
+    }
+  });
+
+  // 21c. Coupons: Server-Side Validate Coupon Code against Live Database
+  app.post('/api/coupons/validate', async (req, res) => {
+    try {
+      const { couponCode, foodSubtotal, customerId, customerPhone, outletId } = req.body;
+      const cleanCode = String(couponCode || '').trim().toUpperCase();
+
+      if (!cleanCode) {
+        return res.status(400).json({
+          success: false,
+          isValid: false,
+          valid: false,
+          message: 'Please enter a coupon code.',
+          error: 'Please enter a coupon code.',
+        });
+      }
+
+      const { data: row, error } = await serverSupabase
+        .from('coupons')
+        .select('*')
+        .ilike('code', cleanCode)
+        .maybeSingle();
+
+      if (error || !row) {
+        return res.status(400).json({
+          success: false,
+          isValid: false,
+          valid: false,
+          message: 'Invalid coupon code.',
+          error: 'Invalid coupon code.',
+        });
+      }
+
+      if (row.is_active === false) {
+        return res.status(400).json({
+          success: false,
+          isValid: false,
+          valid: false,
+          message: 'This coupon is inactive.',
+          error: 'This coupon is inactive.',
+        });
+      }
+
+      const now = new Date();
+      if (row.valid_from && new Date(row.valid_from) > now) {
+        return res.status(400).json({
+          success: false,
+          isValid: false,
+          valid: false,
+          message: 'This coupon is not yet active.',
+          error: 'This coupon is not yet active.',
+        });
+      }
+      if (row.valid_until && new Date(row.valid_until) < now) {
+        return res.status(400).json({
+          success: false,
+          isValid: false,
+          valid: false,
+          message: 'This coupon has expired.',
+          error: 'This coupon has expired.',
+        });
+      }
+
+      const subtotalNum = Number(foodSubtotal) || 0;
+      const minOrder = Number(row.minimum_order_value) || 0;
+      if (minOrder > 0 && subtotalNum < minOrder) {
+        return res.status(400).json({
+          success: false,
+          isValid: false,
+          valid: false,
+          message: `Minimum order value of ₹${minOrder} is required to apply ${row.code}.`,
+          error: `Minimum order value of ₹${minOrder} is required to apply ${row.code}.`,
+        });
+      }
+
+      const outlets = Array.isArray(row.outlet_ids) ? row.outlet_ids : [];
+      if (outletId && outlets.length > 0 && !outlets.includes(outletId)) {
+        return res.status(400).json({
+          success: false,
+          isValid: false,
+          valid: false,
+          message: 'This coupon is not available for the selected kitchen outlet.',
+          error: 'This coupon is not available for the selected kitchen outlet.',
+        });
+      }
+
+      // Resolve all matching customer IDs and order IDs for redemption/limit validation
+      const customerIdsToCheck = new Set<string>();
+      if (customerId && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(customerId))) {
+        customerIdsToCheck.add(String(customerId));
+      }
+
+      const phoneToSearch = customerPhone || (!customerIdsToCheck.size && customerId && /^\d{10}$/.test(String(customerId).replace(/\D/g, '')) ? customerId : null);
+      let customerOrders: string[] = [];
+
+      if (phoneToSearch) {
+        const cleanPhone = String(phoneToSearch).replace(/\D/g, '').slice(-10);
+        const { data: custRows } = await serverSupabase
+          .from('customers')
+          .select('id')
+          .eq('phone', cleanPhone);
+        if (Array.isArray(custRows)) {
+          custRows.forEach((c: any) => {
+            if (c.id) customerIdsToCheck.add(c.id);
+          });
+        }
+
+        const { data: orderRows } = await serverSupabase
+          .from('orders')
+          .select('id')
+          .ilike('customer_phone', `%${cleanPhone}%`);
+        if (Array.isArray(orderRows)) {
+          customerOrders = orderRows.map((o: any) => o.id).filter(Boolean);
+        }
+      }
+
+      if (customerIdsToCheck.size > 0 && customerOrders.length === 0) {
+        const idsArray = Array.from(customerIdsToCheck);
+        const { data: orderRows } = await serverSupabase
+          .from('orders')
+          .select('id')
+          .in('customer_id', idsArray);
+        if (Array.isArray(orderRows)) {
+          customerOrders = orderRows.map((o: any) => o.id).filter(Boolean);
+        }
+      }
+
+      // Check existing redemptions for this coupon
+      let userRedemptionCount = 0;
+      if (customerIdsToCheck.size > 0 || customerOrders.length > 0) {
+        const idsArray = Array.from(customerIdsToCheck);
+        
+        let redQuery = serverSupabase
+          .from('coupon_redemptions')
+          .select('id', { count: 'exact', head: true })
+          .eq('coupon_id', row.id);
+
+        if (idsArray.length > 0 && customerOrders.length > 0) {
+          redQuery = redQuery.or(`customer_id.in.(${idsArray.join(',')}),order_id.in.(${customerOrders.join(',')})`);
+        } else if (idsArray.length > 0) {
+          redQuery = redQuery.in('customer_id', idsArray);
+        } else if (customerOrders.length > 0) {
+          redQuery = redQuery.in('order_id', customerOrders);
+        }
+
+        const { count } = await redQuery;
+        userRedemptionCount = count || 0;
+      }
+
+      const couponDisplayName = row.name || row.code;
+
+      // Check per-user redemption limit
+      const userLimit = row.usage_limit_per_user != null ? Number(row.usage_limit_per_user) : undefined;
+      if (userLimit && userRedemptionCount >= userLimit) {
+        return res.status(400).json({
+          success: false,
+          isValid: false,
+          valid: false,
+          message: `you've already used this coupon - ${couponDisplayName}`,
+          error: `you've already used this coupon - ${couponDisplayName}`,
+        });
+      }
+
+      // First order validation
+      if (row.user_eligibility === 'first_order') {
+        if (userRedemptionCount > 0) {
+          return res.status(400).json({
+            success: false,
+            isValid: false,
+            valid: false,
+            message: `you've already used this coupon - ${couponDisplayName}`,
+            error: `you've already used this coupon - ${couponDisplayName}`,
+          });
+        }
+        if (customerOrders.length > 0) {
+          return res.status(400).json({
+            success: false,
+            isValid: false,
+            valid: false,
+            message: `Coupon ${row.code} is valid only on your first order.`,
+            error: `Coupon ${row.code} is valid only on your first order.`,
+          });
+        }
+      }
+
+      // Check overall usage limit
+      const totalLimit = row.usage_limit != null ? Number(row.usage_limit) : undefined;
+      if (totalLimit) {
+        const { count: totalRedCount } = await serverSupabase
+          .from('coupon_redemptions')
+          .select('id', { count: 'exact', head: true })
+          .eq('coupon_id', row.id);
+        if (totalRedCount && totalRedCount >= totalLimit) {
+          return res.status(400).json({
+            success: false,
+            isValid: false,
+            valid: false,
+            message: `Coupon ${row.code} has reached its overall usage limit.`,
+            error: `Coupon ${row.code} has reached its overall usage limit.`,
+          });
+        }
+      }
+
+      // Calculate discount
+      let discount = 0;
+      if (row.discount_type === 'percentage') {
+        discount = (subtotalNum * Number(row.discount_value || 0)) / 100;
+        if (row.max_discount_amount != null && Number(row.max_discount_amount) > 0) {
+          discount = Math.min(discount, Number(row.max_discount_amount));
+        }
+      } else {
+        discount = Number(row.discount_value || 0);
+      }
+
+      discount = Math.min(Math.round(discount), subtotalNum);
+      const mappedCoupon = mapDbCoupon(row);
+
+      return res.json({
+        success: true,
+        isValid: true,
+        valid: true,
+        coupon: mappedCoupon,
+        discountAmount: discount,
+        message: `${mappedCoupon.discountType === 'percentage' ? `${mappedCoupon.discountValue}% OFF` : `₹${mappedCoupon.discountValue} OFF`} applied successfully!`,
+      });
+    } catch (err: any) {
+      console.error('Validate coupon error:', err);
+      return res.status(400).json({
+        success: false,
+        isValid: false,
+        valid: false,
+        message: err.message || 'Failed to validate coupon',
+        error: err.message || 'Failed to validate coupon',
+      });
+    }
+  });
+
+  // 21d. Coupons: Get Redemption Stats (from Database)
+  app.get('/api/coupons/stats', async (req, res) => {
+    try {
+      const [redemptionsRes, couponsRes] = await Promise.all([
+        serverSupabase.from('coupon_redemptions').select('*'),
+        serverSupabase.from('coupons').select('id, code'),
+      ]);
+
+      const codeMap: Record<string, string> = {};
+      if (couponsRes.data) {
+        couponsRes.data.forEach((c: any) => {
+          if (c.id && c.code) {
+            codeMap[c.id] = c.code.toUpperCase();
+          }
+        });
+      }
+
+      const perCoupon: Record<string, { count: number; totalDiscount: number }> = {};
+      let totalDiscountGiven = 0;
+
+      if (!redemptionsRes.error && Array.isArray(redemptionsRes.data)) {
+        redemptionsRes.data.forEach((r: any) => {
+          const cId = r.coupon_id;
+          const code = codeMap[cId] || (cId ? String(cId).toUpperCase() : 'UNKNOWN');
+          const amt = Number(r.discount_amount || 0);
+
+          [code, cId].forEach((key) => {
+            if (!key) return;
+            if (!perCoupon[key]) {
+              perCoupon[key] = { count: 0, totalDiscount: 0 };
+            }
+            perCoupon[key].count += 1;
+            perCoupon[key].totalDiscount += amt;
+          });
+
+          totalDiscountGiven += amt;
+        });
+      }
+
+      return res.json({
+        success: true,
+        totalRedemptions: redemptionsRes.data ? redemptionsRes.data.length : 0,
+        totalDiscountGiven,
+        perCoupon,
+      });
+    } catch (err: any) {
+      console.error('Fetch coupon stats error:', err);
+      return res.status(500).json({ success: false, error: 'Failed to fetch coupon stats' });
+    }
+  });
+
+  // 21e. Coupons: Create or Update in Database
+  app.post('/api/coupons', async (req, res) => {
+    try {
+      const couponData = req.body;
+      const cleanCode = (couponData.code || '').trim().toUpperCase();
+      if (!cleanCode) {
+        return res.status(400).json({ success: false, error: 'Coupon code is required' });
+      }
+
+      const dbPayload: any = {
+        code: cleanCode,
+        name: couponData.name || couponData.title || cleanCode,
+        description: couponData.description || '',
+        discount_type: couponData.discountType || 'percentage',
+        discount_value: Number(couponData.discountValue) || 10,
+        max_discount_amount: couponData.maxDiscountAmount != null ? Number(couponData.maxDiscountAmount) : null,
+        minimum_order_value: Number(couponData.minOrderValue) || 0,
+        user_eligibility: couponData.userEligibility || 'all',
+        usage_limit: couponData.usageLimitTotal != null ? Number(couponData.usageLimitTotal) : (couponData.usageLimit != null ? Number(couponData.usageLimit) : null),
+        usage_limit_per_user: couponData.usageLimitPerUser != null ? Number(couponData.usageLimitPerUser) : null,
+        outlet_ids: Array.isArray(couponData.outletIds) ? couponData.outletIds : (Array.isArray(couponData.applicableOutlets) ? couponData.applicableOutlets : []),
+        valid_from: couponData.validFrom || new Date().toISOString(),
+        valid_until: couponData.validUntil || new Date(Date.now() + 3650 * 24 * 3600 * 1000).toISOString(),
+        is_active: couponData.isActive ?? true,
+        updated_at: new Date().toISOString(),
+      };
+
+      if (couponData.id && !couponData.id.startsWith('seed-') && !couponData.id.startsWith('cpn-') && !couponData.id.startsWith('coupon-')) {
+        dbPayload.id = couponData.id;
+      }
+
+      const { data, error } = await serverSupabase
+        .from('coupons')
+        .upsert(dbPayload, { onConflict: 'code' })
+        .select()
+        .single();
+
+      if (error) {
+        console.error('Supabase coupon save error:', error.message);
+        return res.status(400).json({ success: false, error: error.message });
+      }
+
+      const mapped = mapDbCoupon(data);
+      return res.status(201).json({ success: true, coupon: mapped });
+    } catch (err: any) {
+      console.error('Save coupon error:', err);
+      return res.status(400).json({ success: false, error: err.message || 'Failed to save coupon' });
+    }
+  });
+
+  // 21f. Coupons: Delete from Database
+  app.delete('/api/coupons/:id', async (req, res) => {
+    try {
+      const { id } = req.params;
+      const code = req.query.code as string | undefined;
+
+      let error = null;
+      if (!id.startsWith('seed-') && !id.startsWith('cpn-') && !id.startsWith('coupon-')) {
+        const resDel = await serverSupabase.from('coupons').delete().eq('id', id);
+        error = resDel.error;
+      } else if (code) {
+        const resDel = await serverSupabase.from('coupons').delete().eq('code', code.toUpperCase());
+        error = resDel.error;
+      }
+
+      if (error) {
+        console.error('Supabase coupon delete error:', error.message);
+        return res.status(400).json({ success: false, error: error.message });
+      }
+
+      return res.json({ success: true, deleted: true });
+    } catch (err: any) {
+      console.error('Delete coupon error:', err);
+      return res.status(500).json({ success: false, error: 'Failed to delete coupon' });
+    }
+  });
+
+  // 21g. Coupons: Record Redemption in Database
+  app.post('/api/coupons/redeem', async (req, res) => {
+    try {
+      const { couponId, couponCode, customerId, customerPhone, orderId, discountAmount } = req.body;
+      const cleanCode = (couponCode || couponId || '').trim().toUpperCase();
+
+      // 1. Resolve actual coupon UUID from Supabase coupons table
+      let resolvedCouponId: string | null = null;
+      if (couponId && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(couponId)) {
+        resolvedCouponId = couponId;
+      } else {
+        const { data: couponRow } = await serverSupabase
+          .from('coupons')
+          .select('id')
+          .ilike('code', cleanCode)
+          .maybeSingle();
+        if (couponRow?.id) {
+          resolvedCouponId = couponRow.id;
+        }
+      }
+
+      if (!resolvedCouponId) {
+        console.warn(`Coupon ${cleanCode} not found in Supabase coupons table for redemption recording.`);
+        return res.json({ success: true, message: 'Coupon not found in DB, skipping table insert.' });
+      }
+
+      // 2. Resolve customer UUID
+      let resolvedCustomerId: string | null = null;
+      if (customerId && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(customerId)) {
+        resolvedCustomerId = customerId;
+      } else if (customerPhone) {
+        const cleanPhone = customerPhone.replace(/\D/g, '').slice(-10);
+        const { data: custRow } = await serverSupabase
+          .from('customers')
+          .select('id')
+          .eq('phone', cleanPhone)
+          .maybeSingle();
+        if (custRow?.id) {
+          resolvedCustomerId = custRow.id;
+        }
+      }
+
+      // 3. Resolve orderId (Supabase orders.id)
+      let resolvedOrderId: string | null = null;
+      if (orderId) {
+        const { data: orderRow } = await serverSupabase
+          .from('orders')
+          .select('id')
+          .or(`id.eq.${orderId},order_id.eq.${orderId}`)
+          .maybeSingle();
+        if (orderRow?.id) {
+          resolvedOrderId = orderRow.id;
+        } else {
+          resolvedOrderId = orderId;
+        }
+      }
+
+      if (!resolvedOrderId) {
+        console.warn('Cannot record coupon redemption without order ID');
+        return res.status(400).json({ success: false, error: 'Order ID is required' });
+      }
+
+      // Prevent duplicate redemption row for same order and coupon
+      const { data: existingRedemption } = await serverSupabase
+        .from('coupon_redemptions')
+        .select('id')
+        .eq('coupon_id', resolvedCouponId)
+        .eq('order_id', resolvedOrderId)
+        .maybeSingle();
+
+      if (existingRedemption?.id) {
+        return res.json({ success: true, redemption: existingRedemption, alreadyRecorded: true });
+      }
+
+      const { data, error } = await serverSupabase
+        .from('coupon_redemptions')
+        .insert([{
+          coupon_id: resolvedCouponId,
+          customer_id: resolvedCustomerId,
+          order_id: resolvedOrderId,
+          discount_amount: Number(discountAmount) || 0,
+          redeemed_at: new Date().toISOString(),
+        }])
+        .select()
+        .single();
+
+      if (error) {
+        console.error('Supabase redemption insert error:', error.message);
+        return res.status(400).json({ success: false, error: error.message });
+      }
+
+      return res.json({ success: true, redemption: data });
+    } catch (err: any) {
+      console.error('Record coupon redemption error:', err);
+      return res.status(400).json({ success: false, error: 'Failed to record redemption' });
+    }
+  });
+
+  // =====================
   // ORDERS ENDPOINTS
   // =====================
 
@@ -1412,24 +1976,9 @@ async function startServer() {
       const rawPhone = payload.customerDetails?.phone || '';
       const normPhone = rawPhone.replace(/\D/g, '').slice(-10);
 
-      // Verify Welcome Discount server-side
+      // Discounts are solely driven by the validated coupon (one coupon per order rule)
       let welcomeDiscountAmount = 0;
       let isWelcomeDiscountApplied = false;
-
-      if (payload.isWelcomeDiscountApplied || payload.customerDetails?.createAccount) {
-        if (normPhone) {
-          const existingCustomer = productStorage.findCustomerByPhone(normPhone);
-          const isEligible = !existingCustomer || !existingCustomer.welcomeDiscountUsed;
-          if (isEligible) {
-            isWelcomeDiscountApplied = true;
-            const subtotal = Number(payload.subtotal) || 0;
-            const couponDiscount = Number(payload.discount) || 0;
-            const remainingSubtotal = Math.max(0, subtotal - couponDiscount);
-            // 10% capped at 50/-
-            welcomeDiscountAmount = Math.min(50, Math.round(remainingSubtotal * 0.10));
-          }
-        }
-      }
 
       const isSelfPickup = !!(payload.isSelfPickup || payload.orderType === 'pickup');
 
@@ -1437,11 +1986,28 @@ async function startServer() {
         ...payload,
         isSelfPickup,
         orderType: isSelfPickup ? 'pickup' : 'delivery',
-        welcomeDiscountAmount,
-        isWelcomeDiscountApplied,
+        welcomeDiscountAmount: 0,
+        isWelcomeDiscountApplied: false,
       };
 
       const order = productStorage.createOrder(orderData);
+
+      // Record coupon redemption if coupon was applied
+      if (order.couponCode || payload.couponId) {
+        try {
+          productStorage.recordCouponRedemption({
+            couponId: payload.couponId || order.couponCode,
+            couponCode: order.couponCode,
+            customerId: order.customerId || undefined,
+            customerPhone: normPhone || undefined,
+            orderId: order.orderId || order.id,
+            discountAmount: Number(order.discount || payload.discount || 0),
+            orderTotal: Number(order.total || 0),
+          });
+        } catch (couponRedeemErr) {
+          console.warn('Coupon redemption record error:', couponRedeemErr);
+        }
+      }
 
       // Asynchronously synchronize order and atomic portions decrement into Supabase
       try {
@@ -1751,6 +2317,51 @@ async function startServer() {
               await serverSupabase.from('order_items').insert(orderItemsPayload);
             } catch (itemInsertErr) {
               console.warn('order_items Supabase insert notice:', itemInsertErr);
+            }
+          }
+
+          // Insert coupon redemption into Supabase coupon_redemptions if coupon was used
+          const couponCodeUsed = order.couponCode || payload.couponCode;
+          const discountAmt = Number(order.discount || payload.discount || 0);
+          if (couponCodeUsed && discountAmt > 0) {
+            try {
+              let targetCouponId = payload.couponId;
+              if (
+                !targetCouponId ||
+                !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(targetCouponId)
+              ) {
+                const { data: cRow } = await serverSupabase
+                  .from('coupons')
+                  .select('id')
+                  .ilike('code', couponCodeUsed.trim())
+                  .maybeSingle();
+                if (cRow?.id) {
+                  targetCouponId = cRow.id;
+                }
+              }
+
+              if (
+                targetCouponId &&
+                /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(targetCouponId)
+              ) {
+                const { error: redErr } = await serverSupabase
+                  .from('coupon_redemptions')
+                  .insert({
+                    coupon_id: targetCouponId,
+                    customer_id: isUUID(supaCustomerId) ? supaCustomerId : null,
+                    order_id: res1.data.id,
+                    discount_amount: discountAmt,
+                    redeemed_at: new Date().toISOString(),
+                  });
+
+                if (redErr) {
+                  console.warn('Coupon redemption Supabase insert notice in /api/orders:', redErr.message);
+                } else {
+                  console.log(`Coupon redemption for order ${res1.data.order_id || res1.data.id} recorded in Supabase.`);
+                }
+              }
+            } catch (cRedeemErr) {
+              console.warn('Coupon redemption error during order placement:', cRedeemErr);
             }
           }
         } else if (res1.error) {

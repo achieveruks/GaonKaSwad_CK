@@ -1,9 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useCart } from '../context/CartContext';
 import { useNavigation } from '../context/NavigationContext';
 import { useLocation } from '../context/LocationContext';
+import { useAuth } from '../context/AuthContext';
 import { CartItemRow } from '../components/CartItemRow';
-import { COUPONS } from '../data/products';
+import { fetchAvailableCouponsForCustomer } from '../lib/supabaseService';
+import { Coupon } from '../types';
 import {
   ShoppingBag,
   ArrowRight,
@@ -48,19 +50,47 @@ export const CartPage: React.FC = () => {
 
   const { goToShop, goToCheckout } = useNavigation();
   const { selectedLocation, setIsLocationModalOpen } = useLocation();
+  const { customer } = useAuth();
 
   const [couponCode, setCouponCode] = useState('');
   const [couponError, setCouponError] = useState('');
+  const [availableCoupons, setAvailableCoupons] = useState<Coupon[]>([]);
+  const [isApplying, setIsApplying] = useState(false);
 
-  const handleApplyCoupon = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!couponCode.trim()) return;
-    const res = applyCoupon(couponCode);
-    if (!res.success) {
-      setCouponError(res.message);
-    } else {
-      setCouponError('');
-      setCouponCode('');
+  useEffect(() => {
+    let isMounted = true;
+    fetchAvailableCouponsForCustomer(customer?.id, customer?.phone, subtotal, selectedLocation?.outletId)
+      .then((cpns) => {
+        if (isMounted) {
+          setAvailableCoupons(cpns);
+        }
+      })
+      .catch((e) => console.warn('Failed to load available coupons in CartPage', e));
+
+    return () => {
+      isMounted = false;
+    };
+  }, [customer?.id, customer?.phone, subtotal, selectedLocation?.outletId]);
+
+  const handleApplyCoupon = async (e?: React.FormEvent, codeToApply?: string) => {
+    if (e) e.preventDefault();
+    const code = (codeToApply || couponCode).trim();
+    if (!code) return;
+    setIsApplying(true);
+    try {
+      const res = await applyCoupon(code, {
+        customerId: customer?.id,
+        customerPhone: customer?.phone,
+        outletId: selectedLocation?.outletId,
+      });
+      if (!res.success) {
+        setCouponError(res.message);
+      } else {
+        setCouponError('');
+        setCouponCode('');
+      }
+    } finally {
+      setIsApplying(false);
     }
   };
 
@@ -300,9 +330,10 @@ export const CartPage: React.FC = () => {
                   />
                   <button
                     type="submit"
-                    className="px-4 py-2 bg-stone-900 hover:bg-black text-white rounded-xl text-xs font-bold transition-colors"
+                    disabled={isApplying}
+                    className="px-4 py-2 bg-stone-900 hover:bg-black disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-colors"
                   >
-                    Apply
+                    {isApplying ? 'Checking...' : 'Apply'}
                   </button>
                 </div>
                 {couponError && (
@@ -310,28 +341,27 @@ export const CartPage: React.FC = () => {
                 )}
 
                 {/* Available coupons list */}
-                <div className="pt-1">
-                  <p className="text-[10px] text-stone-400 font-medium mb-1">Available Offers:</p>
-                  <div className="space-y-1">
-                    {COUPONS.map((c) => (
-                      <button
-                        key={c.code}
-                        type="button"
-                        onClick={() => {
-                          const res = applyCoupon(c.code);
-                          if (!res.success) setCouponError(res.message);
-                        }}
-                        className="w-full text-left p-2 rounded-lg bg-amber-50/50 hover:bg-amber-100/70 border border-amber-200/70 transition-colors flex items-center justify-between text-xs"
-                      >
-                        <div>
-                          <span className="font-bold text-amber-950">{c.code}</span>
-                          <p className="text-[10px] text-stone-500">{c.description}</p>
-                        </div>
-                        <span className="text-[11px] font-bold text-amber-800">Apply</span>
-                      </button>
-                    ))}
+                {availableCoupons.length > 0 && (
+                  <div className="pt-1">
+                    <p className="text-[10px] text-stone-400 font-medium mb-1">Available Offers:</p>
+                    <div className="space-y-1">
+                      {availableCoupons.map((c) => (
+                        <button
+                          key={c.id || c.code}
+                          type="button"
+                          onClick={() => handleApplyCoupon(undefined, c.code)}
+                          className="w-full text-left p-2 rounded-lg bg-amber-50/50 hover:bg-amber-100/70 border border-amber-200/70 transition-colors flex items-center justify-between text-xs"
+                        >
+                          <div>
+                            <span className="font-bold text-amber-950">{c.code}</span>
+                            <p className="text-[10px] text-stone-500">{c.description || c.title}</p>
+                          </div>
+                          <span className="text-[11px] font-bold text-amber-800">Apply</span>
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                </div>
+                )}
               </form>
             )}
           </div>

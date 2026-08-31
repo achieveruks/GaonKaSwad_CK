@@ -1,5 +1,5 @@
 import { supabase, isSupabaseConfigured } from './supabase';
-import { Product, Outlet, OutletAbout, DeliveryZone, Order, OrderItem, CleanOrderItem, Category, DashboardStats, Profile, UserRole, Customer, CustomerAddress } from '../types';
+import { Product, Outlet, OutletAbout, DeliveryZone, Order, OrderItem, CleanOrderItem, Category, DashboardStats, Profile, UserRole, Customer, CustomerAddress, Coupon, CouponRedemption, CouponValidationResult } from '../types';
 import { PRODUCTS as INITIAL_PRODUCTS, CATEGORIES as INITIAL_CATEGORIES } from '../data/products';
 import { INITIAL_OUTLETS, INITIAL_DELIVERY_ZONES } from '../data/outlets';
 
@@ -1379,6 +1379,8 @@ export function mapDbOrderToOrder(row: any): Order {
     gst: Number(row.tax_amount || row.gst || 0),
     total: Number(row.total_amount || row.total || 0),
     couponCode: row.discount_code || row.coupon_code || undefined,
+    couponId: row.coupon_id || undefined,
+    couponDiscountAmount: Number(row.coupon_discount_amount || row.discount_amount || row.discount || 0),
     customerDetails: row.customer_details || {
       fullName: row.customer_name || 'Customer',
       phone: row.customer_phone || '',
@@ -1620,6 +1622,8 @@ export async function createSupabaseOrder(orderData: Partial<Order>): Promise<Or
     total: Number(orderData.total || 0),
     coupon_code: orderData.couponCode || null,
     discount_code: orderData.couponCode || null,
+    coupon_id: orderData.couponId || null,
+    coupon_discount_amount: orderData.couponDiscountAmount ?? orderData.discount ?? 0,
     payment_method: orderData.customerDetails?.paymentMethod || 'cod',
     payment_status: 'PENDING',
     delivery_type: deliveryType,
@@ -2025,4 +2029,500 @@ export async function fetchProfilesList(): Promise<Profile[]> {
     return [];
   }
 }
+
+// ========================================================
+// COUPON MANAGEMENT & VALIDATION SERVICES (SERVER AUTHORITATIVE)
+// ========================================================
+
+/**
+ * Fetch all coupons (for owner management or client catalog) from Server
+ */
+export const fetchCouponsFromCloud = async (): Promise<Coupon[]> => {
+  try {
+    const res = await fetch('/api/coupons?includeInactive=true');
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && Array.isArray(data.coupons)) {
+        return data.coupons.map((c: any, index: number) => ({
+          ...c,
+          id: c.id || `coupon-${c.code ? c.code.toLowerCase() : index}`,
+          title: c.title || c.name || c.code,
+          name: c.name || c.title || c.code,
+        }));
+      }
+    }
+  } catch (err) {
+    console.warn('Failed to fetch coupons from server API, trying Supabase direct fetch:', err);
+  }
+
+  if (isSupabaseConfigured()) {
+    try {
+      const { data, error } = await supabase
+        .from('coupons')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (!error && Array.isArray(data)) {
+        return data.map((row: any) => ({
+          id: row.id,
+          code: (row.code || '').trim().toUpperCase(),
+          name: row.name || row.code,
+          title: row.name || row.code,
+          description: row.description || '',
+          discountType: row.discount_type,
+          discountValue: Number(row.discount_value || 0),
+          maxDiscountAmount: row.max_discount_amount != null ? Number(row.max_discount_amount) : undefined,
+          minOrderValue: Number(row.minimum_order_value || 0),
+          userEligibility: row.user_eligibility || 'all',
+          isFirstOrderOnly: row.user_eligibility === 'first_order',
+          usageLimit: row.usage_limit != null ? Number(row.usage_limit) : undefined,
+          usageLimitTotal: row.usage_limit != null ? Number(row.usage_limit) : undefined,
+          usageLimitPerUser: row.usage_limit_per_user != null ? Number(row.usage_limit_per_user) : undefined,
+          outletIds: Array.isArray(row.outlet_ids) ? row.outlet_ids : [],
+          applicableOutlets: Array.isArray(row.outlet_ids) ? row.outlet_ids : [],
+          validFrom: row.valid_from,
+          validUntil: row.valid_until,
+          isActive: row.is_active ?? true,
+          isPublic: true,
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+        }));
+      }
+    } catch (e) {
+      console.warn('Supabase fetch coupons error:', e);
+    }
+  }
+
+  return [];
+};
+
+/**
+ * Upsert / Save a coupon (Owner action) via Server API
+ */
+export const saveCouponToCloud = async (couponData: Partial<Coupon>): Promise<Coupon> => {
+  const normalizedCode = (couponData.code || '').trim().toUpperCase();
+  if (!normalizedCode) throw new Error('Coupon code is required');
+
+  try {
+    const res = await fetch('/api/coupons', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...couponData,
+        code: normalizedCode,
+      }),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && data.coupon) {
+        return data.coupon;
+      }
+    }
+  } catch (e) {
+    console.warn('Server coupon save error, attempting Supabase fallback:', e);
+  }
+
+  if (isSupabaseConfigured()) {
+    const payload: any = {
+      code: normalizedCode,
+      name: couponData.name || normalizedCode,
+      description: couponData.description || '',
+      discount_type: couponData.discountType || 'percentage',
+      discount_value: couponData.discountValue ?? 10,
+      max_discount_amount: couponData.maxDiscountAmount ?? null,
+      minimum_order_value: couponData.minOrderValue ?? 0,
+      user_eligibility: couponData.userEligibility || 'all',
+      usage_limit: couponData.usageLimit ?? couponData.usageLimitTotal ?? null,
+      usage_limit_per_user: couponData.usageLimitPerUser ?? null,
+      outlet_ids: couponData.outletIds || couponData.applicableOutlets || [],
+      valid_from: couponData.validFrom || new Date().toISOString(),
+      valid_until: couponData.validUntil || new Date(Date.now() + 365 * 24 * 3600 * 1000).toISOString(),
+      is_active: couponData.isActive ?? true,
+      updated_at: new Date().toISOString(),
+    };
+
+    if (couponData.id && !couponData.id.startsWith('seed-') && !couponData.id.startsWith('coupon-')) {
+      payload.id = couponData.id;
+    }
+
+    const { data, error } = await supabase
+      .from('coupons')
+      .upsert(payload)
+      .select('*')
+      .single();
+
+    if (!error && data) {
+      return {
+        id: data.id,
+        code: data.code,
+        name: data.name,
+        title: data.name,
+        description: data.description,
+        discountType: data.discount_type,
+        discountValue: Number(data.discount_value),
+        maxDiscountAmount: data.max_discount_amount != null ? Number(data.max_discount_amount) : undefined,
+        minOrderValue: Number(data.minimum_order_value || 0),
+        userEligibility: data.user_eligibility,
+        usageLimit: data.usage_limit != null ? Number(data.usage_limit) : undefined,
+        usageLimitTotal: data.usage_limit != null ? Number(data.usage_limit) : undefined,
+        usageLimitPerUser: data.usage_limit_per_user != null ? Number(data.usage_limit_per_user) : undefined,
+        outletIds: Array.isArray(data.outlet_ids) ? data.outlet_ids : [],
+        applicableOutlets: Array.isArray(data.outlet_ids) ? data.outlet_ids : [],
+        validFrom: data.valid_from,
+        validUntil: data.valid_until,
+        isActive: data.is_active,
+        createdAt: data.created_at,
+        updatedAt: data.updated_at,
+        success: true,
+      };
+    }
+  }
+
+  return {
+    id: couponData.id || `coupon-${Date.now()}`,
+    code: normalizedCode,
+    name: couponData.name || couponData.title || normalizedCode,
+    title: couponData.title || couponData.name || normalizedCode,
+    description: couponData.description || '',
+    discountType: couponData.discountType || 'percentage',
+    discountValue: couponData.discountValue ?? 10,
+    maxDiscountAmount: couponData.maxDiscountAmount ?? undefined,
+    minOrderValue: couponData.minOrderValue ?? 0,
+    userEligibility: couponData.userEligibility || 'all',
+    usageLimit: couponData.usageLimit ?? couponData.usageLimitTotal ?? undefined,
+    usageLimitTotal: couponData.usageLimitTotal ?? couponData.usageLimit ?? undefined,
+    usageLimitPerUser: couponData.usageLimitPerUser ?? 1,
+    outletIds: couponData.outletIds || couponData.applicableOutlets || [],
+    applicableOutlets: couponData.applicableOutlets || couponData.outletIds || [],
+    validFrom: couponData.validFrom || new Date().toISOString(),
+    validUntil: couponData.validUntil || new Date(Date.now() + 365 * 24 * 3600 * 1000).toISOString(),
+    isActive: couponData.isActive ?? true,
+    createdAt: couponData.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    success: true,
+  };
+};
+
+/**
+ * Delete a coupon via Server API
+ */
+export const deleteCouponFromCloud = async (
+  couponId: string,
+  code?: string
+): Promise<{ success: boolean; error?: string }> => {
+  try {
+    const url = `/api/coupons/${encodeURIComponent(couponId)}${code ? `?code=${encodeURIComponent(code)}` : ''}`;
+    const res = await fetch(url, { method: 'DELETE' });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success) return { success: true };
+    }
+  } catch (e) {
+    console.warn('Server coupon delete error:', e);
+  }
+
+  if (isSupabaseConfigured() && !couponId.startsWith('seed-') && !couponId.startsWith('coupon-')) {
+    try {
+      const { error } = await supabase.from('coupons').delete().eq('id', couponId);
+      if (error) console.warn('Supabase delete coupon warning:', error.message);
+    } catch (e) {}
+  }
+  return { success: true };
+};
+
+/**
+ * Fetch total redemptions count and stats for coupons from Server API
+ */
+export const fetchCouponStatsFromCloud = async (): Promise<Record<string, { count: number; totalDiscount: number }>> => {
+  try {
+    const res = await fetch('/api/coupons/stats');
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && data.perCoupon) {
+        return data.perCoupon;
+      }
+    }
+  } catch (e) {
+    console.warn('Server fetch coupon stats notice:', e);
+  }
+
+  const stats: Record<string, { count: number; totalDiscount: number }> = {};
+  if (isSupabaseConfigured()) {
+    try {
+      const { data, error } = await supabase
+        .from('coupon_redemptions')
+        .select('coupon_id, discount_amount');
+
+      if (!error && data) {
+        data.forEach((r: any) => {
+          const key = r.coupon_id;
+          if (!stats[key]) {
+            stats[key] = { count: 0, totalDiscount: 0 };
+          }
+          stats[key].count += 1;
+          stats[key].totalDiscount += Number(r.discount_amount || 0);
+        });
+        return stats;
+      }
+    } catch (e) {}
+  }
+
+  return stats;
+};
+
+/**
+ * Core Server-Side Coupon Validation Engine
+ */
+export const validateCoupon = async (params: {
+  couponCode: string;
+  foodSubtotal: number;
+  customerId?: string | null;
+  customerPhone?: string | null;
+  outletId?: string;
+}): Promise<CouponValidationResult> => {
+  const normalizedCode = (params.couponCode || '').trim().toUpperCase();
+  if (!normalizedCode) {
+    return { isValid: false, valid: false, message: 'Please enter a coupon code.', error: 'Please enter a coupon code.' };
+  }
+
+  try {
+    const res = await fetch('/api/coupons/validate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        couponCode: normalizedCode,
+        foodSubtotal: params.foodSubtotal,
+        customerId: params.customerId || null,
+        customerPhone: params.customerPhone || null,
+        outletId: params.outletId,
+      }),
+    });
+
+    const data = await res.json();
+    if (res.ok && data.success && data.isValid) {
+      return {
+        isValid: true,
+        valid: true,
+        coupon: data.coupon,
+        discountAmount: data.discountAmount,
+        message: data.message,
+      };
+    } else {
+      const errMessage = data.message || data.error || 'Invalid coupon code';
+      return {
+        isValid: false,
+        valid: false,
+        message: errMessage,
+        error: errMessage,
+      };
+    }
+  } catch (err: any) {
+    console.warn('Server coupon validation error, running fallback:', err);
+  }
+
+  // Cloud / In-memory fallback
+  const coupons = await fetchCouponsFromCloud();
+  const coupon = coupons.find((c) => c.code.toUpperCase() === normalizedCode);
+
+  if (!coupon) {
+    return { isValid: false, valid: false, message: 'Invalid coupon code.', error: 'Invalid coupon code.' };
+  }
+
+  if (!coupon.isActive) {
+    return { isValid: false, valid: false, message: 'This coupon is not active.', error: 'This coupon is not active.' };
+  }
+
+  const now = new Date();
+  if (coupon.validFrom && new Date(coupon.validFrom) > now) {
+    return { isValid: false, valid: false, message: 'This coupon is not yet valid.', error: 'This coupon is not yet valid.' };
+  }
+  if (coupon.validUntil && new Date(coupon.validUntil) < now) {
+    return { isValid: false, valid: false, message: 'This coupon has expired.', error: 'This coupon has expired.' };
+  }
+
+  if ((coupon.userEligibility === 'logged_in' || coupon.userEligibility === 'registered' || coupon.requiresLogin) && !params.customerId && !params.customerPhone) {
+    return { isValid: false, valid: false, message: 'Please log in to use this coupon.', error: 'Please log in to use this coupon.' };
+  }
+
+  if (coupon.minOrderValue && params.foodSubtotal < coupon.minOrderValue) {
+    const msg = `Minimum order value of ₹${coupon.minOrderValue} is required to apply ${coupon.code}.`;
+    return { isValid: false, valid: false, message: msg, error: msg };
+  }
+
+  const activeOutlets = coupon.applicableOutlets || coupon.outletIds;
+  if (params.outletId && activeOutlets && activeOutlets.length > 0 && !activeOutlets.includes(params.outletId)) {
+    return { isValid: false, valid: false, message: 'This coupon is not available for this outlet.', error: 'This coupon is not available for this outlet.' };
+  }
+
+  const couponDisplayName = coupon.name || coupon.code;
+
+  if (coupon.usageLimitPerUser && (params.customerId || params.customerPhone)) {
+    try {
+      let q = supabase.from('coupon_redemptions').select('id', { count: 'exact', head: true }).eq('coupon_id', coupon.id);
+      if (params.customerId) {
+        q = q.eq('customer_id', params.customerId);
+      }
+      const { count } = await q;
+      if (count && count >= coupon.usageLimitPerUser) {
+        return {
+          isValid: false,
+          valid: false,
+          message: `you've already used this coupon - ${couponDisplayName}`,
+          error: `you've already used this coupon - ${couponDisplayName}`,
+        };
+      }
+    } catch (e) {}
+  }
+
+  let calculatedDiscount = 0;
+  if (coupon.discountType === 'percentage') {
+    calculatedDiscount = (params.foodSubtotal * coupon.discountValue) / 100;
+    const maxDiscount = coupon.maxDiscountAmount;
+    if (maxDiscount != null && maxDiscount > 0) {
+      calculatedDiscount = Math.min(calculatedDiscount, maxDiscount);
+    }
+  } else {
+    calculatedDiscount = coupon.discountValue;
+  }
+
+  calculatedDiscount = Math.min(Math.round(calculatedDiscount), params.foodSubtotal);
+
+  return {
+    isValid: true,
+    valid: true,
+    message: `${coupon.discountType === 'percentage' ? `${coupon.discountValue}% OFF` : `₹${coupon.discountValue} OFF`} applied successfully!`,
+    coupon,
+    discountAmount: calculatedDiscount,
+  };
+};
+
+/**
+ * Record a successful coupon redemption via Server API
+ */
+export const recordCouponRedemption = async (
+  couponIdOrPayload: string | {
+    couponId?: string;
+    couponCode?: string;
+    orderId?: string;
+    discountAmount?: number;
+    customerId?: string | null;
+    customerPhone?: string;
+    orderTotal?: number;
+  },
+  orderIdParam?: string,
+  discountAmountParam?: number,
+  customerIdParam?: string | null
+): Promise<void> => {
+  let couponId = '';
+  let couponCode = '';
+  let orderId = '';
+  let discountAmount = 0;
+  let customerId: string | null = null;
+  let customerPhone: string | undefined = undefined;
+  let orderTotal: number | undefined = undefined;
+
+  if (typeof couponIdOrPayload === 'string') {
+    couponId = couponIdOrPayload;
+    couponCode = couponIdOrPayload;
+    orderId = orderIdParam || '';
+    discountAmount = discountAmountParam || 0;
+    customerId = customerIdParam || null;
+  } else if (couponIdOrPayload && typeof couponIdOrPayload === 'object') {
+    couponId = couponIdOrPayload.couponId || '';
+    couponCode = couponIdOrPayload.couponCode || couponIdOrPayload.couponId || '';
+    orderId = couponIdOrPayload.orderId || '';
+    discountAmount = couponIdOrPayload.discountAmount || 0;
+    customerId = couponIdOrPayload.customerId || null;
+    customerPhone = couponIdOrPayload.customerPhone;
+    orderTotal = couponIdOrPayload.orderTotal;
+  }
+
+  if (!couponId && !couponCode) return;
+
+  try {
+    await fetch('/api/coupons/redeem', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        couponId,
+        couponCode,
+        customerId,
+        customerPhone,
+        orderId,
+        discountAmount,
+        orderTotal,
+      }),
+    });
+  } catch (e) {
+    console.warn('Server coupon redeem call notice:', e);
+  }
+};
+
+/**
+ * Check if customer is eligible for WELCOME10
+ */
+export const checkWelcomeOfferEligibility = async (customerId?: string, customerPhone?: string): Promise<boolean> => {
+  if (!customerId && !customerPhone) return true;
+  try {
+    const params = new URLSearchParams();
+    if (customerId) params.set('customerId', customerId);
+    if (customerPhone) params.set('customerPhone', customerPhone);
+    const res = await fetch(`/api/coupons/available?${params.toString()}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && Array.isArray(data.coupons)) {
+        return data.coupons.some((c: any) => (c.code || '').toUpperCase() === 'WELCOME10');
+      }
+    }
+  } catch (e) {}
+  return true;
+};
+
+/**
+ * Fetch all active public & available coupons for checkout from Server API
+ */
+export const fetchAvailableCouponsForCustomer = async (
+  customerId?: string | null,
+  customerPhone?: string | null,
+  subtotal?: number,
+  outletId?: string
+): Promise<Coupon[]> => {
+  try {
+    const params = new URLSearchParams();
+    if (customerId) params.set('customerId', customerId);
+    if (customerPhone) params.set('customerPhone', customerPhone);
+    if (subtotal !== undefined) params.set('subtotal', String(subtotal));
+    if (outletId) params.set('outletId', outletId);
+
+    const res = await fetch(`/api/coupons/available?${params.toString()}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && Array.isArray(data.coupons)) {
+        return data.coupons.map((c: any, index: number) => ({
+          ...c,
+          id: c.id || `coupon-${c.code ? c.code.toLowerCase() : index}`,
+          title: c.title || c.name || c.code,
+          name: c.name || c.title || c.code,
+        }));
+      }
+    }
+  } catch (err) {
+    console.warn('Server fetch available coupons error, falling back:', err);
+  }
+
+  const all = await fetchCouponsFromCloud();
+  const active = all.filter((c) => {
+    if (!c.isActive) return false;
+    const now = new Date();
+    if (c.validFrom && new Date(c.validFrom) > now) return false;
+    if (c.validUntil && new Date(c.validUntil) < now) return false;
+    const outlets = c.applicableOutlets || c.outletIds;
+    if (outletId && outlets && outlets.length > 0 && !outlets.includes(outletId)) return false;
+    if ((c.userEligibility === 'logged_in' || c.requiresLogin) && !customerId && !customerPhone) return false;
+    return true;
+  });
+  return active;
+};
+
 

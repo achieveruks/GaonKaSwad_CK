@@ -20,6 +20,7 @@ export type AppRoute =
   | { path: '/owner/outlets/new' }
   | { path: '/owner/outlets/edit'; outletId: string }
   | { path: '/owner/delivery-zones' }
+  | { path: '/owner/coupons' }
   | { path: '/manager/dashboard' };
 
 interface NavigationContextType {
@@ -44,6 +45,7 @@ interface NavigationContextType {
   goToOwnerAddOutlet: () => void;
   goToOwnerEditOutlet: (outletId: string) => void;
   goToOwnerDeliveryZones: () => void;
+  goToOwnerCoupons: () => void;
   goToManagerDashboard: () => void;
 }
 
@@ -93,6 +95,9 @@ function parseHash(hash: string): AppRoute {
   }
   if (main === 'owner/delivery-zones' || main === 'owner-delivery-zones') {
     return { path: '/owner/delivery-zones' };
+  }
+  if (main === 'owner/coupons' || main === 'owner-coupons') {
+    return { path: '/owner/coupons' };
   }
 
   // Outlet Manager Routes
@@ -177,6 +182,8 @@ function routeToHash(route: AppRoute): string {
       return `#/owner/outlets/edit/${route.outletId}`;
     case '/owner/delivery-zones':
       return '#/owner/delivery-zones';
+    case '/owner/coupons':
+      return '#/owner/coupons';
     case '/manager/dashboard':
       return '#/manager/dashboard';
     default:
@@ -235,6 +242,7 @@ export const NavigationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const goToOwnerEditOutlet = (outletId: string) =>
     navigate({ path: '/owner/outlets/edit', outletId });
   const goToOwnerDeliveryZones = () => navigate({ path: '/owner/delivery-zones' });
+  const goToOwnerCoupons = () => navigate({ path: '/owner/coupons' });
   const goToManagerDashboard = () => navigate({ path: '/manager/dashboard' });
 
   return (
@@ -261,6 +269,7 @@ export const NavigationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         goToOwnerAddOutlet,
         goToOwnerEditOutlet,
         goToOwnerDeliveryZones,
+        goToOwnerCoupons,
         goToManagerDashboard,
       }}
     >

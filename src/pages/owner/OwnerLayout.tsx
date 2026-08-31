@@ -15,11 +15,12 @@ import {
   ShieldCheck,
   Building2,
   Database,
+  TicketPercent,
 } from 'lucide-react';
 
 interface OwnerLayoutProps {
   children: React.ReactNode;
-  activeTab: 'dashboard' | 'products' | 'new-product' | 'edit-product' | 'outlets' | 'delivery-zones';
+  activeTab: 'dashboard' | 'products' | 'new-product' | 'edit-product' | 'outlets' | 'delivery-zones' | 'coupons';
   title: string;
   subtitle?: string;
   actions?: React.ReactNode;
@@ -39,6 +40,7 @@ export const OwnerLayout: React.FC<OwnerLayoutProps> = ({
     goToOwnerAddProduct,
     goToOwnerOutlets,
     goToOwnerDeliveryZones,
+    goToOwnerCoupons,
     goToOwnerLogin,
     goToManagerDashboard,
     goToHome,
@@ -199,6 +201,19 @@ export const OwnerLayout: React.FC<OwnerLayoutProps> = ({
                 <MapPin className="w-3.5 h-3.5" />
                 <span>Delivery Zones & PINs</span>
               </button>
+
+              <button
+                type="button"
+                onClick={goToOwnerCoupons}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                  activeTab === 'coupons'
+                    ? 'bg-amber-800 text-white'
+                    : 'text-stone-300 hover:text-white hover:bg-stone-800'
+                }`}
+              >
+                <TicketPercent className="w-3.5 h-3.5" />
+                <span>Coupons & Offers</span>
+              </button>
             </nav>
 
             {/* Right Controls: User info, View Site, Logout */}
@@ -305,6 +320,20 @@ export const OwnerLayout: React.FC<OwnerLayoutProps> = ({
               >
                 <MapPin className="w-4 h-4" />
                 <span>Delivery Zones & PINs</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  goToOwnerCoupons();
+                  setMobileMenuOpen(false);
+                }}
+                className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold ${
+                  activeTab === 'coupons' ? 'bg-amber-800 text-white' : 'text-stone-300 hover:bg-stone-800'
+                }`}
+              >
+                <TicketPercent className="w-4 h-4" />
+                <span>Coupons & Offers</span>
               </button>
 
               <button

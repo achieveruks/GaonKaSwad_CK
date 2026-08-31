@@ -530,7 +530,7 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
                   <IndianRupee className="w-3.5 h-3.5 text-amber-400 opacity-90" />
                 </div>
                 <span className="text-xl font-black block mt-0.5 font-mono tracking-tight text-white pr-6 truncate">
-                  ₹{totalFilteredOrderValue.toLocaleString('en-IN')}
+                  ₹{(totalFilteredOrderValue || 0).toLocaleString('en-IN')}
                 </span>
                 <span className="text-[10px] font-medium block text-stone-300">
                   {filteredOrders.length} {filteredOrders.length === 1 ? 'Order' : 'Orders'} in List

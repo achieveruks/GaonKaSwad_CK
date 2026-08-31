@@ -1,8 +1,8 @@
 import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
 import { Product, CartItem, ProductVariant, ProductAddon, Coupon } from '../types';
-import { COUPONS } from '../data/products';
 import { useLocation } from './LocationContext';
 import { isProductAvailableAtOutlet, isProductInStockAtOutlet, getProductPortionsLeftAtOutlet } from '../lib/locationService';
+import { validateCoupon } from '../lib/supabaseService';
 
 interface ToastMessage {
   id: string;
@@ -32,7 +32,15 @@ interface CartContextType {
   gst: number;
   total: number;
   appliedCoupon: Coupon | null;
-  applyCoupon: (code: string) => { success: boolean; message: string };
+  applyCoupon: (
+    code: string,
+    customerIdOrOptions?:
+      | string
+      | null
+      | { customerId?: string | null; customerPhone?: string | null; outletId?: string },
+    outletId?: string,
+    customerPhone?: string | null
+  ) => Promise<{ success: boolean; message: string; discountAmount?: number; coupon?: Coupon }>;
   removeCoupon: () => void;
   isCartDrawerOpen: boolean;
   setIsCartDrawerOpen: (open: boolean) => void;
@@ -64,7 +72,6 @@ interface CartContextType {
 const CartContext = createContext<CartContextType | undefined>(undefined);
 
 const CART_STORAGE_KEY = 'gaonkaswad_cart_v1';
-const COUPON_STORAGE_KEY = 'gaonkaswad_coupon_v1';
 
 export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { selectedLocation, currentZone, currentOutlet, setIsLocationModalOpen } = useLocation();
@@ -78,21 +85,14 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   });
 
-  const [appliedCoupon, setAppliedCoupon] = useState<Coupon | null>(() => {
-    try {
-      const saved = localStorage.getItem(COUPON_STORAGE_KEY);
-      return saved ? JSON.parse(saved) : null;
-    } catch {
-      return null;
-    }
-  });
+  const [appliedCoupon, setAppliedCoupon] = useState<Coupon | null>(null);
 
   const [isCartDrawerOpen, setIsCartDrawerOpen] = useState(false);
   const [includeCutlery, setIncludeCutlery] = useState(true);
   const [specialInstructions, setSpecialInstructions] = useState('');
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
-  // Sync with LocalStorage
+  // Sync cart with LocalStorage
   useEffect(() => {
     try {
       localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(cart));
@@ -100,18 +100,6 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
       console.error('Failed to save cart to localStorage', e);
     }
   }, [cart]);
-
-  useEffect(() => {
-    try {
-      if (appliedCoupon) {
-        localStorage.setItem(COUPON_STORAGE_KEY, JSON.stringify(appliedCoupon));
-      } else {
-        localStorage.removeItem(COUPON_STORAGE_KEY);
-      }
-    } catch (e) {
-      console.error('Failed to save coupon to localStorage', e);
-    }
-  }, [appliedCoupon]);
 
   const showToast = (
     title: string,
@@ -403,12 +391,16 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [subtotal, appliedCoupon]);
 
   let discount = 0;
-  if (appliedCoupon && subtotal >= appliedCoupon.minOrderValue) {
+  if (appliedCoupon && subtotal >= (appliedCoupon.minOrderValue || 0)) {
     if (appliedCoupon.discountType === 'percentage') {
-      discount = Math.round((subtotal * appliedCoupon.discountValue) / 100);
+      discount = (subtotal * appliedCoupon.discountValue) / 100;
+      if (appliedCoupon.maxDiscountAmount != null && appliedCoupon.maxDiscountAmount > 0) {
+        discount = Math.min(discount, appliedCoupon.maxDiscountAmount);
+      }
     } else {
       discount = appliedCoupon.discountValue;
     }
+    discount = Math.min(Math.round(discount), subtotal);
   }
 
   // Free delivery threshold from current Outlet (defaults to 499)
@@ -436,24 +428,75 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const total = Math.max(0, subtotal - discount + deliveryFee + packagingFee + gst);
 
-  const applyCoupon = (code: string): { success: boolean; message: string } => {
-    const formatted = code.trim().toUpperCase();
-    const found = COUPONS.find((c) => c.code === formatted);
-
-    if (!found) {
-      return { success: false, message: 'Invalid coupon code. Try GAON15 or WELCOME50.' };
+  const applyCoupon = async (
+    code: string,
+    customerIdOrOptions?:
+      | string
+      | null
+      | { customerId?: string | null; customerPhone?: string | null; outletId?: string },
+    outletId?: string,
+    customerPhone?: string | null
+  ): Promise<{ success: boolean; message: string; discountAmount?: number; coupon?: Coupon }> => {
+    const formatted = (code || '').trim().toUpperCase();
+    if (!formatted) {
+      return { success: false, message: 'Please enter a valid coupon code.' };
     }
 
-    if (subtotal < found.minOrderValue) {
+    let resolvedCustomerId: string | null = null;
+    let resolvedCustomerPhone: string | null = null;
+    let resolvedOutletId: string | undefined = outletId || currentOutlet?.id || selectedLocation?.outletId;
+
+    if (customerIdOrOptions && typeof customerIdOrOptions === 'object') {
+      resolvedCustomerId = customerIdOrOptions.customerId || null;
+      resolvedCustomerPhone = customerIdOrOptions.customerPhone || null;
+      if (customerIdOrOptions.outletId) {
+        resolvedOutletId = customerIdOrOptions.outletId;
+      }
+    } else {
+      resolvedCustomerId = (customerIdOrOptions as string) || null;
+      resolvedCustomerPhone = customerPhone || null;
+    }
+
+    // Auto-detect customer credentials from localStorage if not explicitly provided
+    if (!resolvedCustomerId || !resolvedCustomerPhone) {
+      try {
+        const saved = localStorage.getItem('gaonkaswad_customer_v1');
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (!resolvedCustomerId && parsed?.id) resolvedCustomerId = parsed.id;
+          if (!resolvedCustomerPhone && parsed?.phone) resolvedCustomerPhone = parsed.phone;
+        }
+      } catch (e) {}
+    }
+
+    try {
+      const validation = await validateCoupon({
+        couponCode: formatted,
+        foodSubtotal: subtotal,
+        customerId: resolvedCustomerId,
+        customerPhone: resolvedCustomerPhone,
+        outletId: resolvedOutletId,
+      });
+
+      if (!validation.valid || !validation.coupon) {
+        const errMsg = validation.message || validation.error || 'Invalid coupon code.';
+        showToast('Coupon Not Applied', errMsg, 'error');
+        return { success: false, message: errMsg };
+      }
+
+      setAppliedCoupon(validation.coupon);
+      showToast('Promo Applied!', `${validation.coupon.code} applied successfully!`, 'success');
       return {
-        success: false,
-        message: `Order must be at least ₹${found.minOrderValue} to apply ${found.code}.`,
+        success: true,
+        message: validation.message,
+        discountAmount: validation.discountAmount,
+        coupon: validation.coupon,
       };
+    } catch (e: any) {
+      const errMsg = e.message || 'Failed to validate coupon code.';
+      showToast('Coupon Error', errMsg, 'error');
+      return { success: false, message: errMsg };
     }
-
-    setAppliedCoupon(found);
-    showToast('Promo Applied!', `Coupon code ${found.code} applied successfully!`, 'success');
-    return { success: true, message: `Coupon ${found.code} applied successfully!` };
   };
 
   const removeCoupon = () => {

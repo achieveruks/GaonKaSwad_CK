@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { Product, Outlet, OutletAbout, DeliveryZone, Order, OrderItem, CleanOrderItem, DashboardStats, Customer, CustomerAddress } from '../src/types';
+import { Product, Outlet, OutletAbout, DeliveryZone, Order, OrderItem, CleanOrderItem, DashboardStats, Customer, CustomerAddress, Coupon, CouponRedemption, CouponValidationResult } from '../src/types';
 import { PRODUCTS as INITIAL_PRODUCTS } from '../src/data/products';
 import { INITIAL_OUTLETS, INITIAL_DELIVERY_ZONES } from '../src/data/outlets';
 
@@ -125,6 +125,8 @@ const ZONES_FILE = path.join(DATA_DIR, 'zones_store.json');
 const ORDERS_FILE = path.join(DATA_DIR, 'orders_store.json');
 const CUSTOMERS_FILE = path.join(DATA_DIR, 'customers_store.json');
 const CUSTOMER_ADDRESSES_FILE = path.join(DATA_DIR, 'customer_addresses_store.json');
+const COUPONS_FILE = path.join(DATA_DIR, 'coupons_store.json');
+const COUPON_REDEMPTIONS_FILE = path.join(DATA_DIR, 'coupon_redemptions_store.json');
 
 export function normalizePhone(rawPhone?: string): string {
   if (!rawPhone) return '';
@@ -155,6 +157,8 @@ class AppStorage {
   private orders: Order[] = [];
   private customers: Customer[] = [];
   private customerAddresses: CustomerAddress[] = [];
+  private coupons: Coupon[] = [];
+  private couponRedemptions: CouponRedemption[] = [];
   private isInitialized = false;
 
   constructor() {
@@ -241,6 +245,11 @@ class AppStorage {
     this.orders = [];
     this.customers = [];
     this.customerAddresses = [];
+
+    // Initialize Server Coupons & Redemptions
+    this.coupons = safeReadJson<Coupon[]>(COUPONS_FILE, []);
+    this.couponRedemptions = safeReadJson<CouponRedemption[]>(COUPON_REDEMPTIONS_FILE, []);
+
     this.isInitialized = true;
   }
 
@@ -250,6 +259,28 @@ class AppStorage {
   private saveOutlets() {}
   private saveZones() {}
   private saveOrders() {}
+
+  private saveCoupons() {
+    try {
+      if (!fs.existsSync(DATA_DIR)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+      }
+      fs.writeFileSync(COUPONS_FILE, JSON.stringify(this.coupons, null, 2), 'utf-8');
+    } catch (e) {
+      console.warn('Warning: Could not save coupons to disk.', e);
+    }
+  }
+
+  private saveCouponRedemptions() {
+    try {
+      if (!fs.existsSync(DATA_DIR)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+      }
+      fs.writeFileSync(COUPON_REDEMPTIONS_FILE, JSON.stringify(this.couponRedemptions, null, 2), 'utf-8');
+    } catch (e) {
+      console.warn('Warning: Could not save coupon redemptions to disk.', e);
+    }
+  }
 
   // =====================
   // PRODUCTS METHODS
@@ -1517,6 +1548,343 @@ class AppStorage {
     });
 
     return { product: updated || prod, review: newReview };
+  }
+
+  // =====================
+  // COUPON METHODS
+  // =====================
+
+  public getAllCoupons(includeInactive = false): Coupon[] {
+    this.init();
+    if (includeInactive) {
+      return [...this.coupons];
+    }
+    return this.coupons.filter((c) => c.isActive !== false);
+  }
+
+  public getCouponById(id: string): Coupon | undefined {
+    this.init();
+    return this.coupons.find((c) => c.id === id);
+  }
+
+  public getCouponByCode(code: string): Coupon | undefined {
+    this.init();
+    const clean = (code || '').trim().toUpperCase();
+    return this.coupons.find((c) => (c.code || '').trim().toUpperCase() === clean);
+  }
+
+  public saveCoupon(data: Partial<Coupon>): Coupon {
+    this.init();
+    const normalizedCode = (data.code || '').trim().toUpperCase();
+    if (!normalizedCode) {
+      throw new Error('Coupon code is required');
+    }
+
+    const existingIdx = this.coupons.findIndex(
+      (c) => (data.id && c.id === data.id) || c.code.toUpperCase() === normalizedCode
+    );
+
+    const nowIso = new Date().toISOString();
+    const cleanCoupon: Coupon = {
+      id: data.id || (existingIdx >= 0 ? this.coupons[existingIdx].id : `coupon-${Date.now()}`),
+      code: normalizedCode,
+      name: data.name || data.title || normalizedCode,
+      title: data.title || data.name || normalizedCode,
+      description: data.description || '',
+      discountType: data.discountType === 'fixed' ? 'fixed' : 'percentage',
+      discountValue: Number(data.discountValue ?? 10),
+      maxDiscountAmount: data.maxDiscountAmount != null ? Number(data.maxDiscountAmount) : undefined,
+      minOrderValue: Number(data.minOrderValue ?? 0),
+      userEligibility: data.userEligibility || (data.isFirstOrderOnly ? 'first_order' : 'all'),
+      isFirstOrderOnly: data.isFirstOrderOnly ?? (data.userEligibility === 'first_order'),
+      usageLimit: data.usageLimit != null ? Number(data.usageLimit) : undefined,
+      usageLimitTotal: data.usageLimitTotal != null ? Number(data.usageLimitTotal) : (data.usageLimit != null ? Number(data.usageLimit) : undefined),
+      usageLimitPerUser: data.usageLimitPerUser != null ? Number(data.usageLimitPerUser) : undefined,
+      outletIds: Array.isArray(data.outletIds) ? data.outletIds : (Array.isArray(data.applicableOutlets) ? data.applicableOutlets : []),
+      applicableOutlets: Array.isArray(data.applicableOutlets) ? data.applicableOutlets : (Array.isArray(data.outletIds) ? data.outletIds : []),
+      validFrom: data.validFrom || (existingIdx >= 0 ? this.coupons[existingIdx].validFrom : nowIso),
+      validUntil: data.validUntil || (existingIdx >= 0 ? this.coupons[existingIdx].validUntil : new Date(Date.now() + 365 * 24 * 3600 * 1000).toISOString()),
+      isActive: data.isActive !== false,
+      isPublic: data.isPublic !== false,
+      createdAt: existingIdx >= 0 ? this.coupons[existingIdx].createdAt : nowIso,
+      updatedAt: nowIso,
+      success: true,
+    };
+
+    if (existingIdx >= 0) {
+      this.coupons[existingIdx] = cleanCoupon;
+    } else {
+      this.coupons.unshift(cleanCoupon);
+    }
+
+    this.saveCoupons();
+    return cleanCoupon;
+  }
+
+  public deleteCoupon(id: string, code?: string): boolean {
+    this.init();
+    const cleanCode = (code || '').trim().toUpperCase();
+    const prevLength = this.coupons.length;
+    this.coupons = this.coupons.filter(
+      (c) => c.id !== id && (!cleanCode || c.code.toUpperCase() !== cleanCode)
+    );
+    if (this.coupons.length !== prevLength) {
+      this.saveCoupons();
+      return true;
+    }
+    return false;
+  }
+
+  public getAvailableCoupons(params: {
+    customerId?: string | null;
+    customerPhone?: string | null;
+    subtotal?: number;
+    outletId?: string;
+  }): Coupon[] {
+    this.init();
+    const now = new Date();
+    const subtotal = Number(params.subtotal) || 0;
+    const customerId = params.customerId || null;
+    const customerPhone = params.customerPhone ? normalizePhone(params.customerPhone) : null;
+
+    return this.coupons.filter((coupon) => {
+      if (!coupon.isActive) return false;
+
+      // Date check
+      if (coupon.validFrom && new Date(coupon.validFrom) > now) return false;
+      if (coupon.validUntil && new Date(coupon.validUntil) < now) return false;
+
+      // Outlet filter
+      const outlets = coupon.applicableOutlets || coupon.outletIds;
+      if (params.outletId && outlets && outlets.length > 0 && !outlets.includes(params.outletId)) {
+        return false;
+      }
+
+      // First order / user eligibility filter
+      if (coupon.isFirstOrderOnly || coupon.userEligibility === 'first_order') {
+        const isEligible = this.checkWelcomeEligibility(customerId, customerPhone);
+        if (!isEligible) return false;
+      }
+
+      // Usage limits check
+      const redemptions = this.couponRedemptions.filter(
+        (r) => r.couponId === coupon.id || r.couponCode?.toUpperCase() === coupon.code.toUpperCase()
+      );
+      const limitTotal = coupon.usageLimitTotal ?? coupon.usageLimit;
+      if (limitTotal && redemptions.length >= limitTotal) return false;
+
+      if (customerId || customerPhone) {
+        const userCount = redemptions.filter(
+          (r) =>
+            (customerId && r.customerId === customerId) ||
+            (customerPhone && r.customerPhone && normalizePhone(r.customerPhone) === customerPhone)
+        ).length;
+        if (coupon.usageLimitPerUser && userCount >= coupon.usageLimitPerUser) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+  }
+
+  public validateCoupon(params: {
+    couponCode: string;
+    foodSubtotal: number;
+    customerId?: string | null;
+    customerPhone?: string | null;
+    outletId?: string;
+  }): CouponValidationResult {
+    this.init();
+    const normalizedCode = (params.couponCode || '').trim().toUpperCase();
+    if (!normalizedCode) {
+      return { isValid: false, valid: false, message: 'Please enter a coupon code.', error: 'Please enter a coupon code.' };
+    }
+
+    const coupon = this.getCouponByCode(normalizedCode);
+    if (!coupon) {
+      return { isValid: false, valid: false, message: 'Invalid coupon code.', error: 'Invalid coupon code.' };
+    }
+
+    if (!coupon.isActive) {
+      return { isValid: false, valid: false, message: 'This coupon is currently inactive.', error: 'This coupon is currently inactive.' };
+    }
+
+    const now = new Date();
+    if (coupon.validFrom && new Date(coupon.validFrom) > now) {
+      return { isValid: false, valid: false, message: 'This coupon is not yet valid.', error: 'This coupon is not yet valid.' };
+    }
+    if (coupon.validUntil && new Date(coupon.validUntil) < now) {
+      return { isValid: false, valid: false, message: 'This coupon has expired.', error: 'This coupon has expired.' };
+    }
+
+    // Min food subtotal
+    const subtotal = Number(params.foodSubtotal) || 0;
+    if (coupon.minOrderValue && subtotal < coupon.minOrderValue) {
+      const msg = `Minimum order of ₹${coupon.minOrderValue} required for ${coupon.code}. Add ₹${coupon.minOrderValue - subtotal} more items.`;
+      return { isValid: false, valid: false, message: msg, error: msg };
+    }
+
+    // Outlet restriction
+    const activeOutlets = coupon.applicableOutlets || coupon.outletIds;
+    if (params.outletId && activeOutlets && activeOutlets.length > 0 && !activeOutlets.includes(params.outletId)) {
+      return { isValid: false, valid: false, message: 'This coupon is not valid for the selected kitchen outlet.', error: 'This coupon is not valid for the selected kitchen outlet.' };
+    }
+
+    const customerId = params.customerId || null;
+    const customerPhone = params.customerPhone ? normalizePhone(params.customerPhone) : null;
+
+    // Login requirement
+    if ((coupon.userEligibility === 'logged_in' || coupon.userEligibility === 'registered' || coupon.requiresLogin) && !customerId && !customerPhone) {
+      return { isValid: false, valid: false, message: 'Please log in to apply this exclusive coupon.', error: 'Please log in to apply this exclusive coupon.' };
+    }
+
+    // First order verification
+    if (coupon.isFirstOrderOnly || coupon.userEligibility === 'first_order') {
+      const isFirst = this.checkWelcomeEligibility(customerId, customerPhone);
+      if (!isFirst) {
+        return { isValid: false, valid: false, message: 'This offer is only valid on your first order.', error: 'This offer is only valid on your first order.' };
+      }
+    }
+
+    // Redemptions & Limits check
+    const redemptions = this.couponRedemptions.filter(
+      (r) => r.couponId === coupon.id || r.couponCode?.toUpperCase() === coupon.code.toUpperCase()
+    );
+    const limitTotal = coupon.usageLimitTotal ?? coupon.usageLimit;
+    if (limitTotal && redemptions.length >= limitTotal) {
+      return { isValid: false, valid: false, message: 'This coupon has reached its total redemption limit.', error: 'This coupon has reached its total redemption limit.' };
+    }
+
+    if (customerId || customerPhone) {
+      const userRedemptions = redemptions.filter(
+        (r) =>
+          (customerId && r.customerId === customerId) ||
+          (customerPhone && r.customerPhone && normalizePhone(r.customerPhone) === customerPhone)
+      ).length;
+      if (coupon.usageLimitPerUser && userRedemptions >= coupon.usageLimitPerUser) {
+        const couponDisplayName = coupon.name || coupon.code;
+        return {
+          isValid: false,
+          valid: false,
+          message: `you've already used this coupon - ${couponDisplayName}`,
+          error: `you've already used this coupon - ${couponDisplayName}`,
+        };
+      }
+    }
+
+    // Calculate discount
+    let calculatedDiscount = 0;
+    if (coupon.discountType === 'percentage') {
+      calculatedDiscount = (subtotal * coupon.discountValue) / 100;
+      if (coupon.maxDiscountAmount != null && coupon.maxDiscountAmount > 0) {
+        calculatedDiscount = Math.min(calculatedDiscount, coupon.maxDiscountAmount);
+      }
+    } else {
+      calculatedDiscount = coupon.discountValue;
+    }
+
+    calculatedDiscount = Math.min(Math.round(calculatedDiscount), subtotal);
+
+    return {
+      isValid: true,
+      valid: true,
+      coupon,
+      discountAmount: calculatedDiscount,
+      message: `${coupon.discountType === 'percentage' ? `${coupon.discountValue}% OFF` : `₹${coupon.discountValue} OFF`} applied! You saved ₹${calculatedDiscount}.`,
+    };
+  }
+
+  public recordCouponRedemption(payload: {
+    couponId: string;
+    couponCode?: string;
+    customerId?: string | null;
+    customerPhone?: string;
+    orderId?: string;
+    discountAmount: number;
+    orderTotal?: number;
+  }): CouponRedemption {
+    this.init();
+    const coupon = this.getCouponById(payload.couponId) || (payload.couponCode ? this.getCouponByCode(payload.couponCode) : undefined);
+    const code = coupon ? coupon.code : (payload.couponCode || payload.couponId);
+
+    const redemption: CouponRedemption = {
+      id: `redemption-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      couponId: coupon?.id || payload.couponId,
+      couponCode: code,
+      customerId: payload.customerId || undefined,
+      customerPhone: payload.customerPhone ? normalizePhone(payload.customerPhone) : undefined,
+      orderId: payload.orderId,
+      discountAmount: Math.max(0, Number(payload.discountAmount) || 0),
+      redeemedAt: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
+    };
+
+    this.couponRedemptions.push(redemption);
+    this.saveCouponRedemptions();
+
+    if (payload.customerId || payload.customerPhone) {
+      if (coupon?.isFirstOrderOnly || coupon?.userEligibility === 'first_order' || code.includes('WELCOME')) {
+        this.markWelcomeDiscountUsed(payload.customerId || payload.customerPhone || '');
+      }
+    }
+
+    return redemption;
+  }
+
+  public getCouponStats() {
+    this.init();
+    const totalCoupons = this.coupons.length;
+    const activeCoupons = this.coupons.filter((c) => c.isActive !== false).length;
+    const totalRedemptions = this.couponRedemptions.length;
+    const totalDiscountGiven = this.couponRedemptions.reduce((acc, r) => acc + (Number(r.discountAmount) || 0), 0);
+
+    const perCoupon: Record<string, { count: number; totalDiscount: number }> = {};
+    for (const c of this.coupons) {
+      const key = c.id || c.code;
+      perCoupon[key] = { count: 0, totalDiscount: 0 };
+    }
+
+    for (const r of this.couponRedemptions) {
+      const key = r.couponId || r.couponCode;
+      if (!perCoupon[key]) {
+        perCoupon[key] = { count: 0, totalDiscount: 0 };
+      }
+      perCoupon[key].count += 1;
+      perCoupon[key].totalDiscount += Number(r.discountAmount) || 0;
+    }
+
+    return {
+      stats: {
+        totalCoupons,
+        activeCoupons,
+        totalRedemptions,
+        totalDiscountGiven,
+      },
+      perCoupon,
+    };
+  }
+
+  public checkWelcomeEligibility(customerId?: string | null, customerPhone?: string | null): boolean {
+    this.init();
+    if (customerId) {
+      const cust = this.findCustomerById(customerId);
+      if (cust && cust.welcomeDiscountUsed) return false;
+    }
+    if (customerPhone) {
+      const norm = normalizePhone(customerPhone);
+      const cust = this.findCustomerByPhone(norm);
+      if (cust && cust.welcomeDiscountUsed) return false;
+    }
+
+    // Check past orders
+    const pastOrder = this.orders.find((o) => {
+      if (customerId && o.customerId === customerId) return true;
+      if (customerPhone && o.customerDetails?.phone && normalizePhone(o.customerDetails.phone) === normalizePhone(customerPhone)) return true;
+      return false;
+    });
+
+    return !pastOrder;
   }
 
   // =====================

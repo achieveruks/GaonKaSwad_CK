@@ -648,34 +648,3 @@ export const PRODUCTS: Product[] = [
     ]
   }
 ];
-
-export const COUPONS: Coupon[] = [
-  {
-    code: 'GAON15',
-    discountType: 'percentage',
-    discountValue: 15,
-    minOrderValue: 499,
-    description: '15% OFF on orders above ₹499'
-  },
-  {
-    code: 'SWAD15',
-    discountType: 'percentage',
-    discountValue: 15,
-    minOrderValue: 499,
-    description: '15% OFF on orders above ₹499'
-  },
-  {
-    code: 'WELCOME50',
-    discountType: 'fixed',
-    discountValue: 50,
-    minOrderValue: 299,
-    description: 'Flat ₹50 OFF on first order'
-  },
-  {
-    code: 'FEAST100',
-    discountType: 'fixed',
-    discountValue: 100,
-    minOrderValue: 899,
-    description: 'Flat ₹100 OFF on party orders above ₹899'
-  }
-];

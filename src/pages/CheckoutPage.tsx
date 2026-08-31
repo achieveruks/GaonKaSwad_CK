@@ -3,7 +3,7 @@ import { useCart } from '../context/CartContext';
 import { useNavigation } from '../context/NavigationContext';
 import { useLocation } from '../context/LocationContext';
 import { useCustomer } from '../context/CustomerContext';
-import { CheckoutFormData, Order } from '../types';
+import { CheckoutFormData, Order, Coupon } from '../types';
 import { computeScheduledIsoTimestamp, formatScheduledAt } from '../utils/dateUtils';
 import {
   getProductPortionsLeftAtOutlet,
@@ -12,7 +12,12 @@ import {
   getOutletById,
 } from '../lib/locationService';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
-import { getNextSequentialOrderId, createSupabaseOrder } from '../lib/supabaseService';
+import {
+  getNextSequentialOrderId,
+  createSupabaseOrder,
+  fetchAvailableCouponsForCustomer,
+  recordCouponRedemption,
+} from '../lib/supabaseService';
 import confetti from 'canvas-confetti';
 import {
   CheckCircle2,
@@ -29,6 +34,8 @@ import {
   Sparkles,
   Printer,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
   PhoneCall,
   Utensils,
   Store,
@@ -40,6 +47,7 @@ import {
   UserPlus,
   RefreshCw,
   Tag,
+  TicketPercent,
   AlertTriangle,
   Info,
   PackageCheck,
@@ -141,6 +149,8 @@ export const CheckoutPage: React.FC = () => {
     packagingFee,
     gst,
     appliedCoupon,
+    applyCoupon,
+    removeCoupon,
     includeCutlery,
     specialInstructions,
     clearCart,
@@ -171,6 +181,7 @@ export const CheckoutPage: React.FC = () => {
     updateAddress,
     deleteAddress,
     setDefaultDeliveryAddress,
+    logoutCustomer,
   } = useCustomer();
 
   // Delivery vs Self-Pickup Mode
@@ -311,13 +322,72 @@ export const CheckoutPage: React.FC = () => {
 
   // Returning customer detection state
   const [returningCustomerFound, setReturningCustomerFound] = useState<{
-    name: string;
     phone: string;
-    hasAddress: boolean;
-    addressData?: any;
-    welcomeEligible: boolean;
   } | null>(null);
   const [isLookingUpPhone, setIsLookingUpPhone] = useState(false);
+
+  // Coupon & Promotional Offers Interactive State
+  const [couponInputText, setCouponInputText] = useState('');
+  const [couponFeedback, setCouponFeedback] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [isApplyingCouponState, setIsApplyingCouponState] = useState(false);
+  const [availableCouponsList, setAvailableCouponsList] = useState<Coupon[]>([]);
+  const [showAllAvailableCoupons, setShowAllAvailableCoupons] = useState(false);
+
+  // Fetch available promo offers
+  useEffect(() => {
+    let isMounted = true;
+    fetchAvailableCouponsForCustomer(
+      customer?.id,
+      customer?.phone || formData.phone,
+      subtotal,
+      selectedLocation?.outletId || currentOutlet?.id
+    ).then((offers) => {
+      if (isMounted) {
+        setAvailableCouponsList(offers);
+      }
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, [customer?.id, customer?.phone, formData.phone, subtotal, selectedLocation?.outletId, currentOutlet?.id]);
+
+  const handleApplyPromoCode = async (codeToApply?: string) => {
+    const targetCode = (codeToApply || couponInputText || '').trim().toUpperCase();
+    if (!targetCode) {
+      setCouponFeedback({ message: 'Please enter a valid coupon code', type: 'error' });
+      return;
+    }
+
+    setIsApplyingCouponState(true);
+    setCouponFeedback(null);
+
+    const result = await applyCoupon(targetCode, {
+      customerId: customer?.id,
+      customerPhone: customer?.phone || formData.phone,
+      outletId: selectedLocation?.outletId || currentOutlet?.id,
+    });
+
+    setIsApplyingCouponState(false);
+
+    if (result.success) {
+      setCouponFeedback({
+        message: result.message || `Coupon ${targetCode} applied! You saved ₹${result.discountAmount}.`,
+        type: 'success',
+      });
+      setCouponInputText('');
+    } else {
+      setCouponFeedback({
+        message: result.message || 'Invalid or inapplicable coupon code.',
+        type: 'error',
+      });
+    }
+  };
+
+  const handleRemoveAppliedPromo = () => {
+    removeCoupon();
+    setCouponFeedback(null);
+    setCouponInputText('');
+  };
 
   // Validation State
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -335,8 +405,11 @@ export const CheckoutPage: React.FC = () => {
   const [shouldSaveAddressToAccount, setShouldSaveAddressToAccount] = useState(true);
   const [isSavingAddressInProgress, setIsSavingAddressInProgress] = useState(false);
 
-  // Active saved address resolution
+  // Active saved address resolution - strictly for authenticated / logged-in users
   const activeSavedAddress = useMemo(() => {
+    if (!isCustomerLoggedIn) {
+      return null;
+    }
     if (selectedAddressId && Array.isArray(savedAddresses) && savedAddresses.length > 0) {
       const match = savedAddresses.find((a) => a.id === selectedAddressId);
       if (match) return match;
@@ -347,14 +420,12 @@ export const CheckoutPage: React.FC = () => {
       );
       if (matchByContent) return matchByContent;
     }
-    if (isCustomerLoggedIn) {
-      return defaultAddress || (savedAddresses.length > 0 ? savedAddresses[0] : null);
-    }
-    return returningCustomerFound?.addressData || defaultAddress || null;
-  }, [selectedAddressId, savedAddresses, formData.address, formData.pincode, isCustomerLoggedIn, defaultAddress, returningCustomerFound]);
+    return defaultAddress || (savedAddresses.length > 0 ? savedAddresses[0] : null);
+  }, [selectedAddressId, savedAddresses, formData.address, formData.pincode, isCustomerLoggedIn, defaultAddress]);
 
   const hasSavedAddress = Boolean(
-    activeSavedAddress &&
+    isCustomerLoggedIn &&
+      activeSavedAddress &&
       activeSavedAddress.fullAddress &&
       activeSavedAddress.fullAddress.trim().length > 0 &&
       activeSavedAddress.pincode
@@ -408,9 +479,6 @@ export const CheckoutPage: React.FC = () => {
       setSelectedAddressId(addr.id);
     }
     setDefaultDeliveryAddress(addr);
-    if (returningCustomerFound) {
-      setReturningCustomerFound((prev) => prev ? { ...prev, addressData: addr } : null);
-    }
     const label = addr.addressLabel || 'Home';
     if (label.toLowerCase() === 'home') {
       setAddressLabelType('Home');
@@ -438,7 +506,7 @@ export const CheckoutPage: React.FC = () => {
   const [isSyncingAddresses, setIsSyncingAddresses] = useState(false);
 
   const handleRefreshAddressesFromDB = async () => {
-    const targetCustId = customer?.id || returningCustomerFound?.addressData?.customerId;
+    const targetCustId = customer?.id;
     const targetPhone = customer?.phone || formData.phone;
     if (!targetCustId && !targetPhone) return;
 
@@ -523,7 +591,7 @@ export const CheckoutPage: React.FC = () => {
 
     setIsSavingAddressInProgress(true);
     try {
-      const targetCustId = customer?.id || returningCustomerFound?.addressData?.customerId;
+      const targetCustId = customer?.id;
       const targetPhone = customer?.phone || formData.phone || rawPhone;
       
       const newAddrData = {
@@ -589,7 +657,7 @@ export const CheckoutPage: React.FC = () => {
     }
   }, [customer, defaultAddress, selectedAddressId]);
 
-  // Dynamic Returning Customer Phone Lookup
+  // Dynamic Returning Customer Phone Lookup (Privacy-Preserving)
   useEffect(() => {
     const cleanPhone = formData.phone.replace(/\D/g, '').slice(0, 10);
     if (cleanPhone.length === 10 && !isCustomerLoggedIn) {
@@ -598,31 +666,13 @@ export const CheckoutPage: React.FC = () => {
       lookupCustomer(cleanPhone).then((res) => {
         if (!isMounted) return;
         setIsLookingUpPhone(false);
-        if (res.exists && res.customer) {
+        if (res.exists) {
+          // Account exists on server: flag account presence without exposing PII (name, email, address)
           setReturningCustomerFound({
-            name: res.customer.fullName,
-            phone: res.customer.phone,
-            hasAddress: !!res.defaultAddress,
-            addressData: res.defaultAddress,
-            welcomeEligible: !!res.welcomeDiscountEligible,
+            phone: cleanPhone,
           });
-          if (res.customer.id || res.customer.phone) {
-            fetchCustomerAddresses(res.customer.id, res.customer.phone);
-          }
-          setFormData((prev) => ({
-            ...prev,
-            fullName: res.customer.fullName || prev.fullName,
-            email: res.customer.email || prev.email,
-            address: res.defaultAddress?.fullAddress || prev.address,
-            landmark: res.defaultAddress?.landmark || prev.landmark,
-            city: res.defaultAddress?.city || prev.city,
-            state: res.defaultAddress?.state || prev.state,
-            pincode: res.defaultAddress?.pincode || prev.pincode,
-            createAccount: false,
-          }));
         } else {
-          // If 10-digit mobile number is not found in server:
-          // Clear all profile and address data
+          // If 10-digit mobile number is not found in server: treat as fresh guest user
           setReturningCustomerFound(null);
           setFormData((prev) => ({
             ...prev,
@@ -703,24 +753,12 @@ export const CheckoutPage: React.FC = () => {
     });
   };
 
-  // 10% Welcome Discount Calculation
-  // 10% extra discount (capping 50/-) after all discounts
-  const remainingSubtotalAfterCoupon = Math.max(0, subtotal - discount);
-  const willApplyWelcomeDiscount =
-    (formData.createAccount || isCustomerLoggedIn) &&
-    isWelcomeDiscountEligible &&
-    (!returningCustomerFound || returningCustomerFound.welcomeEligible);
-
-  const welcomeDiscountAmount = willApplyWelcomeDiscount
-    ? Math.min(50, Math.round(remainingSubtotalAfterCoupon * 0.1))
-    : 0;
-
   // Delivery fee is ₹0 for Self-Pickup / Takeaway
   const effectiveDeliveryFee = isSelfPickup || orderType === 'pickup' ? 0 : deliveryFee;
 
   const effectiveTotal = Math.max(
     0,
-    subtotal - discount - welcomeDiscountAmount + packagingFee + gst + effectiveDeliveryFee
+    subtotal - discount + packagingFee + gst + effectiveDeliveryFee
   );
 
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -759,7 +797,7 @@ export const CheckoutPage: React.FC = () => {
     if (!isCustomerLoggedIn && returningCustomerFound !== null) {
       return {
         canPlaceOrder: false,
-        reason: `Please sign in with OTP to verify your account (${returningCustomerFound.name}) and place your order.`,
+        reason: 'Please sign in with OTP to verify your saved account and place your order.',
         buttonLabel: 'Sign In to Place Order',
         actionRequired: 'SIGN_IN_REQUIRED' as const,
       };
@@ -1008,6 +1046,23 @@ export const CheckoutPage: React.FC = () => {
     const nextForm = { ...formData, [name]: nextValue };
     if (name === 'phone' && nextValue !== formData.phone) {
       nextForm.isPhoneVerified = false;
+
+      // If user was logged in (e.g. after OTP verification) or account session was active,
+      // changing the phone number immediately clears account association
+      if (isCustomerLoggedIn || customer) {
+        logoutCustomer();
+      }
+      setReturningCustomerFound(null);
+      setSelectedAddressId(null);
+      setIsCustomAddressMode(false);
+
+      // Clear profile and address info, treating the user as a new guest
+      nextForm.fullName = '';
+      nextForm.email = '';
+      nextForm.address = '';
+      nextForm.landmark = '';
+      nextForm.pincode = '';
+      nextForm.createAccount = true;
     }
     setFormData(nextForm);
 
@@ -1021,19 +1076,6 @@ export const CheckoutPage: React.FC = () => {
     setTouched((prev) => ({ ...prev, [field]: true }));
     const err = validateField(field, (formData as any)[field]);
     setErrors((prev) => ({ ...prev, [field]: err }));
-  };
-
-  const handlePrefillReturningCustomer = () => {
-    if (!returningCustomerFound) return;
-    setFormData((prev) => ({
-      ...prev,
-      fullName: returningCustomerFound.name || prev.fullName,
-      address: returningCustomerFound.addressData?.fullAddress || prev.address,
-      landmark: returningCustomerFound.addressData?.landmark || prev.landmark,
-      city: returningCustomerFound.addressData?.city || prev.city,
-      state: returningCustomerFound.addressData?.state || prev.state,
-      pincode: returningCustomerFound.addressData?.pincode || prev.pincode,
-    }));
   };
 
   const handleTriggerOtpVerification = async () => {
@@ -1152,13 +1194,15 @@ export const CheckoutPage: React.FC = () => {
       items: [...cart],
       subtotal,
       discount,
-      welcomeDiscountAmount,
-      isWelcomeDiscountApplied: willApplyWelcomeDiscount && welcomeDiscountAmount > 0,
+      welcomeDiscountAmount: 0,
+      isWelcomeDiscountApplied: false,
       deliveryFee: effectiveDeliveryFee,
       packagingFee,
       gst,
       total: effectiveTotal,
+      couponId: appliedCoupon?.id,
       couponCode: appliedCoupon ? appliedCoupon.code : undefined,
+      couponDiscountAmount: discount > 0 ? discount : undefined,
       customerDetails: {
         ...formData,
         orderType: isSelfPickup ? 'pickup' : 'delivery',
@@ -1231,13 +1275,42 @@ export const CheckoutPage: React.FC = () => {
         }),
       });
       const data = await res.json();
-      if (data.success && data.order) {
-        setPlacedOrder(data.order);
-      } else {
-        setPlacedOrder(newOrder);
+      const savedOrderObj = data.success && data.order ? data.order : newOrder;
+      setPlacedOrder(savedOrderObj);
+
+      // Record coupon redemption
+      if (appliedCoupon && discount > 0) {
+        try {
+          await recordCouponRedemption({
+            couponId: appliedCoupon.id,
+            couponCode: appliedCoupon.code,
+            orderId: savedOrderObj.id || savedOrderObj.orderId || nextOrderId,
+            customerId: resolvedCustId || customer?.id,
+            customerPhone: formData.phone || customer?.phone,
+            discountAmount: discount,
+            orderTotal: effectiveTotal,
+          });
+        } catch (couponErr) {
+          console.warn('Coupon redemption logging notice:', couponErr);
+        }
       }
     } catch {
       setPlacedOrder(newOrder);
+      if (appliedCoupon && discount > 0) {
+        try {
+          await recordCouponRedemption({
+            couponId: appliedCoupon.id,
+            couponCode: appliedCoupon.code,
+            orderId: newOrder.id || newOrder.orderId || nextOrderId,
+            customerId: resolvedCustId || customer?.id,
+            customerPhone: formData.phone || customer?.phone,
+            discountAmount: discount,
+            orderTotal: effectiveTotal,
+          });
+        } catch (couponErr) {
+          console.warn('Coupon redemption logging notice:', couponErr);
+        }
+      }
     }
 
     setIsSubmitting(false);
@@ -1616,13 +1689,13 @@ export const CheckoutPage: React.FC = () => {
             </div>
             <div>
               <h4 className="font-bold text-sm text-stone-900 flex items-center gap-1.5">
-                <span>Welcome back, {returningCustomerFound.name}!</span>
+                <span>Welcome back, Foodie! We found your saved account.</span>
                 <span className="bg-amber-200/80 text-amber-900 text-[10px] font-bold px-2 py-0.5 rounded">
                   Saved Account Found
                 </span>
               </h4>
               <p className="text-xs text-stone-600 mt-0.5">
-                Your saved profile info and delivery address will be automatically fetched once you sign in.
+                Please sign in with OTP to access your saved details and addresses.
               </p>
             </div>
           </div>
@@ -1688,12 +1761,11 @@ export const CheckoutPage: React.FC = () => {
                       type="tel"
                       name="phone"
                       maxLength={10}
-                      disabled={isCustomerLoggedIn}
                       value={formData.phone}
                       onChange={handleChange}
                       onBlur={() => handleBlur('phone')}
                       placeholder="10-digit mobile number"
-                      className={`w-full pl-10 pr-9 py-2 bg-gray-50 border rounded-xl text-xs sm:text-sm focus:outline-none transition-colors disabled:bg-stone-100 disabled:text-stone-700 disabled:cursor-not-allowed disabled:border-stone-200 disabled:select-none ${
+                      className={`w-full pl-10 pr-9 py-2 bg-gray-50 border rounded-xl text-xs sm:text-sm focus:outline-none transition-colors ${
                         touched.phone && errors.phone
                           ? 'border-rose-500 bg-rose-50/40 focus:border-rose-600 text-rose-950'
                           : 'border-gray-200 focus:border-orange-500 focus:bg-white text-gray-900'
@@ -1718,7 +1790,7 @@ export const CheckoutPage: React.FC = () => {
                   <input
                     type="text"
                     name="fullName"
-                    disabled={isCustomerLoggedIn || !!returningCustomerFound}
+                    disabled={isCustomerLoggedIn}
                     value={formData.fullName}
                     onChange={handleChange}
                     onBlur={() => handleBlur('fullName')}
@@ -1749,7 +1821,7 @@ export const CheckoutPage: React.FC = () => {
                   <input
                     type="email"
                     name="email"
-                    disabled={isCustomerLoggedIn || !!returningCustomerFound}
+                    disabled={isCustomerLoggedIn}
                     value={formData.email}
                     onChange={handleChange}
                     onBlur={() => handleBlur('email')}
@@ -1777,7 +1849,7 @@ export const CheckoutPage: React.FC = () => {
                           <>You can edit this (personal info) in Profile page.</>
                         ) : (
                           <>
-                            Saved details for <strong>{returningCustomerFound?.name}</strong> found. You can edit this (personal info) in Profile page after signing in.
+                            Welcome back, Foodie! We found your saved account. Please sign in with OTP to verify and use your saved details.
                           </>
                         )}
                       </span>
@@ -1833,7 +1905,7 @@ export const CheckoutPage: React.FC = () => {
                 )}
               </div>
 
-              {/* Optional Account Creation & Welcome Discount Box - ONLY shown for new customers not found on server */}
+              {/* Optional Account Creation & Welcome Benefit Box - ONLY shown for new customers not found on server */}
               {!isCustomerLoggedIn && !returningCustomerFound && (
                 <div className="mt-3 pt-3 border-t border-gray-100 space-y-2.5">
                   <label className="flex items-start gap-2.5 p-3 rounded-xl border border-amber-200/90 bg-amber-50/60 hover:bg-amber-50 cursor-pointer transition-colors">
@@ -1847,7 +1919,7 @@ export const CheckoutPage: React.FC = () => {
                     <div className="text-xs">
                       <p className="font-bold text-stone-900 flex items-center gap-1.5">
                         <Gift className="w-4 h-4 text-amber-800 shrink-0" />
-                        <span>Create account & apply 10% Welcome Discount (Save up to ₹50)</span>
+                        <span>Create account with this info & enjoy Welcome benefit.</span>
                       </p>
                       <p className="text-[11px] text-stone-600 mt-0.5 leading-relaxed">
                         Saves your address for 1-click reorders and unlocks verified food reviews.
@@ -2026,7 +2098,7 @@ export const CheckoutPage: React.FC = () => {
                         <button
                           type="button"
                           onClick={() => {
-                            const targetId = customer?.id || returningCustomerFound?.addressData?.customerId;
+                            const targetId = customer?.id;
                             const targetPhone = customer?.phone || formData.phone;
                             if (targetId || targetPhone) {
                               fetchCustomerAddresses(targetId, targetPhone);
@@ -2758,6 +2830,168 @@ export const CheckoutPage: React.FC = () => {
                 ))}
               </div>
 
+              {/* Coupons & Promotional Offers Box */}
+              <div className="pt-2.5 border-t border-gray-100 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-gray-900 flex items-center gap-1.5">
+                    <TicketPercent className="w-3.5 h-3.5 text-orange-600" />
+                    <span>Coupons & Offers</span>
+                  </span>
+                  {availableCouponsList.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setShowAllAvailableCoupons(!showAllAvailableCoupons)}
+                      className="text-[11px] font-bold text-orange-700 hover:text-orange-900 flex items-center gap-0.5 cursor-pointer"
+                    >
+                      <span>{showAllAvailableCoupons ? 'Hide Offers' : `View Offers (${availableCouponsList.length})`}</span>
+                      {showAllAvailableCoupons ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                    </button>
+                  )}
+                </div>
+
+                {/* Applied Coupon Banner */}
+                {appliedCoupon ? (
+                  <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="w-7 h-7 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0">
+                        <Check className="w-4 h-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-extrabold text-xs text-emerald-900 tracking-wider">
+                            {appliedCoupon.code}
+                          </span>
+                          <span className="text-[10px] font-bold bg-emerald-200/80 text-emerald-900 px-1.5 py-0.2 rounded">
+                            ₹{discount} SAVED
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-emerald-700 truncate mt-0.5">
+                          {appliedCoupon.title || 'Promotional coupon discount applied'}
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleRemoveAppliedPromo}
+                      className="text-stone-400 hover:text-rose-600 p-1 rounded-md transition-colors cursor-pointer shrink-0"
+                      title="Remove coupon"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="space-y-1.5">
+                    <div className="flex items-center gap-1.5">
+                      <div className="relative flex-1">
+                        <input
+                          type="text"
+                          value={couponInputText}
+                          onChange={(e) => {
+                            setCouponInputText(e.target.value.toUpperCase());
+                            if (couponFeedback) setCouponFeedback(null);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              handleApplyPromoCode();
+                            }
+                          }}
+                          placeholder="ENTER COUPON CODE"
+                          className="w-full px-3 py-1.5 bg-gray-50 border border-gray-200 rounded-xl text-xs font-semibold uppercase tracking-wider text-gray-900 placeholder:text-gray-400 focus:outline-none focus:border-orange-500 focus:bg-white transition-colors"
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleApplyPromoCode()}
+                        disabled={isApplyingCouponState || !couponInputText.trim()}
+                        className="px-3 py-1.5 bg-orange-600 hover:bg-orange-700 disabled:bg-gray-200 disabled:text-gray-400 text-white font-bold rounded-xl text-xs transition-colors shrink-0 cursor-pointer disabled:cursor-not-allowed flex items-center gap-1"
+                      >
+                        {isApplyingCouponState ? (
+                          <RefreshCw className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <span>APPLY</span>
+                        )}
+                      </button>
+                    </div>
+
+                    {couponFeedback && (
+                      <p
+                        className={`text-[11px] font-medium px-1 flex items-center gap-1 ${
+                          couponFeedback.type === 'success' ? 'text-emerald-600' : 'text-rose-600'
+                        }`}
+                      >
+                        {couponFeedback.type === 'success' ? (
+                          <CheckCircle2 className="w-3 h-3 shrink-0" />
+                        ) : (
+                          <AlertCircle className="w-3 h-3 shrink-0" />
+                        )}
+                        <span>{couponFeedback.message}</span>
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {/* Available Offers List Accordion */}
+                {showAllAvailableCoupons && availableCouponsList.length > 0 && (
+                  <div className="space-y-1.5 pt-1 max-h-48 overflow-y-auto pr-1">
+                    {availableCouponsList.map((coupon) => {
+                      const isApplied = appliedCoupon?.code === coupon.code;
+                      const isEligible = subtotal >= (coupon.min_order_value || 0);
+                      const missingAmount = Math.max(0, (coupon.min_order_value || 0) - subtotal);
+
+                      return (
+                        <div
+                          key={coupon.id}
+                          className={`p-2 rounded-xl border transition-all text-xs ${
+                            isApplied
+                              ? 'bg-emerald-50 border-emerald-200'
+                              : 'bg-stone-50/80 border-stone-200/80 hover:bg-orange-50/50 hover:border-orange-200'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-1.5">
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-extrabold text-stone-900 tracking-wider bg-white px-1.5 py-0.5 rounded border border-stone-200">
+                                {coupon.code}
+                              </span>
+                              <span className="text-[10px] font-bold text-amber-900">
+                                {(coupon.discountType || (coupon as any).discount_type) === 'percentage'
+                                  ? `${coupon.discountValue ?? (coupon as any).discount_value}% OFF`
+                                  : `₹${coupon.discountValue ?? (coupon as any).discount_value} FLAT OFF`}
+                              </span>
+                            </div>
+
+                            {isApplied ? (
+                              <span className="text-[10px] font-extrabold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
+                                APPLIED
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => handleApplyPromoCode(coupon.code)}
+                                disabled={isApplyingCouponState || !isEligible}
+                                className="text-[10px] font-extrabold text-orange-600 hover:text-orange-800 disabled:text-stone-400 cursor-pointer disabled:cursor-not-allowed uppercase underline"
+                              >
+                                Apply
+                              </button>
+                            )}
+                          </div>
+
+                          <p className="text-[10px] text-stone-600 mt-1 line-clamp-2">
+                            {coupon.description || coupon.title}
+                          </p>
+
+                          {!isEligible && (
+                            <p className="text-[9px] text-amber-800 font-semibold mt-0.5">
+                              Add items worth ₹{missingAmount} more to unlock
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
               {/* Pricing breakdown */}
               <div className="pt-2 border-t border-gray-100 space-y-1.5 text-xs text-gray-600">
                 <div className="flex justify-between">
@@ -2769,17 +3003,6 @@ export const CheckoutPage: React.FC = () => {
                   <div className="flex justify-between text-emerald-600 font-semibold">
                     <span>Coupon Discount ({appliedCoupon?.code})</span>
                     <span>- ₹{discount}</span>
-                  </div>
-                )}
-
-                {/* 10% Welcome Discount Row */}
-                {welcomeDiscountAmount > 0 && (
-                  <div className="flex justify-between text-emerald-700 font-bold bg-emerald-50/80 px-2 py-1 rounded-lg border border-emerald-200">
-                    <span className="flex items-center gap-1">
-                      <Tag className="w-3 h-3 text-emerald-600" />
-                      <span>10% Welcome Discount (Max ₹50)</span>
-                    </span>
-                    <span>- ₹{welcomeDiscountAmount}</span>
                   </div>
                 )}
 

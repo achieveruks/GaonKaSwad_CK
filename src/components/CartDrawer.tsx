@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useCart } from '../context/CartContext';
 import { useNavigation } from '../context/NavigationContext';
 import { useLocation } from '../context/LocationContext';
+import { useAuth } from '../context/AuthContext';
 import { CartItemRow } from './CartItemRow';
 import {
   X,
@@ -15,7 +16,8 @@ import {
   AlertCircle,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { COUPONS } from '../data/products';
+import { fetchAvailableCouponsForCustomer } from '../lib/supabaseService';
+import { Coupon } from '../types';
 
 export const CartDrawer: React.FC = () => {
   const {
@@ -46,18 +48,46 @@ export const CartDrawer: React.FC = () => {
 
   const { goToCheckout, goToShop, goToCart } = useNavigation();
   const { selectedLocation, setIsLocationModalOpen } = useLocation();
+  const { customer } = useAuth();
   const [couponInput, setCouponInput] = useState('');
   const [couponError, setCouponError] = useState('');
+  const [availableCoupons, setAvailableCoupons] = useState<Coupon[]>([]);
+  const [isApplying, setIsApplying] = useState(false);
 
-  const handleApplyCoupon = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!couponInput.trim()) return;
-    const res = applyCoupon(couponInput);
-    if (!res.success) {
-      setCouponError(res.message);
-    } else {
-      setCouponError('');
-      setCouponInput('');
+  useEffect(() => {
+    let isMounted = true;
+    fetchAvailableCouponsForCustomer(customer?.id, customer?.phone, subtotal, selectedLocation?.outletId)
+      .then((cpns) => {
+        if (isMounted) {
+          setAvailableCoupons(cpns.slice(0, 4));
+        }
+      })
+      .catch((e) => console.warn('Failed to load available coupons in drawer', e));
+
+    return () => {
+      isMounted = false;
+    };
+  }, [customer?.id, customer?.phone, subtotal, selectedLocation?.outletId, isCartDrawerOpen]);
+
+  const handleApplyCoupon = async (e?: React.FormEvent, codeToApply?: string) => {
+    if (e) e.preventDefault();
+    const code = (codeToApply || couponInput).trim();
+    if (!code) return;
+    setIsApplying(true);
+    try {
+      const res = await applyCoupon(code, {
+        customerId: customer?.id,
+        customerPhone: customer?.phone,
+        outletId: selectedLocation?.outletId,
+      });
+      if (!res.success) {
+        setCouponError(res.message);
+      } else {
+        setCouponError('');
+        setCouponInput('');
+      }
+    } finally {
+      setIsApplying(false);
     }
   };
 
@@ -277,9 +307,10 @@ export const CartDrawer: React.FC = () => {
                           </div>
                           <button
                             type="submit"
-                            className="px-3 py-1.5 bg-stone-900 hover:bg-black text-white rounded-lg text-xs font-semibold transition-colors"
+                            disabled={isApplying}
+                            className="px-3 py-1.5 bg-stone-900 hover:bg-black disabled:opacity-50 text-white rounded-lg text-xs font-semibold transition-colors"
                           >
-                            Apply
+                            {isApplying ? 'Checking...' : 'Apply'}
                           </button>
                         </form>
 
@@ -288,21 +319,20 @@ export const CartDrawer: React.FC = () => {
                         )}
 
                         {/* Quick coupon chips */}
-                        <div className="flex flex-wrap gap-1.5 mt-2">
-                          {COUPONS.map((c) => (
-                            <button
-                              key={c.code}
-                              type="button"
-                              onClick={() => {
-                                const res = applyCoupon(c.code);
-                                if (!res.success) setCouponError(res.message);
-                              }}
-                              className="text-[10px] bg-amber-50 hover:bg-amber-100 text-amber-900 font-medium px-2 py-0.5 rounded border border-amber-200 transition-colors"
-                            >
-                              Use <strong>{c.code}</strong>
-                            </button>
-                          ))}
-                        </div>
+                        {availableCoupons.length > 0 && (
+                          <div className="flex flex-wrap gap-1.5 mt-2">
+                            {availableCoupons.map((c) => (
+                              <button
+                                key={c.id || c.code}
+                                type="button"
+                                onClick={() => handleApplyCoupon(undefined, c.code)}
+                                className="text-[10px] bg-amber-50 hover:bg-amber-100 text-amber-900 font-medium px-2 py-0.5 rounded border border-amber-200 transition-colors"
+                              >
+                                Use <strong>{c.code}</strong>
+                              </button>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>

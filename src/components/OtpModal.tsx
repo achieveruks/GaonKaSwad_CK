@@ -303,7 +303,7 @@ export const OtpModal: React.FC<OtpModalProps> = ({
             </span>
             {view === 'signup' && (
               <span className="inline-flex items-center gap-1 bg-emerald-600 text-white text-[11px] font-bold px-2 py-0.5 rounded uppercase tracking-wider">
-                <Sparkles className="w-3 h-3" /> 10% Welcome Discount
+                <Sparkles className="w-3 h-3" /> Welcome Benefit
               </span>
             )}
           </div>
