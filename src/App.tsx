@@ -20,6 +20,7 @@ import { ProductDetailPage } from './pages/ProductDetailPage';
 import { CartPage } from './pages/CartPage';
 import { CheckoutPage } from './pages/CheckoutPage';
 import { ProfilePage } from './pages/ProfilePage';
+import { MyOrdersPage } from './pages/MyOrdersPage';
 import { AboutPage } from './pages/AboutPage';
 import { ContactPage } from './pages/ContactPage';
 import { CategoriesPage } from './pages/CategoriesPage';
@@ -51,7 +52,7 @@ const AppContent: React.FC = () => {
 
   // 2. Owner Portal Routing (Self-contained layout)
   if (currentRoute.path.startsWith('/owner')) {
-    switch (currentRoute.path) {
+    switch (currentRoute.path as string) {
       case '/owner':
       case '/owner/login':
         return (
@@ -141,6 +142,8 @@ const AppContent: React.FC = () => {
         return <CheckoutPage />;
       case '/profile':
         return <ProfilePage />;
+      case '/orders':
+        return <MyOrdersPage />;
       case '/about':
         return <AboutPage />;
       case '/contact':

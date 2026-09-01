@@ -4,6 +4,7 @@ export interface Outlet {
   city: string;
   state?: string;
   address: string;
+  pinCode?: string;
   fssaiLicId?: number; // Strictly numeric 14-digit FSSAI License ID
   phone?: string;
   email?: string;
@@ -140,6 +141,7 @@ export interface Product {
   rating?: number;
   reviewsCount?: number;
   image: string;
+  imageUrl?: string;
   galleryImages?: string[];
   isVeg: boolean;
   isJainFriendly?: boolean;
@@ -227,6 +229,7 @@ export interface Coupon {
   discountValue: number;
   maxDiscountAmount?: number;
   minOrderValue: number;
+  min_order_value?: number;
   applicableOutlets?: string[];
   outletIds?: string[];
   usageLimitTotal?: number;
@@ -271,6 +274,8 @@ export interface Customer {
   id: string;
   phone: string;
   fullName: string;
+  name?: string;
+  city?: string;
   email?: string;
   isActive?: boolean;
   marketingConsent?: boolean;
@@ -316,6 +321,7 @@ export interface CheckoutFormData {
   createAccount?: boolean;
   marketingConsent?: boolean;
   isOtpVerified?: boolean;
+  isPhoneVerified?: boolean;
   orderType?: 'delivery' | 'pickup';
   isSelfPickup?: boolean;
 }
@@ -355,6 +361,7 @@ export type CleanOrderItem = Omit<OrderItem, 'id' | 'price' | 'product'>;
 export interface Order {
   id?: string;
   orderId: string;
+  orderNumber?: string;
   customerId?: string;
   addressId?: string;
   isGuestCheckout?: boolean;
@@ -363,7 +370,15 @@ export interface Order {
   orderType?: 'delivery' | 'pickup';
   isSelfPickup?: boolean;
   deliveryType?: 'immediate' | 'scheduled';
+  delivery_type?: 'immediate' | 'scheduled';
+  deliveryNotes?: string;
+  paymentMethod?: string;
+  payment_method?: string;
+  paymentStatus?: string;
+  payment_status?: string;
   scheduledAt?: string; // ISO 8601 Timestamp
+  scheduled_at?: string;
+  timestamp?: string;
   kitchenAddress?: string;
   deliveryPinCode: string;
   createdAt: string;

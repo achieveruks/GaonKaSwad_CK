@@ -50,7 +50,7 @@ export const CartPage: React.FC = () => {
 
   const { goToShop, goToCheckout } = useNavigation();
   const { selectedLocation, setIsLocationModalOpen } = useLocation();
-  const { customer } = useAuth();
+  const { profile } = useAuth();
 
   const [couponCode, setCouponCode] = useState('');
   const [couponError, setCouponError] = useState('');
@@ -59,7 +59,7 @@ export const CartPage: React.FC = () => {
 
   useEffect(() => {
     let isMounted = true;
-    fetchAvailableCouponsForCustomer(customer?.id, customer?.phone, subtotal, selectedLocation?.outletId)
+    fetchAvailableCouponsForCustomer(profile?.id, profile?.phone, subtotal, selectedLocation?.outletId)
       .then((cpns) => {
         if (isMounted) {
           setAvailableCoupons(cpns);
@@ -70,7 +70,7 @@ export const CartPage: React.FC = () => {
     return () => {
       isMounted = false;
     };
-  }, [customer?.id, customer?.phone, subtotal, selectedLocation?.outletId]);
+  }, [profile?.id, profile?.phone, subtotal, selectedLocation?.outletId]);
 
   const handleApplyCoupon = async (e?: React.FormEvent, codeToApply?: string) => {
     if (e) e.preventDefault();
@@ -79,8 +79,8 @@ export const CartPage: React.FC = () => {
     setIsApplying(true);
     try {
       const res = await applyCoupon(code, {
-        customerId: customer?.id,
-        customerPhone: customer?.phone,
+        customerId: profile?.id,
+        customerPhone: profile?.phone,
         outletId: selectedLocation?.outletId,
       });
       if (!res.success) {

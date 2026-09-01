@@ -350,7 +350,7 @@ export const OutletsPage: React.FC = () => {
     setIsSaving(true);
     try {
       const statesList = Object.values(outletItemStates) as OutletProductItemState[];
-      const assignedProductIds = statesList.filter((s) => s.isAssigned).map((s) => s.productId);
+      const assignedProductIds = statesList.filter((s) => s.isAssigned).map((s) => String(s.productId));
 
       const outletPayload = {
         ...formData,
@@ -2132,6 +2132,7 @@ export const OutletsPage: React.FC = () => {
                           isFeatured: false,
                           isBestseller: false,
                           isChefSpecial: false,
+                          portionsLeft: null,
                         };
 
                         return (

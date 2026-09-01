@@ -577,7 +577,9 @@ export const OtpModal: React.FC<OtpModalProps> = ({
                   {otp.map((digit, idx) => (
                     <input
                       key={idx}
-                      ref={(el) => (otpInputRefs.current[idx] = el)}
+                      ref={(el) => {
+                        otpInputRefs.current[idx] = el;
+                      }}
                       type="text"
                       inputMode="numeric"
                       maxLength={1}

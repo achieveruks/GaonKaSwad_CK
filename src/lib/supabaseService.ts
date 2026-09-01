@@ -1355,32 +1355,58 @@ export function mapDbOrderToOrder(row: any): Order {
     row.customer_details?.scheduledAt ||
     undefined;
 
+  const items = Array.isArray(row.items) ? row.items.map(deserializeOrderItem) : [];
+  const rawStatus = String(row.order_status || 'received').toLowerCase().trim();
+  const displayStatus =
+    rawStatus === 'received'
+      ? 'Received'
+      : rawStatus === 'confirmed'
+      ? 'Confirmed'
+      : rawStatus === 'preparing' || rawStatus === 'in kitchen' || rawStatus === 'preparing in kitchen'
+      ? 'Preparing in Kitchen'
+      : rawStatus === 'ready'
+      ? 'Ready'
+      : rawStatus === 'ready_for_pickup' || rawStatus === 'ready for pickup'
+      ? 'Ready for Pickup'
+      : rawStatus === 'ready_for_dispatch' || rawStatus === 'ready for dispatch'
+      ? 'Ready for Dispatch'
+      : rawStatus === 'out_for_delivery' || rawStatus === 'out for delivery'
+      ? 'Out for Delivery'
+      : rawStatus === 'delivered'
+      ? 'Delivered'
+      : rawStatus === 'picked_up' || rawStatus === 'picked up'
+      ? 'Picked Up'
+      : rawStatus === 'cancelled'
+      ? 'Cancelled'
+      : rawStatus.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+
   return {
-    id: row.id,
+    id: row.id || row.order_id,
     orderId: row.order_id || row.order_number || row.id,
+    orderNumber: row.order_number || row.order_id,
     outletId: row.outlet_id,
+    outletName: row.outlets?.name || row.outlet_name || undefined,
     customerId: row.customer_id || undefined,
     addressId: row.address_id || row.customer_address_id || undefined,
-    orderType: isPickup ? 'pickup' : 'delivery',
     isSelfPickup: isPickup,
     isGuestCheckout: !row.customer_id,
+    orderType: (row.order_type || (isPickup ? 'pickup' : 'delivery')) as 'delivery' | 'pickup',
     deliveryType,
     scheduledAt,
-    outletName: row.outlet_name || 'Gaon Ka Swad Kitchen',
     deliveryPinCode: row.delivery_pincode || row.customer_details?.pincode || '',
     createdAt: row.created_at,
-    items: Array.isArray(row.items) ? row.items.map(deserializeOrderItem) : [],
+    items,
     subtotal: Number(row.subtotal || 0),
-    discount: Number(row.discount_amount || row.discount || 0),
+    discount: Number(row.discount_amount || 0),
     welcomeDiscountAmount: Number(row.welcome_discount_amount || 0),
     isWelcomeDiscountApplied: !!row.welcome_discount_applied,
     deliveryFee: Number(row.delivery_fee || 0),
     packagingFee: Number(row.packaging_fee || 0),
-    gst: Number(row.tax_amount || row.gst || 0),
-    total: Number(row.total_amount || row.total || 0),
-    couponCode: row.discount_code || row.coupon_code || undefined,
+    gst: Number(row.tax_amount || 0),
+    total: Number(row.total_amount || 0),
+    couponCode: row.discount_code || undefined,
     couponId: row.coupon_id || undefined,
-    couponDiscountAmount: Number(row.coupon_discount_amount || row.discount_amount || row.discount || 0),
+    couponDiscountAmount: Number(row.coupon_discount_amount || row.discount_amount || 0),
     customerDetails: row.customer_details || {
       fullName: row.customer_name || 'Customer',
       phone: row.customer_phone || '',
@@ -1396,7 +1422,7 @@ export function mapDbOrderToOrder(row: any): Order {
       scheduledSlotCategory: row.customer_details?.scheduledSlotCategory,
       scheduledSlotLabel: row.customer_details?.scheduledSlotLabel,
       paymentMethod: row.payment_method || 'cod',
-      deliveryNotes: row.delivery_instructions || row.delivery_notes || undefined,
+      deliveryNotes: row.delivery_instructions || undefined,
       includeCutlery: true,
     },
     deliveryAddressSnapshot: row.delivery_address_snapshot || {
@@ -1405,8 +1431,8 @@ export function mapDbOrderToOrder(row: any): Order {
       state: 'Odisha',
       pincode: row.delivery_pincode || '',
     },
-    status: row.status || 'Received',
-    orderStatus: row.order_status || (row.status ? row.status.toLowerCase().replace(/\s+/g, '_') : 'received'),
+    status: displayStatus as Order['status'],
+    orderStatus: rawStatus,
     placedAt: row.placed_at || row.created_at,
     confirmedAt: row.confirmed_at || undefined,
     preparingAt: row.preparing_at || undefined,
@@ -1480,7 +1506,7 @@ export async function fetchSupabaseOrderById(orderId: string): Promise<Order | n
 
 export async function updateSupabaseOrderStatus(
   orderId: string,
-  status: Order['status'],
+  status: Order['status'] | string,
   cancellationReason?: string
 ): Promise<boolean> {
   if (!isSupabaseConfigured()) return false;
@@ -1488,40 +1514,34 @@ export async function updateSupabaseOrderStatus(
   const now = new Date().toISOString();
   const norm = (status || '').toLowerCase().trim();
   const updateFields: any = {
-    status,
     updated_at: now,
   };
 
   if (norm === 'received') {
     updateFields.order_status = 'received';
-    updateFields.status = 'Received';
   } else if (norm === 'confirmed') {
     updateFields.order_status = 'confirmed';
-    updateFields.status = 'Confirmed';
     updateFields.confirmed_at = now;
   } else if (norm === 'preparing' || norm === 'in kitchen' || norm === 'preparing in kitchen') {
     updateFields.order_status = 'preparing';
-    updateFields.status = 'Preparing in Kitchen';
     updateFields.preparing_at = now;
-  } else if (norm === 'ready' || norm === 'ready for pickup') {
+  } else if (norm === 'ready' || norm === 'ready for pickup' || norm === 'ready for dispatch') {
     updateFields.order_status = 'ready';
-    updateFields.status = 'Ready for Pickup';
     updateFields.ready_at = now;
   } else if (norm === 'out_for_delivery' || norm === 'out for delivery') {
     updateFields.order_status = 'out_for_delivery';
-    updateFields.status = 'Out for Delivery';
     updateFields.out_for_delivery_at = now;
   } else if (norm === 'delivered' || norm === 'picked up') {
     updateFields.order_status = 'delivered';
-    updateFields.status = norm === 'picked up' ? 'Picked Up' : 'Delivered';
     updateFields.delivered_at = now;
   } else if (norm === 'cancelled') {
     updateFields.order_status = 'cancelled';
-    updateFields.status = 'Cancelled';
     updateFields.cancelled_at = now;
     if (cancellationReason) {
       updateFields.cancellation_reason = cancellationReason;
     }
+  } else {
+    updateFields.order_status = norm || 'received';
   }
 
   try {
@@ -1630,8 +1650,7 @@ export async function createSupabaseOrder(orderData: Partial<Order>): Promise<Or
     scheduled_at: scheduledAt,
     delivery_notes: supaDeliveryInstructions,
     delivery_instructions: supaDeliveryInstructions,
-    status: orderData.status || 'Received',
-    order_status: 'received',
+    order_status: (orderData.orderStatus || orderData.status || 'received').toLowerCase().replace(/\s+/g, '_'),
     placed_at: now,
     confirmed_at: null,
     preparing_at: null,

@@ -843,7 +843,7 @@ export const OwnerProductsPage: React.FC = () => {
                             setQuickConfigState((prev) => ({
                               ...prev,
                               [outlet.id]: {
-                                ...(prev[outlet.id] || { inStock: true, isFeatured: false, isBestseller: false }),
+                                ...(prev[outlet.id] || { inStock: true, isFeatured: false, isBestseller: false, isChefSpecial: false }),
                                 isAssigned: !prev[outlet.id]?.isAssigned,
                               },
                             }));

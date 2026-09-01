@@ -199,9 +199,8 @@ CREATE TABLE IF NOT EXISTS public.orders (
   order_type TEXT DEFAULT 'delivery',                                    -- delivery | pickup
   is_self_pickup BOOLEAN DEFAULT false,                                  -- True if customer self-pickup
 
-  -- Order & Payment Statuses (Separated)
+  -- Order & Payment Statuses (order_status is the canonical status field)
   order_status VARCHAR(50) DEFAULT 'received',                           -- received | confirmed | preparing | ready | out_for_delivery | delivered | cancelled
-  status TEXT DEFAULT 'Received',                                        -- Compatible UI status string
   payment_status VARCHAR(50) DEFAULT 'pending',                          -- pending | paid | failed | refunded | partially_refunded
   payment_method VARCHAR(50) DEFAULT 'cod',                              -- online | cod
 
@@ -263,6 +262,7 @@ CREATE TABLE IF NOT EXISTS public.orders (
 );
 
 -- Safe Column Migrations for public.orders
+ALTER TABLE IF EXISTS public.orders DROP COLUMN IF EXISTS status;
 ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS order_number TEXT;
 ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS customer_address_id UUID REFERENCES public.customer_addresses(id) ON DELETE SET NULL;
 ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS order_status VARCHAR(50) DEFAULT 'confirmed';

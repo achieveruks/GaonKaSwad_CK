@@ -183,22 +183,14 @@ export const CouponsPage: React.FC = () => {
 
   const handleDelete = async (couponId?: string, couponCode?: string) => {
     const targetId = couponId || '';
-    if (!window.confirm('Are you sure you want to delete this coupon? This action cannot be undone.')) {
-      return;
-    }
     const res = await deleteCouponFromCloud(targetId, couponCode);
     if (res.success) {
       setCoupons((prev) => prev.filter((c) => c.id !== targetId && (!couponCode || c.code !== couponCode)));
       await loadData();
-    } else {
-      alert(res.error || 'Failed to delete coupon');
     }
   };
 
   const handleSeedDefaults = async () => {
-    if (!window.confirm('Add standard promotional coupon presets to database (GAON15, SWAD15, WELCOME50, FEAST100)?')) {
-      return;
-    }
     setSaving(true);
     const presets: Partial<Coupon>[] = [
       {

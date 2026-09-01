@@ -413,7 +413,7 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
           const matchPhone = (order.customerDetails?.phone || '').includes(q);
           const matchAddress = (order.deliveryAddressSnapshot?.fullAddress || '').toLowerCase().includes(q);
           const matchPin = (order.deliveryPinCode || order.customerDetails?.pincode || '').includes(q);
-          const matchItems = order.items?.some((item) => item.name.toLowerCase().includes(q));
+          const matchItems = order.items?.some((item: any) => (item.name || item.product?.name || '').toLowerCase().includes(q));
 
           if (!matchId && !matchName && !matchPhone && !matchAddress && !matchPin && !matchItems) {
             return false;
@@ -1267,7 +1267,7 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
 
                     {order.customerDetails?.paymentMethod && (
                       <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-stone-200/80 text-stone-800 uppercase">
-                        {order.customerDetails.paymentMethod === 'online' ? 'Paid Online' : 'COD'}
+                        {(order.customerDetails.paymentMethod as string) !== 'cod' ? 'Paid Online' : 'COD'}
                       </span>
                     )}
 
@@ -1321,42 +1321,6 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
                 {/* Main Order Card Body (Collapsible) */}
                 {isExpanded && (
                   <div className="p-4 sm:p-5 space-y-4">
-                    {/* Scheduled Delivery Booking Notice Banner */}
-                    {isScheduled && (
-                      <div className="bg-gradient-to-r from-amber-100 via-amber-50 to-orange-50 border-2 border-amber-400 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
-                        <div className="flex items-start sm:items-center gap-3">
-                          <div className="w-10 h-10 rounded-xl bg-amber-900 text-amber-100 flex items-center justify-center shrink-0 shadow-xs">
-                            <Calendar className="w-5 h-5 text-amber-300" />
-                          </div>
-                          <div>
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className="text-[11px] font-black uppercase tracking-wider text-amber-950 bg-amber-300/90 px-2 py-0.5 rounded border border-amber-400">
-                                Advance Scheduled Booking
-                              </span>
-                              <span className="text-xs font-black text-amber-950">
-                                Target Delivery Slot:{' '}
-                                {order.customerDetails?.scheduledSlotLabel ||
-                                  formatScheduledAt(order.scheduledAt || order.customerDetails?.scheduledAt)}
-                              </span>
-                            </div>
-                            <p className="text-xs text-amber-900 mt-1 font-medium">
-                              ⚡ Kitchen Notice: Timed delivery order. Coordinate cooking to serve fresh right before the scheduled window.
-                            </p>
-                          </div>
-                        </div>
-                        {order.customerDetails?.scheduledTimeSlot && (
-                          <div className="shrink-0 text-left sm:text-right">
-                            <span className="text-[10px] text-amber-800 font-bold block uppercase tracking-wider">
-                              Time Window
-                            </span>
-                            <span className="inline-block px-3 py-1 rounded-lg bg-amber-900 text-white font-mono font-bold text-xs shadow-xs">
-                              {order.customerDetails.scheduledTimeSlot}
-                            </span>
-                          </div>
-                        )}
-                      </div>
-                    )}
-
                     {/* Customer Information & Delivery Address Bar */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3 bg-stone-50/60 rounded-xl p-3.5 border border-stone-200/80 text-xs">
                       <div className="space-y-1">
@@ -1432,71 +1396,81 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
                       </div>
 
                       <div className="space-y-2">
-                        {order.items?.map((item, idx) => (
-                          <div
-                            key={idx}
-                            className="flex items-start justify-between gap-3 text-xs py-1.5 border-b border-stone-100/60 last:border-none"
-                          >
-                            <div className="flex items-start gap-2.5">
-                              {/* Veg / Non-Veg Indicator */}
-                              <span
-                                className={`w-3.5 h-3.5 rounded-sm border flex items-center justify-center shrink-0 mt-0.5 ${
-                                  item.isVeg
-                                    ? 'border-emerald-600 text-emerald-600'
-                                    : 'border-rose-600 text-rose-600'
-                                }`}
-                              >
+                        {order.items?.map((item: any, idx: number) => {
+                          const isItemVeg = item.isVeg ?? item.product?.isVeg ?? true;
+                          const itemName = item.name ?? item.product?.name ?? 'Item';
+                          const itemHindiName = item.hindiName ?? item.product?.hindiName;
+                          const itemVariant = item.selectedVariant ?? item.variant;
+                          const itemSpice = item.selectedSpiceLevel ?? item.spiceLevel;
+                          const itemAddons = item.selectedAddons ?? item.addons;
+                          const unitPrice = item.unitPrice ?? item.price ?? item.product?.price ?? 0;
+
+                          return (
+                            <div
+                              key={idx}
+                              className="flex items-start justify-between gap-3 text-xs py-1.5 border-b border-stone-100/60 last:border-none"
+                            >
+                              <div className="flex items-start gap-2.5">
+                                {/* Veg / Non-Veg Indicator */}
                                 <span
-                                  className={`w-1.5 h-1.5 rounded-full ${
-                                    item.isVeg ? 'bg-emerald-600' : 'bg-rose-600'
+                                  className={`w-3.5 h-3.5 rounded-sm border flex items-center justify-center shrink-0 mt-0.5 ${
+                                    isItemVeg
+                                      ? 'border-emerald-600 text-emerald-600'
+                                      : 'border-rose-600 text-rose-600'
                                   }`}
-                                />
-                              </span>
+                                >
+                                  <span
+                                    className={`w-1.5 h-1.5 rounded-full ${
+                                      isItemVeg ? 'bg-emerald-600' : 'bg-rose-600'
+                                    }`}
+                                  />
+                                </span>
 
-                              <div>
-                                <div className="flex items-center gap-2 flex-wrap">
-                                  <span className="font-extrabold text-stone-900">
-                                    {item.quantity} × {item.name}
-                                  </span>
-                                  {item.hindiName && (
-                                    <span className="text-stone-400 font-normal text-[11px]">
-                                      ({item.hindiName})
+                                <div>
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="font-extrabold text-stone-900">
+                                      {item.quantity} × {itemName}
                                     </span>
-                                  )}
-                                </div>
+                                    {itemHindiName && (
+                                      <span className="text-stone-400 font-normal text-[11px]">
+                                        ({itemHindiName})
+                                      </span>
+                                    )}
+                                  </div>
 
-                                {/* Customizations: Variant, Spice, Addons */}
-                                <div className="flex flex-wrap items-center gap-1.5 mt-1">
-                                  {item.variant && (
-                                    <span className="px-1.5 py-0.2 bg-stone-100 text-stone-700 rounded text-[10px] font-bold border border-stone-200">
-                                      {item.variant.name}
-                                    </span>
-                                  )}
-                                  {item.spiceLevel && (
-                                    <span className="px-1.5 py-0.2 bg-amber-50 text-amber-800 rounded text-[10px] font-bold border border-amber-200 flex items-center gap-0.5">
-                                      <Flame className="w-2.5 h-2.5 text-amber-600" />
-                                      <span>{item.spiceLevel}</span>
-                                    </span>
-                                  )}
-                                  {item.addons && item.addons.length > 0 && (
-                                    <span className="text-[10px] text-stone-500 font-medium">
-                                      + {item.addons.map((a) => `${a.name} (₹${a.price})`).join(', ')}
-                                    </span>
-                                  )}
+                                  {/* Customizations: Variant, Spice, Addons */}
+                                  <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                                    {itemVariant && (
+                                      <span className="px-1.5 py-0.2 bg-stone-100 text-stone-700 rounded text-[10px] font-bold border border-stone-200">
+                                        {itemVariant.name}
+                                      </span>
+                                    )}
+                                    {itemSpice && (
+                                      <span className="px-1.5 py-0.2 bg-amber-50 text-amber-800 rounded text-[10px] font-bold border border-amber-200 flex items-center gap-0.5">
+                                        <Flame className="w-2.5 h-2.5 text-amber-600" />
+                                        <span>{itemSpice}</span>
+                                      </span>
+                                    )}
+                                    {itemAddons && itemAddons.length > 0 && (
+                                      <span className="text-[10px] text-stone-500 font-medium">
+                                        + {itemAddons.map((a: any) => `${a.name} (₹${a.price})`).join(', ')}
+                                      </span>
+                                    )}
+                                  </div>
                                 </div>
                               </div>
-                            </div>
 
-                            <div className="text-right shrink-0">
-                              <span className="font-black text-stone-900 font-mono">
-                                ₹{(item.unitPrice || item.price) * item.quantity}
-                              </span>
-                              <span className="block text-[10px] text-stone-400 font-mono">
-                                ₹{item.unitPrice || item.price} each
-                              </span>
+                              <div className="text-right shrink-0">
+                                <span className="font-black text-stone-900 font-mono">
+                                  ₹{unitPrice * item.quantity}
+                                </span>
+                                <span className="block text-[10px] text-stone-400 font-mono">
+                                  ₹{unitPrice} each
+                                </span>
+                              </div>
                             </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     </div>
 

@@ -2261,8 +2261,7 @@ async function startServer() {
           scheduled_at: scheduledAt,
           delivery_notes: supaDeliveryInstructions,
           delivery_instructions: supaDeliveryInstructions,
-          status: order.status || 'Received',
-          order_status: 'received',
+          order_status: (order.orderStatus || order.status || 'received').toLowerCase().replace(/\s+/g, '_'),
           placed_at: new Date().toISOString(),
           confirmed_at: null,
           preparing_at: null,
@@ -2446,40 +2445,34 @@ async function startServer() {
         const now = new Date().toISOString();
         const norm = (status || '').toLowerCase().trim();
         const supaUpdate: any = {
-          status,
           updated_at: now,
         };
 
         if (norm === 'received') {
           supaUpdate.order_status = 'received';
-          supaUpdate.status = 'Received';
         } else if (norm === 'confirmed') {
           supaUpdate.order_status = 'confirmed';
-          supaUpdate.status = 'Confirmed';
           supaUpdate.confirmed_at = now;
         } else if (norm === 'preparing' || norm === 'in kitchen' || norm === 'preparing in kitchen') {
           supaUpdate.order_status = 'preparing';
-          supaUpdate.status = 'Preparing in Kitchen';
           supaUpdate.preparing_at = now;
-        } else if (norm === 'ready' || norm === 'ready for pickup') {
+        } else if (norm === 'ready' || norm === 'ready for pickup' || norm === 'ready for dispatch') {
           supaUpdate.order_status = 'ready';
-          supaUpdate.status = 'Ready for Pickup';
           supaUpdate.ready_at = now;
         } else if (norm === 'out_for_delivery' || norm === 'out for delivery') {
           supaUpdate.order_status = 'out_for_delivery';
-          supaUpdate.status = 'Out for Delivery';
           supaUpdate.out_for_delivery_at = now;
         } else if (norm === 'delivered' || norm === 'picked up') {
           supaUpdate.order_status = 'delivered';
-          supaUpdate.status = norm === 'picked up' ? 'Picked Up' : 'Delivered';
           supaUpdate.delivered_at = now;
         } else if (norm === 'cancelled') {
           supaUpdate.order_status = 'cancelled';
-          supaUpdate.status = 'Cancelled';
           supaUpdate.cancelled_at = now;
           if (cancellationReason) {
             supaUpdate.cancellation_reason = cancellationReason;
           }
+        } else {
+          supaUpdate.order_status = norm || 'received';
         }
 
         await serverSupabase

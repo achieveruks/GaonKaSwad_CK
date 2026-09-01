@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigation } from '../context/NavigationContext';
 import { useCart } from '../context/CartContext';
 import { useLocation } from '../context/LocationContext';
@@ -22,7 +22,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { CATEGORIES } from '../data/products';
 
 export const Navbar: React.FC = () => {
-  const { currentRoute, goToHome, goToShop, goToCategories, goToAbout, goToContact, goToProfile } =
+  const { currentRoute, goToHome, goToShop, goToCategories, goToAbout, goToContact, goToProfile, goToOrders } =
     useNavigation();
   const { totalItemsCount, setIsCartDrawerOpen } = useCart();
   const { selectedLocation, setIsLocationModalOpen, currentOutlet, currentZone } = useLocation();
@@ -33,6 +33,40 @@ export const Navbar: React.FC = () => {
   const [isSearchExpanded, setIsSearchExpanded] = useState(false);
   const [isCategoriesDropdownOpen, setIsCategoriesDropdownOpen] = useState(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+
+  const userMenuRef = useRef<HTMLDivElement>(null);
+  const categoriesDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close user menu and categories dropdown when clicking outside or pressing Escape
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent | TouchEvent) => {
+      const target = event.target as Node;
+      if (userMenuRef.current && !userMenuRef.current.contains(target)) {
+        setIsUserMenuOpen(false);
+      }
+      if (categoriesDropdownRef.current && !categoriesDropdownRef.current.contains(target)) {
+        setIsCategoriesDropdownOpen(false);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsUserMenuOpen(false);
+        setIsCategoriesDropdownOpen(false);
+        setIsMobileMenuOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('touchstart', handleClickOutside);
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('touchstart', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, []);
 
   const isActive = (path: string) => currentRoute.path === path;
 
@@ -175,6 +209,7 @@ export const Navbar: React.FC = () => {
 
             {/* Categories Dropdown */}
             <div
+              ref={categoriesDropdownRef}
               className="relative"
               onMouseEnter={() => setIsCategoriesDropdownOpen(true)}
               onMouseLeave={() => setIsCategoriesDropdownOpen(false)}
@@ -280,7 +315,7 @@ export const Navbar: React.FC = () => {
             </button>
 
             {/* Customer Account / Sign In Widget */}
-            <div className="relative">
+            <div className="relative" ref={userMenuRef}>
               {isCustomerLoggedIn && customer ? (
                 <div className="relative">
                   <button
@@ -325,6 +360,17 @@ export const Navbar: React.FC = () => {
                             +91 {customer.phone}
                           </p>
                         </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsUserMenuOpen(false);
+                            goToOrders();
+                          }}
+                          className="w-full text-left px-3.5 py-2.5 text-xs font-bold text-stone-800 hover:bg-amber-50/70 hover:text-amber-900 flex items-center gap-2 transition-colors border-b border-stone-100 cursor-pointer"
+                        >
+                          <Clock className="w-3.5 h-3.5 text-amber-800" />
+                          <span>My Orders</span>
+                        </button>
                         <button
                           type="button"
                           onClick={() => {
@@ -508,33 +554,60 @@ export const Navbar: React.FC = () => {
               {/* Mobile customer sign-in or account row */}
               <div className="pt-2 pb-1">
                 {isCustomerLoggedIn && customer ? (
-                  <div className="p-3.5 bg-amber-50/80 rounded-xl border border-amber-200 flex items-center justify-between">
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-8 h-8 rounded-full bg-amber-900 text-amber-50 flex items-center justify-center text-xs font-black shrink-0">
-                        {customer.fullName ? customer.fullName.charAt(0).toUpperCase() : 'C'}
+                  <div className="p-3.5 bg-amber-50/80 rounded-xl border border-amber-200 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-8 h-8 rounded-full bg-amber-900 text-amber-50 flex items-center justify-center text-xs font-black shrink-0">
+                          {customer.fullName ? customer.fullName.charAt(0).toUpperCase() : 'C'}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="text-[10px] uppercase tracking-wider font-bold text-amber-700 leading-none">
+                            Welcome
+                          </div>
+                          <div className="text-sm font-black text-amber-950 truncate">
+                            {customerFirstName}
+                          </div>
+                          <div className="text-[11px] text-stone-500 font-mono">
+                            +91 {customer.phone}
+                          </div>
+                        </div>
                       </div>
-                      <div className="min-w-0">
-                        <div className="text-[10px] uppercase tracking-wider font-bold text-amber-700 leading-none">
-                          Welcome
-                        </div>
-                        <div className="text-sm font-black text-amber-950 truncate">
-                          {customerFirstName}
-                        </div>
-                        <div className="text-[11px] text-stone-500 font-mono">
-                          +91 {customer.phone}
-                        </div>
-                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsMobileMenuOpen(false);
+                          logoutCustomer();
+                        }}
+                        className="text-xs font-bold text-rose-600 hover:text-rose-700 underline px-2 py-1 shrink-0"
+                      >
+                        Sign Out
+                      </button>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsMobileMenuOpen(false);
-                        logoutCustomer();
-                      }}
-                      className="text-xs font-bold text-rose-600 hover:text-rose-700 underline px-2 py-1 shrink-0"
-                    >
-                      Sign Out
-                    </button>
+
+                    <div className="grid grid-cols-2 gap-2 pt-1 border-t border-amber-200/60">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsMobileMenuOpen(false);
+                          goToOrders();
+                        }}
+                        className="py-2 px-2.5 bg-white hover:bg-amber-100/60 text-amber-900 border border-amber-200 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
+                      >
+                        <Clock className="w-3.5 h-3.5 text-amber-800" />
+                        <span>My Orders</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsMobileMenuOpen(false);
+                          goToProfile();
+                        }}
+                        className="py-2 px-2.5 bg-white hover:bg-amber-100/60 text-stone-800 border border-amber-200 rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
+                      >
+                        <User className="w-3.5 h-3.5 text-amber-800" />
+                        <span>My Profile</span>
+                      </button>
+                    </div>
                   </div>
                 ) : (
                   <button

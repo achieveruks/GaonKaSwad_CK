@@ -155,6 +155,7 @@ export const CheckoutPage: React.FC = () => {
     specialInstructions,
     clearCart,
     adaptCartForNewOutlet,
+    showToast,
   } = useCart();
 
   const { goToHome, goToShop, goToProfile } = useNavigation();
@@ -1142,7 +1143,7 @@ export const CheckoutPage: React.FC = () => {
     // Check Place Order enablement & Serviceability Rules
     if (!isPlaceOrderEnabled) {
       if (placeOrderValidation.reason) {
-        alert(placeOrderValidation.reason);
+        showToast('Cannot Place Order', placeOrderValidation.reason, 'error');
       }
       return;
     }
@@ -1165,7 +1166,7 @@ export const CheckoutPage: React.FC = () => {
     }
 
     if (inventoryErrors.length > 0) {
-      alert(inventoryErrors.join('\n\n'));
+      showToast('Inventory Issue', inventoryErrors.join(' • '), 'error');
       return;
     }
 

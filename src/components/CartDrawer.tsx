@@ -48,7 +48,7 @@ export const CartDrawer: React.FC = () => {
 
   const { goToCheckout, goToShop, goToCart } = useNavigation();
   const { selectedLocation, setIsLocationModalOpen } = useLocation();
-  const { customer } = useAuth();
+  const { profile } = useAuth();
   const [couponInput, setCouponInput] = useState('');
   const [couponError, setCouponError] = useState('');
   const [availableCoupons, setAvailableCoupons] = useState<Coupon[]>([]);
@@ -56,7 +56,7 @@ export const CartDrawer: React.FC = () => {
 
   useEffect(() => {
     let isMounted = true;
-    fetchAvailableCouponsForCustomer(customer?.id, customer?.phone, subtotal, selectedLocation?.outletId)
+    fetchAvailableCouponsForCustomer(profile?.id, profile?.phone, subtotal, selectedLocation?.outletId)
       .then((cpns) => {
         if (isMounted) {
           setAvailableCoupons(cpns.slice(0, 4));
@@ -67,7 +67,7 @@ export const CartDrawer: React.FC = () => {
     return () => {
       isMounted = false;
     };
-  }, [customer?.id, customer?.phone, subtotal, selectedLocation?.outletId, isCartDrawerOpen]);
+  }, [profile?.id, profile?.phone, subtotal, selectedLocation?.outletId, isCartDrawerOpen]);
 
   const handleApplyCoupon = async (e?: React.FormEvent, codeToApply?: string) => {
     if (e) e.preventDefault();
@@ -76,8 +76,8 @@ export const CartDrawer: React.FC = () => {
     setIsApplying(true);
     try {
       const res = await applyCoupon(code, {
-        customerId: customer?.id,
-        customerPhone: customer?.phone,
+        customerId: profile?.id,
+        customerPhone: profile?.phone,
         outletId: selectedLocation?.outletId,
       });
       if (!res.success) {

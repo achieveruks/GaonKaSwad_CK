@@ -1,6 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useCustomer } from '../context/CustomerContext';
 import { useNavigation } from '../context/NavigationContext';
+import { useCart } from '../context/CartContext';
+import { useLocation } from '../context/LocationContext';
 import {
   User,
   Mail,
@@ -25,11 +27,22 @@ import {
   Check,
   Star,
   X,
+  ChevronLeft,
+  ChevronRight,
+  Filter,
+  RotateCcw,
+  Zap,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { isSupabaseConfigured } from '../lib/supabase';
 import { fetchSupabaseOrdersByPhone } from '../lib/supabaseService';
-import { CustomerAddress } from '../types';
+import { CustomerAddress, Order, Product } from '../types';
+import { PRODUCTS } from '../data/products';
+import { isProductAvailableAtOutlet, isProductInStockAtOutlet } from '../lib/locationService';
+import { OrderCard } from '../components/profile/OrderCard';
+import { OrderDetailsModal } from '../components/profile/OrderDetailsModal';
+import { OrderReviewModal } from '../components/profile/OrderReviewModal';
+import { OrderSkeleton } from '../components/profile/OrderSkeleton';
 
 export const ProfilePage: React.FC = () => {
   const {
@@ -46,7 +59,9 @@ export const ProfilePage: React.FC = () => {
     deleteAddress,
     setAddressAsDefault,
   } = useCustomer();
-  const { goToHome, goToShop, goToCheckout } = useNavigation();
+  const { goToHome, goToShop, goToCheckout, goToOrders } = useNavigation();
+  const { addToCart, showToast, setIsCartDrawerOpen } = useCart();
+  const { currentOutlet } = useLocation();
 
   // Profile Form State
   const [fullName, setFullName] = useState(customer?.fullName || '');
@@ -83,8 +98,16 @@ export const ProfilePage: React.FC = () => {
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
   // Order History State
-  const [orders, setOrders] = useState<any[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]);
   const [isLoadingOrders, setIsLoadingOrders] = useState(false);
+  const [ordersError, setOrdersError] = useState<string | null>(null);
+  const [orderFilter, setOrderFilter] = useState<'all' | 'active' | 'delivered' | 'cancelled'>('all');
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const ordersPerPage = 5;
+
+  // Selected Order Modals
+  const [selectedOrderForDetails, setSelectedOrderForDetails] = useState<Order | null>(null);
+  const [selectedOrderForReview, setSelectedOrderForReview] = useState<Order | null>(null);
 
   useEffect(() => {
     if (customer) {
@@ -101,41 +124,164 @@ export const ProfilePage: React.FC = () => {
   }, [customer?.id, customer?.phone, fetchCustomerAddresses]);
 
   // Load Order History for Customer
-  useEffect(() => {
+  const fetchOrders = async () => {
     if (!customer?.phone) return;
-
-    let isMounted = true;
-    const fetchOrders = async () => {
-      setIsLoadingOrders(true);
-      try {
-        if (isSupabaseConfigured()) {
-          const { orders: supaOrders } = await fetchSupabaseOrdersByPhone(customer.phone);
-          if (isMounted && supaOrders && supaOrders.length > 0) {
-            setOrders(supaOrders);
-            setIsLoadingOrders(false);
-            return;
-          }
-        }
-
-        const res = await fetch(`/api/orders?phone=${encodeURIComponent(customer.phone)}`);
-        const data = await res.json();
-        if (isMounted) {
-          if (data.orders) {
-            setOrders(data.orders);
-          }
+    setIsLoadingOrders(true);
+    setOrdersError(null);
+    try {
+      if (isSupabaseConfigured()) {
+        const { orders: supaOrders } = await fetchSupabaseOrdersByPhone(customer.phone);
+        if (supaOrders && supaOrders.length > 0) {
+          // Sort newest first
+          const sorted = [...supaOrders].sort(
+            (a, b) =>
+              new Date(b.createdAt || (b as any).timestamp || 0).getTime() -
+              new Date(a.createdAt || (a as any).timestamp || 0).getTime()
+          );
+          setOrders(sorted);
           setIsLoadingOrders(false);
+          return;
         }
-      } catch (err) {
-        console.warn('Error loading orders:', err);
-        if (isMounted) setIsLoadingOrders(false);
       }
-    };
 
+      const res = await fetch(`/api/orders?phone=${encodeURIComponent(customer.phone)}`);
+      const data = await res.json();
+      if (data.orders) {
+        const sorted = [...data.orders].sort(
+          (a, b) =>
+            new Date(b.createdAt || (b as any).timestamp || 0).getTime() -
+            new Date(a.createdAt || (a as any).timestamp || 0).getTime()
+        );
+        setOrders(sorted);
+      } else {
+        setOrders([]);
+      }
+      setIsLoadingOrders(false);
+    } catch (err: any) {
+      console.warn('Error loading orders:', err);
+      setOrdersError(err.message || 'Unable to load your orders.');
+      setIsLoadingOrders(false);
+    }
+  };
+
+  useEffect(() => {
     fetchOrders();
-    return () => {
-      isMounted = false;
-    };
   }, [customer?.phone]);
+
+  // Reorder Handler (Outlet aware, current prices, current stock check)
+  const handleReorder = (orderToReorder: Order) => {
+    if (!orderToReorder.items || orderToReorder.items.length === 0) {
+      showToast('Reorder Error', 'No items found in this order.', 'error');
+      return;
+    }
+
+    const currentOutletId = currentOutlet?.id || 'blr-hsr';
+    let addedCount = 0;
+    let unavailableCount = 0;
+    const unavailableNames: string[] = [];
+
+    orderToReorder.items.forEach((rawItem: any) => {
+      const productId = rawItem.productId || rawItem.id || rawItem.product?.id;
+      const itemName = rawItem.name || rawItem.product?.name || 'Dish';
+      const itemVariantName = rawItem.selectedVariant?.name || rawItem.variantName || rawItem.variant?.name;
+      const itemSpiceLevel = rawItem.selectedSpiceLevel || rawItem.spiceLevel;
+      const itemQuantity = Number(rawItem.quantity || 1);
+
+      // Find current product in catalog
+      const product = PRODUCTS.find(
+        (p) =>
+          String(p.id) === String(productId) ||
+          p.name.toLowerCase().trim() === itemName.toLowerCase().trim()
+      );
+
+      if (!product) {
+        unavailableCount += 1;
+        unavailableNames.push(itemName);
+        return;
+      }
+
+      // Check outlet availability & stock
+      const isAvailable = isProductAvailableAtOutlet(product, currentOutletId);
+      const inStock = isProductInStockAtOutlet(product, currentOutletId);
+
+      if (!isAvailable || !inStock) {
+        unavailableCount += 1;
+        unavailableNames.push(itemName);
+        return;
+      }
+
+      // Find variant if item had variant
+      const variant = itemVariantName
+        ? product.variants?.find((v) => v.name.toLowerCase() === itemVariantName.toLowerCase())
+        : undefined;
+
+      const success = addToCart(
+        product,
+        itemQuantity,
+        variant,
+        itemSpiceLevel,
+        undefined
+      );
+
+      if (success) {
+        addedCount += 1;
+      } else {
+        unavailableCount += 1;
+        unavailableNames.push(itemName);
+      }
+    });
+
+    if (addedCount > 0 && unavailableCount === 0) {
+      showToast(
+        'Items Added to Cart',
+        `Added ${addedCount} dish${addedCount > 1 ? 'es' : ''} from Order #${orderToReorder.orderId || orderToReorder.id} to your cart with current outlet pricing.`,
+        'success'
+      );
+      setIsCartDrawerOpen(true);
+    } else if (addedCount > 0 && unavailableCount > 0) {
+      showToast(
+        'Reordered Available Dishes',
+        `${addedCount} item(s) added to cart. ${unavailableCount} item(s) (${unavailableNames.join(', ')}) are currently unavailable at ${currentOutlet?.name || 'this outlet'}.`,
+        'info'
+      );
+      setIsCartDrawerOpen(true);
+    } else {
+      showToast(
+        'Items Unavailable',
+        `Dishes from this past order are currently not available or out of stock at ${currentOutlet?.name || 'your selected outlet'}.`,
+        'error'
+      );
+    }
+  };
+
+  // Active and Past orders separation
+  const { activeOrders, pastOrders } = useMemo(() => {
+    const activeList: Order[] = [];
+    const pastList: Order[] = [];
+
+    orders.forEach((ord) => {
+      const st = ((ord as any).order_status || ord.orderStatus || ord.status || '').toLowerCase().trim();
+      if (
+        st === 'pending' ||
+        st === 'pending payment' ||
+        st === 'received' ||
+        st === 'confirmed' ||
+        st === 'preparing' ||
+        st === 'ready' ||
+        st === 'out_for_delivery' ||
+        st === 'out for delivery'
+      ) {
+        activeList.push(ord);
+      } else {
+        pastList.push(ord);
+      }
+    });
+
+    return {
+      activeOrders: activeList,
+      pastOrders: pastList,
+    };
+  }, [orders]);
 
   const showAddressFeedback = (type: 'success' | 'error', text: string) => {
     setAddressFeedbackMessage({ type, text });
@@ -790,82 +936,113 @@ export const ProfilePage: React.FC = () => {
             </div>
           </div>
 
-          {/* Recent Orders */}
-          <div className="bg-white rounded-3xl border border-stone-200 p-6 shadow-xs space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-stone-100">
-              <h3 className="font-bold text-sm text-stone-900 flex items-center gap-2">
-                <Clock className="w-4 h-4 text-amber-800" />
-                <span>Recent Orders</span>
-              </h3>
-              <span className="text-[11px] text-stone-400 font-semibold">
-                {orders.length} {orders.length === 1 ? 'Order' : 'Orders'}
-              </span>
+          {/* ACTIVE ORDERS & ALL ORDERS LINK */}
+          <div className="space-y-4">
+            {/* Active Orders Section */}
+            <div className="bg-white rounded-3xl border border-stone-200 p-5 shadow-xs space-y-4">
+              <div className="flex items-center justify-between pb-3 border-b border-stone-100">
+                <h3 className="font-bold text-base text-stone-900 flex items-center gap-2">
+                  <Clock className="w-4 h-4 text-amber-800" />
+                  <span>Active Orders</span>
+                </h3>
+                {activeOrders.length > 0 ? (
+                  <span className="text-xs font-bold text-amber-800 bg-amber-50 border border-amber-200 px-2.5 py-0.5 rounded-full flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping" />
+                    {activeOrders.length} In Progress
+                  </span>
+                ) : (
+                  <span className="text-xs font-semibold text-stone-400 bg-stone-100 px-2.5 py-0.5 rounded-full">
+                    0 Active
+                  </span>
+                )}
+              </div>
+
+              {/* Error State */}
+              {ordersError && (
+                <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 text-center space-y-2">
+                  <AlertCircle className="w-6 h-6 text-rose-600 mx-auto" />
+                  <p className="text-xs text-rose-700">{ordersError}</p>
+                  <button
+                    type="button"
+                    onClick={fetchOrders}
+                    className="px-3 py-1 bg-rose-700 text-white text-xs font-bold rounded-lg hover:bg-rose-800 transition-colors inline-flex items-center gap-1 cursor-pointer"
+                  >
+                    <RefreshCw className="w-3 h-3" /> Retry
+                  </button>
+                </div>
+              )}
+
+              {/* Loading Skeleton */}
+              {isLoadingOrders && !ordersError && <OrderSkeleton />}
+
+              {/* Has Active Orders */}
+              {!isLoadingOrders && !ordersError && activeOrders.length > 0 && (
+                <div className="space-y-3">
+                  {activeOrders.map((ord) => (
+                    <OrderCard
+                      key={ord.orderId || ord.id}
+                      order={ord}
+                      isActiveOrder={true}
+                      onViewDetails={(o) => setSelectedOrderForDetails(o)}
+                      onReorder={handleReorder}
+                    />
+                  ))}
+                </div>
+              )}
+
+              {/* No Active Orders */}
+              {!isLoadingOrders && !ordersError && activeOrders.length === 0 && (
+                <div className="py-6 text-center space-y-2 bg-stone-50/70 rounded-2xl border border-stone-100 p-4">
+                  <ShoppingBag className="w-8 h-8 text-stone-300 mx-auto" />
+                  <h4 className="text-xs font-bold text-stone-800">No active orders in progress</h4>
+                  <p className="text-[11px] text-stone-500 max-w-xs mx-auto">
+                    Craving delicious slow-cooked biryani or clay pot curries?
+                  </p>
+                  <div className="pt-1">
+                    <button
+                      type="button"
+                      onClick={() => goToShop()}
+                      className="text-xs font-bold text-amber-800 hover:text-amber-900 underline inline-flex items-center gap-1 cursor-pointer"
+                    >
+                      <span>Explore Menu</span>
+                      <ArrowRight className="w-3 h-3" />
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
-            {isLoadingOrders ? (
-              <div className="py-8 text-center text-stone-500 text-xs flex flex-col items-center gap-2">
-                <RefreshCw className="w-4 h-4 animate-spin text-amber-800" />
-                <span>Loading order history...</span>
-              </div>
-            ) : orders.length === 0 ? (
-              <div className="py-8 text-center space-y-2">
-                <ShoppingBag className="w-8 h-8 text-stone-300 mx-auto" />
-                <p className="text-xs text-stone-500 font-medium">No previous orders found.</p>
-                <button
-                  type="button"
-                  onClick={goToShop}
-                  className="text-xs font-bold text-amber-800 hover:text-amber-900 underline inline-flex items-center gap-1 cursor-pointer"
-                >
-                  <span>Explore Menu</span>
-                  <ArrowRight className="w-3 h-3" />
-                </button>
-              </div>
-            ) : (
-              <div className="space-y-3 max-h-[380px] overflow-y-auto pr-1">
-                {orders.map((ord: any) => (
-                  <div
-                    key={ord.id || ord.orderId}
-                    className="p-3.5 bg-stone-50 rounded-2xl border border-stone-200/80 hover:border-amber-300 transition-colors space-y-1.5"
-                  >
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="font-bold font-mono text-stone-900">
-                        #{ord.id?.slice(0, 8) || ord.orderId?.slice(0, 8) || 'ORDER'}
+            {/* "All My Orders" Hyperlink Card */}
+            <div
+              onClick={goToOrders}
+              className="bg-gradient-to-r from-amber-50/80 via-white to-amber-50/40 rounded-3xl border border-amber-200/80 p-5 shadow-xs hover:border-amber-400 hover:shadow-sm transition-all cursor-pointer group flex items-center justify-between gap-3"
+            >
+              <div className="flex items-center gap-3.5 min-w-0">
+                <div className="w-11 h-11 rounded-2xl bg-amber-800 text-white flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform shadow-xs">
+                  <ShoppingBag className="w-5 h-5" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <h4 className="font-serif font-bold text-sm sm:text-base text-stone-900 group-hover:text-amber-900 transition-colors">
+                      All My Orders
+                    </h4>
+                    {orders.length > 0 && (
+                      <span className="text-[11px] font-bold bg-amber-100 text-amber-900 px-2 py-0.5 rounded-full">
+                        {orders.length}
                       </span>
-                      <span
-                        className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                          ord.status === 'Delivered' || ord.status === 'Picked Up'
-                            ? 'bg-emerald-100 text-emerald-800'
-                            : ord.status === 'Out for Delivery' || ord.status === 'Ready for Pickup'
-                            ? 'bg-blue-100 text-blue-800'
-                            : 'bg-amber-100 text-amber-900'
-                        }`}
-                      >
-                        {ord.status || 'Received'}
-                      </span>
-                    </div>
-
-                    <div className="flex items-center justify-between text-xs text-stone-600">
-                      <span>Total Amount:</span>
-                      <span className="font-bold text-stone-900">
-                        ₹{ord.totalAmount || ord.total || 0}
-                      </span>
-                    </div>
-
-                    {ord.createdAt && (
-                      <p className="text-[10px] text-stone-400">
-                        {new Date(ord.createdAt).toLocaleDateString('en-IN', {
-                          day: 'numeric',
-                          month: 'short',
-                          year: 'numeric',
-                          hour: '2-digit',
-                          minute: '2-digit',
-                        })}
-                      </p>
                     )}
                   </div>
-                ))}
+                  <p className="text-xs text-stone-500 truncate mt-0.5">
+                    View order history, receipts, ratings & 1-click reordering
+                  </p>
+                </div>
               </div>
-            )}
+
+              <div className="shrink-0 flex items-center gap-1 text-xs font-bold text-amber-800 group-hover:translate-x-1 transition-transform">
+                <span className="hidden sm:inline">View All</span>
+                <ArrowRight className="w-4 h-4" />
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -1090,6 +1267,27 @@ export const ProfilePage: React.FC = () => {
           </div>
         )}
       </AnimatePresence>
+
+      {/* View Order Details Modal */}
+      {selectedOrderForDetails && (
+        <OrderDetailsModal
+          order={selectedOrderForDetails}
+          onClose={() => setSelectedOrderForDetails(null)}
+          onReorder={handleReorder}
+          onRate={(o) => setSelectedOrderForReview(o)}
+        />
+      )}
+
+      {/* Verified Product Rating & Review Modal */}
+      {selectedOrderForReview && (
+        <OrderReviewModal
+          order={selectedOrderForReview}
+          onClose={() => setSelectedOrderForReview(null)}
+          onSuccess={() => {
+            showToast('Review Submitted', 'Thank you for your valuable feedback!', 'success');
+          }}
+        />
+      )}
     </div>
   );
 };

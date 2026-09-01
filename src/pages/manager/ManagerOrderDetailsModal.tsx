@@ -39,6 +39,29 @@ export const ManagerOrderDetailsModal: React.FC<ManagerOrderDetailsModalProps> =
   if (!isOpen || !order) return null;
 
   const isPickup = !!(order.isSelfPickup || order.orderType === 'pickup');
+  const rawStatus = ((order as any).order_status || order.orderStatus || order.status || 'received').toLowerCase().trim();
+  const displayStatus =
+    rawStatus === 'received'
+      ? 'Received'
+      : rawStatus === 'confirmed'
+      ? 'Confirmed'
+      : rawStatus === 'preparing' || rawStatus === 'in kitchen' || rawStatus === 'preparing in kitchen'
+      ? 'Preparing in Kitchen'
+      : rawStatus === 'ready'
+      ? 'Ready'
+      : rawStatus === 'ready_for_pickup' || rawStatus === 'ready for pickup'
+      ? 'Ready for Pickup'
+      : rawStatus === 'ready_for_dispatch' || rawStatus === 'ready for dispatch'
+      ? 'Ready for Dispatch'
+      : rawStatus === 'out_for_delivery' || rawStatus === 'out for delivery'
+      ? 'Out for Delivery'
+      : rawStatus === 'delivered'
+      ? 'Delivered'
+      : rawStatus === 'picked_up' || rawStatus === 'picked up'
+      ? 'Picked Up'
+      : rawStatus === 'cancelled'
+      ? 'Cancelled'
+      : rawStatus.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 
   const formatDateTime = (dateStr?: string) => {
     if (!dateStr) return '—';
@@ -170,13 +193,13 @@ export const ManagerOrderDetailsModal: React.FC<ManagerOrderDetailsModalProps> =
               <div>
                 <span className="text-[10px] text-stone-500 font-semibold block">STATUS</span>
                 <span className="font-extrabold text-stone-900 uppercase">
-                  {order.status || 'Received'}
+                  {displayStatus}
                 </span>
               </div>
               <div>
                 <span className="text-[10px] text-stone-500 font-semibold block">PAYMENT</span>
                 <span className="font-bold text-stone-800">
-                  {order.customerDetails?.paymentMethod === 'online' ? 'Online Paid' : 'Cash on Delivery (COD)'}
+                  {(order.customerDetails?.paymentMethod as string) !== 'cod' ? 'Online Paid' : 'Cash on Delivery (COD)'}
                 </span>
               </div>
               <div>
@@ -286,64 +309,74 @@ export const ManagerOrderDetailsModal: React.FC<ManagerOrderDetailsModalProps> =
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-stone-100">
-                  {order.items?.map((item, idx) => (
-                    <tr key={idx} className="hover:bg-stone-50/70">
-                      <td className="py-2.5 px-3">
-                        <div className="flex items-start gap-2">
-                          <span
-                            className={`w-3.5 h-3.5 rounded-sm border flex items-center justify-center shrink-0 mt-0.5 ${
-                              item.isVeg
-                                ? 'border-emerald-600 text-emerald-600'
-                                : 'border-rose-600 text-rose-600'
-                            }`}
-                          >
+                  {order.items?.map((item: any, idx) => {
+                    const isVegItem = item.isVeg ?? item.product?.isVeg ?? true;
+                    const itemName = item.name ?? item.product?.name ?? 'Item';
+                    const itemHindiName = item.hindiName ?? item.product?.hindiName;
+                    const itemVariant = item.selectedVariant ?? item.variant;
+                    const itemSpice = item.selectedSpiceLevel ?? item.spiceLevel;
+                    const itemAddons = item.selectedAddons ?? item.addons;
+                    const unitPrice = item.unitPrice ?? item.price ?? item.product?.price ?? 0;
+
+                    return (
+                      <tr key={idx} className="hover:bg-stone-50/70">
+                        <td className="py-2.5 px-3">
+                          <div className="flex items-start gap-2">
                             <span
-                              className={`w-1.5 h-1.5 rounded-full ${
-                                item.isVeg ? 'bg-emerald-600' : 'bg-rose-600'
+                              className={`w-3.5 h-3.5 rounded-sm border flex items-center justify-center shrink-0 mt-0.5 ${
+                                isVegItem
+                                  ? 'border-emerald-600 text-emerald-600'
+                                  : 'border-rose-600 text-rose-600'
                               }`}
-                            />
-                          </span>
-                          <div>
-                            <p className="font-extrabold text-stone-900">
-                              {item.name}
-                              {item.hindiName && (
-                                <span className="ml-1.5 text-stone-500 font-normal text-[11px]">
-                                  ({item.hindiName})
-                                </span>
-                              )}
-                            </p>
-                            <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
-                              {item.variant && (
-                                <span className="px-1.5 py-0.2 bg-stone-100 text-stone-700 rounded text-[10px] font-medium border border-stone-200">
-                                  {item.variant.name}
-                                </span>
-                              )}
-                              {item.spiceLevel && (
-                                <span className="px-1.5 py-0.2 bg-amber-50 text-amber-800 rounded text-[10px] font-medium border border-amber-200 flex items-center gap-0.5">
-                                  <Flame className="w-2.5 h-2.5 text-amber-600" />
-                                  <span>{item.spiceLevel}</span>
-                                </span>
-                              )}
-                              {item.addons && item.addons.length > 0 && (
-                                <span className="text-[10px] text-stone-500">
-                                  + {item.addons.map((a) => `${a.name} (₹${a.price})`).join(', ')}
-                                </span>
-                              )}
+                            >
+                              <span
+                                className={`w-1.5 h-1.5 rounded-full ${
+                                  isVegItem ? 'bg-emerald-600' : 'bg-rose-600'
+                                }`}
+                              />
+                            </span>
+                            <div>
+                              <p className="font-extrabold text-stone-900">
+                                {itemName}
+                                {itemHindiName && (
+                                  <span className="ml-1.5 text-stone-500 font-normal text-[11px]">
+                                    ({itemHindiName})
+                                  </span>
+                                )}
+                              </p>
+                              <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
+                                {itemVariant && (
+                                  <span className="px-1.5 py-0.2 bg-stone-100 text-stone-700 rounded text-[10px] font-medium border border-stone-200">
+                                    {itemVariant.name}
+                                  </span>
+                                )}
+                                {itemSpice && (
+                                  <span className="px-1.5 py-0.2 bg-amber-50 text-amber-800 rounded text-[10px] font-medium border border-amber-200 flex items-center gap-0.5">
+                                    <Flame className="w-2.5 h-2.5 text-amber-600" />
+                                    <span>{itemSpice}</span>
+                                  </span>
+                                )}
+                                {itemAddons && itemAddons.length > 0 && (
+                                  <span className="text-[10px] text-stone-500">
+                                    + {itemAddons.map((a: any) => `${a.name} (₹${a.price})`).join(', ')}
+                                  </span>
+                                )}
+                              </div>
                             </div>
                           </div>
-                        </div>
-                      </td>
-                      <td className="py-2.5 px-3 text-center font-extrabold text-stone-900">
-                        {item.quantity}
-                      </td>
-                      <td className="py-2.5 px-3 text-right font-medium text-stone-600 font-mono">
-                        ₹{item.unitPrice || item.price}
-                      </td>
-                      <td className="py-2.5 px-3 text-right font-extrabold text-stone-900 font-mono">
-                        ₹{(item.unitPrice || item.price) * item.quantity}
-                      </td>
-                    </tr>
-                  ))}
+                        </td>
+                        <td className="py-2.5 px-3 text-center font-extrabold text-stone-900">
+                          {item.quantity}
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-medium text-stone-600 font-mono">
+                          ₹{unitPrice}
+                        </td>
+                        <td className="py-2.5 px-3 text-right font-extrabold text-stone-900 font-mono">
+                          ₹{unitPrice * item.quantity}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
