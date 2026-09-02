@@ -1342,6 +1342,149 @@ export function deserializeOrderItem(it: any): OrderItem {
 
 import { computeScheduledIsoTimestamp } from '../utils/dateUtils';
 
+export function resolveDbOrderOutlet(row: any): { outletId: string; outletName: string; kitchenAddress?: string } {
+  const rawId = String(row.outlet_id || '').trim();
+  const rawName = String(row.outlets?.name || row.outlet_name || '').trim();
+  const pin = String(row.delivery_pincode || row.customer_details?.pincode || row.delivery_address_snapshot?.pincode || '').trim();
+  const fullAddress = String(row.delivery_address_snapshot?.fullAddress || row.customer_details?.address || '').toLowerCase();
+
+  // 1. Direct outlet match by rawId
+  if (rawId) {
+    const cleanId = rawId.replace(/^outlet-/, '').toLowerCase();
+    const foundById = INITIAL_OUTLETS.find(
+      (o) => o.id.toLowerCase() === rawId.toLowerCase() || o.id.toLowerCase() === cleanId
+    );
+    if (foundById) {
+      return { outletId: foundById.id, outletName: foundById.name, kitchenAddress: foundById.address };
+    }
+    if (cleanId.includes('kendriya') || cleanId === 'bbsr-kendriyavihar') {
+      const o = INITIAL_OUTLETS.find((x) => x.id === 'bbsr-kendriyavihar') || INITIAL_OUTLETS[5] || INITIAL_OUTLETS[4];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
+    }
+    if (cleanId.includes('patia') || cleanId === 'bbsr-patia') {
+      const o = INITIAL_OUTLETS[3];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
+    }
+    if (cleanId.includes('khandagiri') || cleanId === 'bbsr-khandagiri') {
+      const o = INITIAL_OUTLETS[4];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
+    }
+    if (cleanId.includes('hsr') || cleanId === 'blr-hsr') {
+      const o = INITIAL_OUTLETS[0];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
+    }
+    if (cleanId.includes('whitefield') || cleanId === 'blr-whitefield') {
+      const o = INITIAL_OUTLETS[1];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
+    }
+    if (cleanId.includes('indiranagar') || cleanId === 'blr-indiranagar') {
+      const o = INITIAL_OUTLETS[2];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
+    }
+  }
+
+  // 2. Direct outlet match by rawName
+  if (rawName && rawName !== 'Gaon Ka Swad Kitchen' && rawName !== 'Gaon Ka Swad' && rawName !== 'Default Outlet') {
+    const lowerName = rawName.toLowerCase();
+    const foundByName = INITIAL_OUTLETS.find(
+      (o) => o.name.toLowerCase() === lowerName || o.name.toLowerCase().includes(lowerName) || lowerName.includes(o.name.toLowerCase())
+    );
+    if (foundByName) {
+      return { outletId: foundByName.id, outletName: foundByName.name, kitchenAddress: foundByName.address };
+    }
+    if (lowerName.includes('kendriya')) {
+      const o = INITIAL_OUTLETS.find((x) => x.id === 'bbsr-kendriyavihar') || INITIAL_OUTLETS[5] || INITIAL_OUTLETS[4];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
+    }
+    if (lowerName.includes('patia')) {
+      const o = INITIAL_OUTLETS[3];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
+    }
+    if (lowerName.includes('khandagiri')) {
+      const o = INITIAL_OUTLETS[4];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
+    }
+    if (lowerName.includes('hsr')) {
+      const o = INITIAL_OUTLETS[0];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
+    }
+    if (lowerName.includes('whitefield')) {
+      const o = INITIAL_OUTLETS[1];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
+    }
+    if (lowerName.includes('indiranagar')) {
+      const o = INITIAL_OUTLETS[2];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
+    }
+  }
+
+  // 3. Match by delivery PIN
+  if (pin && /^\d{6}$/.test(pin)) {
+    const matchedZone = INITIAL_DELIVERY_ZONES.find((z) => (z.pinCodes || []).includes(pin));
+    if (matchedZone) {
+      const foundByZone = INITIAL_OUTLETS.find((o) => o.id === matchedZone.outletId);
+      if (foundByZone) {
+        return { outletId: foundByZone.id, outletName: foundByZone.name, kitchenAddress: foundByZone.address };
+      }
+    }
+    if (['752054', '751028'].includes(pin)) {
+      const o = INITIAL_OUTLETS.find((x) => x.id === 'bbsr-kendriyavihar') || INITIAL_OUTLETS[5] || INITIAL_OUTLETS[4];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
+    }
+    if (['751024', '751016', '751031'].includes(pin)) {
+      const o = INITIAL_OUTLETS[3];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
+    }
+    if (['751030', '751019', '751003', '751020', '751001', '751002'].includes(pin)) {
+      const o = INITIAL_OUTLETS[4];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
+    }
+    if (['560102', '560103', '560034', '560068'].includes(pin)) {
+      const o = INITIAL_OUTLETS[0];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
+    }
+    if (['560066', '560067', '560048', '560037'].includes(pin)) {
+      const o = INITIAL_OUTLETS[1];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
+    }
+    if (['560038', '560008', '560075', '560001'].includes(pin)) {
+      const o = INITIAL_OUTLETS[2];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
+    }
+  }
+
+  // 4. Address text heuristic
+  if (fullAddress) {
+    if (fullAddress.includes('kendriya vihar') || fullAddress.includes('kendriyavihar') || fullAddress.includes('baramunda') || fullAddress.includes('jagamara')) {
+      const o = INITIAL_OUTLETS.find((x) => x.id === 'bbsr-kendriyavihar') || INITIAL_OUTLETS[5] || INITIAL_OUTLETS[4];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
+    }
+    if (fullAddress.includes('patia') || fullAddress.includes('kiit') || fullAddress.includes('infocity') || fullAddress.includes('kanan vihar') || fullAddress.includes('chandrasekharpur')) {
+      const o = INITIAL_OUTLETS[3];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
+    }
+    if (fullAddress.includes('khandagiri') || fullAddress.includes('sundarpada') || fullAddress.includes('aiims')) {
+      const o = INITIAL_OUTLETS[4];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
+    }
+    if (fullAddress.includes('hsr') || fullAddress.includes('koramangala') || fullAddress.includes('bellandur') || fullAddress.includes('btm') || fullAddress.includes('sarjapur')) {
+      const o = INITIAL_OUTLETS[0];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
+    }
+    if (fullAddress.includes('whitefield') || fullAddress.includes('itpl') || fullAddress.includes('hoodi') || fullAddress.includes('kadugodi') || fullAddress.includes('marathahalli')) {
+      const o = INITIAL_OUTLETS[1];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
+    }
+    if (fullAddress.includes('indiranagar') || fullAddress.includes('domlur') || fullAddress.includes('hal') || fullAddress.includes('ulsoor')) {
+      const o = INITIAL_OUTLETS[2];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
+    }
+  }
+
+  const def = INITIAL_OUTLETS[4] || INITIAL_OUTLETS[0];
+  return { outletId: rawId || def.id, outletName: rawName || def.name, kitchenAddress: def.address };
+}
+
 export function mapDbOrderToOrder(row: any): Order {
   const isPickup = row.order_type === 'pickup' || !!row.is_self_pickup;
   const deliveryType: 'immediate' | 'scheduled' =
@@ -1380,12 +1523,15 @@ export function mapDbOrderToOrder(row: any): Order {
       ? 'Cancelled'
       : rawStatus.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 
+  const resolvedOutlet = resolveDbOrderOutlet(row);
+
   return {
     id: row.id || row.order_id,
     orderId: row.order_id || row.order_number || row.id,
     orderNumber: row.order_number || row.order_id,
-    outletId: row.outlet_id,
-    outletName: row.outlets?.name || row.outlet_name || undefined,
+    outletId: resolvedOutlet.outletId,
+    outletName: resolvedOutlet.outletName,
+    kitchenAddress: resolvedOutlet.kitchenAddress,
     customerId: row.customer_id || undefined,
     addressId: row.address_id || row.customer_address_id || undefined,
     isSelfPickup: isPickup,
@@ -1630,17 +1776,13 @@ export async function createSupabaseOrder(orderData: Partial<Order>): Promise<Or
     is_self_pickup: isSelfPickup,
     items: safeItems,
     subtotal: Number(orderData.subtotal || 0),
-    discount: Number(orderData.discount || 0),
     discount_amount: Number(orderData.discount || 0),
     welcome_discount_applied: !!orderData.isWelcomeDiscountApplied,
     welcome_discount_amount: Number(orderData.welcomeDiscountAmount || 0),
     delivery_fee: Number(orderData.deliveryFee || 0),
     packaging_fee: Number(orderData.packagingFee || 0),
     tax_amount: Number(orderData.gst || 0),
-    gst: Number(orderData.gst || 0),
     total_amount: Number(orderData.total || 0),
-    total: Number(orderData.total || 0),
-    coupon_code: orderData.couponCode || null,
     discount_code: orderData.couponCode || null,
     coupon_id: orderData.couponId || null,
     coupon_discount_amount: orderData.couponDiscountAmount ?? orderData.discount ?? 0,
@@ -1648,7 +1790,6 @@ export async function createSupabaseOrder(orderData: Partial<Order>): Promise<Or
     payment_status: 'PENDING',
     delivery_type: deliveryType,
     scheduled_at: scheduledAt,
-    delivery_notes: supaDeliveryInstructions,
     delivery_instructions: supaDeliveryInstructions,
     order_status: (orderData.orderStatus || orderData.status || 'received').toLowerCase().replace(/\s+/g, '_'),
     placed_at: now,
@@ -1692,13 +1833,13 @@ export async function createSupabaseOrder(orderData: Partial<Order>): Promise<Or
     orderType: isSelfPickup ? 'pickup' : 'delivery',
     items: safeItems,
     subtotal: payload.subtotal,
-    discount: payload.discount,
+    discount: payload.discount_amount,
     welcomeDiscountAmount: payload.welcome_discount_amount,
     isWelcomeDiscountApplied: payload.welcome_discount_applied,
     deliveryFee: payload.delivery_fee,
     packagingFee: payload.packaging_fee,
-    gst: payload.gst,
-    total: payload.total,
+    gst: payload.tax_amount,
+    total: payload.total_amount,
     status: payload.status,
     createdAt: now,
   } as Order;

@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { Order } from '../../types';
 import { formatScheduledAt } from '../../utils/dateUtils';
+import { resolveOrderOutletInfo } from '../../lib/locationService';
 
 interface ManagerOrderDetailsModalProps {
   order: Order | null;
@@ -38,6 +39,8 @@ export const ManagerOrderDetailsModal: React.FC<ManagerOrderDetailsModalProps> =
 
   if (!isOpen || !order) return null;
 
+  const resolvedOutlet = resolveOrderOutletInfo(order);
+  const activeBranchName = order.outletName || resolvedOutlet.outletName || outletName;
   const isPickup = !!(order.isSelfPickup || order.orderType === 'pickup');
   const rawStatus = ((order as any).order_status || order.orderStatus || order.status || 'received').toLowerCase().trim();
   const displayStatus =
@@ -176,7 +179,7 @@ export const ManagerOrderDetailsModal: React.FC<ManagerOrderDetailsModalProps> =
                 <span className="text-[10px] font-bold text-amber-900 uppercase tracking-wider block">
                   Kitchen Branch
                 </span>
-                <h4 className="font-black text-stone-900 text-base">{order.outletName || outletName}</h4>
+                <h4 className="font-black text-stone-900 text-base">{activeBranchName}</h4>
               </div>
               <div className="sm:text-right">
                 <span className="text-[10px] font-bold text-stone-500 uppercase tracking-wider block">
@@ -254,7 +257,12 @@ export const ManagerOrderDetailsModal: React.FC<ManagerOrderDetailsModalProps> =
               <div className="text-xs space-y-1">
                 {isPickup ? (
                   <p className="font-medium text-purple-900">
-                    Self-Pickup directly from kitchen counter ({outletName})
+                    Self-Pickup directly from kitchen counter ({activeBranchName})
+                    {resolvedOutlet.kitchenAddress && (
+                      <span className="block text-stone-600 font-normal text-[11px] mt-0.5">
+                        {resolvedOutlet.kitchenAddress}, {resolvedOutlet.city}
+                      </span>
+                    )}
                   </p>
                 ) : (
                   <>

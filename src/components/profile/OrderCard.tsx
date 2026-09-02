@@ -11,7 +11,7 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 import { Order } from '../../types';
-import { INITIAL_OUTLETS } from '../../data/outlets';
+import { resolveOrderOutletInfo } from '../../lib/locationService';
 
 interface OrderCardProps {
   order: Order;
@@ -164,62 +164,8 @@ export const OrderCard: React.FC<OrderCardProps> = ({
   const remainingCount = items.length - displayItems.length;
 
   // Resolve full outlet name (e.g. 'Gaon Ka Swad - Khandagiri')
-  const getOutletDisplayName = () => {
-    const rawName = String(order.outletName || (order as any).outlet_name || '').trim();
-    const rawId = String(order.outletId || (order as any).outlet_id || '').trim();
-
-    if (rawName) {
-      const lower = rawName.toLowerCase();
-      if (lower.includes('khandagiri')) return 'Gaon Ka Swad - Khandagiri';
-      if (lower.includes('patia')) return 'Gaon Ka Swad - Patia';
-      if (lower.includes('hsr')) return 'Gaon Ka Swad - HSR Layout';
-      if (lower.includes('whitefield')) return 'Gaon Ka Swad - Whitefield';
-      if (lower.includes('indiranagar')) return 'Gaon Ka Swad - Indiranagar';
-
-      const found = INITIAL_OUTLETS.find(
-        (o) => o.name.toLowerCase() === lower || o.id.toLowerCase() === lower
-      );
-      if (found) return found.name;
-
-      if (rawName !== 'Gaon Ka Swad Kitchen' && rawName !== 'Gaon Ka Swad' && rawName !== 'Default Outlet') {
-        return rawName.startsWith('Gaon Ka Swad -') ? rawName : `Gaon Ka Swad - ${rawName}`;
-      }
-    }
-
-    if (rawId) {
-      const lowerId = rawId.toLowerCase();
-      if (lowerId.includes('khandagiri') || lowerId === 'bbsr-khandagiri') return 'Gaon Ka Swad - Khandagiri';
-      if (lowerId.includes('patia') || lowerId === 'bbsr-patia') return 'Gaon Ka Swad - Patia';
-      if (lowerId.includes('hsr') || lowerId === 'blr-hsr') return 'Gaon Ka Swad - HSR Layout';
-      if (lowerId.includes('whitefield') || lowerId === 'blr-whitefield') return 'Gaon Ka Swad - Whitefield';
-      if (lowerId.includes('indiranagar') || lowerId === 'blr-indiranagar') return 'Gaon Ka Swad - Indiranagar';
-
-      const found = INITIAL_OUTLETS.find((o) => o.id === rawId || o.id === `outlet-${rawId}`);
-      if (found) return found.name;
-    }
-
-    const pin = order.deliveryPinCode || order.deliveryAddressSnapshot?.pincode;
-    if (pin) {
-      if (['751030', '751019', '751003', '752054', '751028', '751020', '751001', '751002'].includes(String(pin))) {
-        return 'Gaon Ka Swad - Khandagiri';
-      }
-      if (['751024', '751016', '751031'].includes(String(pin))) {
-        return 'Gaon Ka Swad - Patia';
-      }
-      if (['560102', '560103', '560034', '560068'].includes(String(pin))) {
-        return 'Gaon Ka Swad - HSR Layout';
-      }
-      if (['560066', '560067', '560048', '560037'].includes(String(pin))) {
-        return 'Gaon Ka Swad - Whitefield';
-      }
-      if (['560038', '560008', '560075', '560001'].includes(String(pin))) {
-        return 'Gaon Ka Swad - Indiranagar';
-      }
-    }
-
-    return 'Gaon Ka Swad - Khandagiri';
-  };
-  const resolvedOutletName = getOutletDisplayName();
+  const resolvedOutletInfo = resolveOrderOutletInfo(order);
+  const resolvedOutletName = resolvedOutletInfo.outletName;
 
   return (
     <div

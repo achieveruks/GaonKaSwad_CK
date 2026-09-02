@@ -220,6 +220,208 @@ export function getProductOutletConfig(product: Product, outletId?: string) {
   return undefined;
 }
 
+export interface ResolvedOrderOutlet {
+  outletId: string;
+  outletName: string;
+  kitchenAddress: string;
+  city: string;
+  phone?: string;
+}
+
+/**
+ * Resolves the accurate Kitchen Outlet details (ID, full name, address, city) for an order or DB row.
+ */
+export function resolveOrderOutletInfo(
+  orderOrRow: any,
+  outletsList: Outlet[] = cachedOutlets,
+  zonesList: DeliveryZone[] = cachedZones
+): ResolvedOrderOutlet {
+  const allOutlets = outletsList && outletsList.length > 0 ? outletsList : INITIAL_OUTLETS;
+  const allZones = zonesList && zonesList.length > 0 ? zonesList : INITIAL_DELIVERY_ZONES;
+
+  const rawId = String(orderOrRow?.outletId || orderOrRow?.outlet_id || '').trim();
+  const rawName = String(orderOrRow?.outletName || orderOrRow?.outlet_name || orderOrRow?.outlets?.name || '').trim();
+  const pin = String(
+    orderOrRow?.deliveryPinCode ||
+    orderOrRow?.delivery_pincode ||
+    orderOrRow?.deliveryAddressSnapshot?.pincode ||
+    orderOrRow?.customerDetails?.pincode ||
+    orderOrRow?.customer_details?.pincode ||
+    ''
+  ).trim();
+
+  const fullAddress = String(
+    orderOrRow?.deliveryAddressSnapshot?.fullAddress ||
+    orderOrRow?.customerDetails?.address ||
+    orderOrRow?.customer_details?.address ||
+    orderOrRow?.kitchenAddress ||
+    ''
+  ).toLowerCase();
+
+  // 1. Direct outlet match by rawId
+  if (rawId) {
+    const cleanId = rawId.replace(/^outlet-/, '').toLowerCase();
+    const foundById = allOutlets.find(
+      (o) => o.id.toLowerCase() === rawId.toLowerCase() || o.id.toLowerCase() === cleanId
+    );
+    if (foundById) {
+      return {
+        outletId: foundById.id,
+        outletName: foundById.name,
+        kitchenAddress: foundById.address,
+        city: foundById.city,
+        phone: foundById.phone,
+      };
+    }
+
+    if (cleanId.includes('kendriya') || cleanId === 'bbsr-kendriyavihar') {
+      const o = allOutlets.find((x) => x.id === 'bbsr-kendriyavihar') || INITIAL_OUTLETS[5] || INITIAL_OUTLETS[4];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address, city: o.city, phone: o.phone };
+    }
+    if (cleanId.includes('patia') || cleanId === 'bbsr-patia') {
+      const o = allOutlets.find((x) => x.id === 'bbsr-patia') || INITIAL_OUTLETS[3];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address, city: o.city, phone: o.phone };
+    }
+    if (cleanId.includes('khandagiri') || cleanId === 'bbsr-khandagiri') {
+      const o = allOutlets.find((x) => x.id === 'bbsr-khandagiri') || INITIAL_OUTLETS[4];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address, city: o.city, phone: o.phone };
+    }
+    if (cleanId.includes('hsr') || cleanId === 'blr-hsr') {
+      const o = allOutlets.find((x) => x.id === 'blr-hsr') || INITIAL_OUTLETS[0];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address, city: o.city, phone: o.phone };
+    }
+    if (cleanId.includes('whitefield') || cleanId === 'blr-whitefield') {
+      const o = allOutlets.find((x) => x.id === 'blr-whitefield') || INITIAL_OUTLETS[1];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address, city: o.city, phone: o.phone };
+    }
+    if (cleanId.includes('indiranagar') || cleanId === 'blr-indiranagar') {
+      const o = allOutlets.find((x) => x.id === 'blr-indiranagar') || INITIAL_OUTLETS[2];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address, city: o.city, phone: o.phone };
+    }
+  }
+
+  // 2. Direct outlet match by rawName
+  if (rawName && rawName !== 'Gaon Ka Swad Kitchen' && rawName !== 'Gaon Ka Swad' && rawName !== 'Default Outlet') {
+    const lowerName = rawName.toLowerCase();
+    const foundByName = allOutlets.find(
+      (o) => o.name.toLowerCase() === lowerName || o.name.toLowerCase().includes(lowerName) || lowerName.includes(o.name.toLowerCase())
+    );
+    if (foundByName) {
+      return {
+        outletId: foundByName.id,
+        outletName: foundByName.name,
+        kitchenAddress: foundByName.address,
+        city: foundByName.city,
+        phone: foundByName.phone,
+      };
+    }
+    if (lowerName.includes('kendriya')) {
+      const o = allOutlets.find((x) => x.id === 'bbsr-kendriyavihar') || INITIAL_OUTLETS[5] || INITIAL_OUTLETS[4];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address, city: o.city, phone: o.phone };
+    }
+    if (lowerName.includes('patia')) {
+      const o = allOutlets.find((x) => x.id === 'bbsr-patia') || INITIAL_OUTLETS[3];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address, city: o.city, phone: o.phone };
+    }
+    if (lowerName.includes('khandagiri')) {
+      const o = allOutlets.find((x) => x.id === 'bbsr-khandagiri') || INITIAL_OUTLETS[4];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address, city: o.city, phone: o.phone };
+    }
+    if (lowerName.includes('hsr')) {
+      const o = allOutlets.find((x) => x.id === 'blr-hsr') || INITIAL_OUTLETS[0];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address, city: o.city, phone: o.phone };
+    }
+    if (lowerName.includes('whitefield')) {
+      const o = allOutlets.find((x) => x.id === 'blr-whitefield') || INITIAL_OUTLETS[1];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address, city: o.city, phone: o.phone };
+    }
+    if (lowerName.includes('indiranagar')) {
+      const o = allOutlets.find((x) => x.id === 'blr-indiranagar') || INITIAL_OUTLETS[2];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address, city: o.city, phone: o.phone };
+    }
+  }
+
+  // 3. Match by delivery PIN Code
+  if (pin && /^\d{6}$/.test(pin)) {
+    const matchedZone = allZones.find((z) => (z.pinCodes || []).includes(pin));
+    if (matchedZone) {
+      const foundByZone = allOutlets.find((o) => o.id === matchedZone.outletId);
+      if (foundByZone) {
+        return {
+          outletId: foundByZone.id,
+          outletName: foundByZone.name,
+          kitchenAddress: foundByZone.address,
+          city: foundByZone.city,
+          phone: foundByZone.phone,
+        };
+      }
+    }
+
+    if (['752054', '751028'].includes(pin)) {
+      const o = allOutlets.find((x) => x.id === 'bbsr-kendriyavihar') || INITIAL_OUTLETS[5] || INITIAL_OUTLETS[4];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address, city: o.city, phone: o.phone };
+    }
+    if (['751024', '751016', '751031'].includes(pin)) {
+      const o = allOutlets.find((x) => x.id === 'bbsr-patia') || INITIAL_OUTLETS[3];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address, city: o.city, phone: o.phone };
+    }
+    if (['751030', '751019', '751003', '751020', '751001', '751002'].includes(pin)) {
+      const o = allOutlets.find((x) => x.id === 'bbsr-khandagiri') || INITIAL_OUTLETS[4];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address, city: o.city, phone: o.phone };
+    }
+    if (['560102', '560103', '560034', '560068'].includes(pin)) {
+      const o = allOutlets.find((x) => x.id === 'blr-hsr') || INITIAL_OUTLETS[0];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address, city: o.city, phone: o.phone };
+    }
+    if (['560066', '560067', '560048', '560037'].includes(pin)) {
+      const o = allOutlets.find((x) => x.id === 'blr-whitefield') || INITIAL_OUTLETS[1];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address, city: o.city, phone: o.phone };
+    }
+    if (['560038', '560008', '560075', '560001'].includes(pin)) {
+      const o = allOutlets.find((x) => x.id === 'blr-indiranagar') || INITIAL_OUTLETS[2];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address, city: o.city, phone: o.phone };
+    }
+  }
+
+  // 4. Address text heuristic
+  if (fullAddress) {
+    if (fullAddress.includes('kendriya vihar') || fullAddress.includes('kendriyavihar') || fullAddress.includes('baramunda') || fullAddress.includes('jagamara')) {
+      const o = allOutlets.find((x) => x.id === 'bbsr-kendriyavihar') || INITIAL_OUTLETS[5] || INITIAL_OUTLETS[4];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address, city: o.city, phone: o.phone };
+    }
+    if (fullAddress.includes('patia') || fullAddress.includes('kiit') || fullAddress.includes('infocity') || fullAddress.includes('kanan vihar') || fullAddress.includes('chandrasekharpur')) {
+      const o = allOutlets.find((x) => x.id === 'bbsr-patia') || INITIAL_OUTLETS[3];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address, city: o.city, phone: o.phone };
+    }
+    if (fullAddress.includes('khandagiri') || fullAddress.includes('sundarpada') || fullAddress.includes('aiims')) {
+      const o = allOutlets.find((x) => x.id === 'bbsr-khandagiri') || INITIAL_OUTLETS[4];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address, city: o.city, phone: o.phone };
+    }
+    if (fullAddress.includes('hsr') || fullAddress.includes('koramangala') || fullAddress.includes('bellandur') || fullAddress.includes('btm') || fullAddress.includes('sarjapur')) {
+      const o = allOutlets.find((x) => x.id === 'blr-hsr') || INITIAL_OUTLETS[0];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address, city: o.city, phone: o.phone };
+    }
+    if (fullAddress.includes('whitefield') || fullAddress.includes('itpl') || fullAddress.includes('hoodi') || fullAddress.includes('kadugodi') || fullAddress.includes('marathahalli')) {
+      const o = allOutlets.find((x) => x.id === 'blr-whitefield') || INITIAL_OUTLETS[1];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address, city: o.city, phone: o.phone };
+    }
+    if (fullAddress.includes('indiranagar') || fullAddress.includes('domlur') || fullAddress.includes('hal') || fullAddress.includes('ulsoor')) {
+      const o = allOutlets.find((x) => x.id === 'blr-indiranagar') || INITIAL_OUTLETS[2];
+      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address, city: o.city, phone: o.phone };
+    }
+  }
+
+  // 5. Default fallback
+  const defaultOutlet = allOutlets[0] || INITIAL_OUTLETS[0];
+  return {
+    outletId: defaultOutlet.id,
+    outletName: defaultOutlet.name,
+    kitchenAddress: defaultOutlet.address,
+    city: defaultOutlet.city,
+    phone: defaultOutlet.phone,
+  };
+}
+
 /**
  * 9. isProductServedAtOutlet - checks if product is served at all in this outlet
  */

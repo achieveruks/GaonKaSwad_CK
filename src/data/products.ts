@@ -48,7 +48,7 @@ export const CATEGORIES: Category[] = [
   }
 ];
 
-const ALL_OUTLET_IDS = ['blr-hsr', 'blr-whitefield', 'blr-indiranagar', 'bbsr-patia', 'bbsr-khandagiri'];
+const ALL_OUTLET_IDS = ['blr-hsr', 'blr-whitefield', 'blr-indiranagar', 'bbsr-patia', 'bbsr-khandagiri', 'bbsr-kendriyavihar'];
 
 const createOutletConfigs = (
   isFeatured = false,

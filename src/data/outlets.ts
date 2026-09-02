@@ -131,6 +131,32 @@ export const INITIAL_OUTLETS: Outlet[] = [
     trustBadgeUsp: '100% Pure',
     trustBadgeUspSub: 'Desi Ghee Recipe',
   },
+  {
+    id: 'bbsr-kendriyavihar',
+    name: 'Gaon Ka Swad - Kendriya Vihar',
+    city: 'Bhubaneswar',
+    state: 'Odisha',
+    address: 'Kendriya Vihar, C.C.S. Complex, Jagamara / Baramunda Road, Bhubaneswar',
+    fssaiLicId: 11523034000000,
+    phone: '+91 98765 43215',
+    email: 'kendriyavihar@gaonkaswad.com',
+    latitude: 20.2642,
+    longitude: 85.7925,
+    isActive: true,
+    minimumOrderValue: 149,
+    freeDeliveryThreshold: 399,
+    packagingFee: 20,
+    avgCookingTime: '25-35 mins',
+    operatingHours: '11:30 AM - 11:00 PM',
+    heroFireLine: 'ARTISANAL CLOUD KITCHEN • SLOW-COOKED DUM',
+    heroHeader: 'Authentic Indian Flavors, Slow-Cooked to Perfection',
+    heroDescription:
+      'Experience royal dum biryanis, 24-hour slow-simmered dal makhani, and smoky clay-oven tandoori grills, delivered piping hot to your doorstep in sealed eco-handis.',
+    trustBadgeRating: '4.9 ★ (2.8k+)',
+    trustBadgeRatingSub: 'Google & Zomato',
+    trustBadgeUsp: '100% Pure',
+    trustBadgeUspSub: 'Desi Ghee Recipe',
+  },
 ];
 
 export const INITIAL_DELIVERY_ZONES: DeliveryZone[] = [
@@ -169,8 +195,16 @@ export const INITIAL_DELIVERY_ZONES: DeliveryZone[] = [
   {
     id: 'zone-bbsr-khandagiri',
     outletId: 'bbsr-khandagiri',
-    pinCodes: ['751030', '751019', '751003', '752054'],
+    pinCodes: ['751030', '751003', '751020', '751001', '751002'],
     deliveryFee: 35,
+    minimumOrderValue: 149,
+    isActive: true,
+  },
+  {
+    id: 'zone-bbsr-kendriyavihar',
+    outletId: 'bbsr-kendriyavihar',
+    pinCodes: ['752054', '751028', '751019'],
+    deliveryFee: 30,
     minimumOrderValue: 149,
     isActive: true,
   },
@@ -178,7 +212,7 @@ export const INITIAL_DELIVERY_ZONES: DeliveryZone[] = [
 
 // Pre-defined demo suggestions for fast testing
 export const POPULAR_PIN_SUGGESTIONS = [
-  { pin: '752054', area: 'Kendriya Vihar, Bhubaneswar', outlet: 'Gaon Ka Swad - Khandagiri' },
+  { pin: '752054', area: 'Kendriya Vihar, Bhubaneswar', outlet: 'Gaon Ka Swad - Kendriya Vihar' },
   { pin: '560102', area: 'HSR Layout, Bangalore', outlet: 'Gaon Ka Swad - HSR Layout' },
   { pin: '560066', area: 'Whitefield, Bangalore', outlet: 'Gaon Ka Swad - Whitefield' },
   { pin: '560038', area: 'Indiranagar, Bangalore', outlet: 'Gaon Ka Swad - Indiranagar' },

@@ -209,16 +209,14 @@ CREATE TABLE IF NOT EXISTS public.orders (
   delivery_fee NUMERIC NOT NULL DEFAULT 0 CHECK (delivery_fee >= 0),     -- Applicable delivery fee
   packaging_fee NUMERIC NOT NULL DEFAULT 0 CHECK (packaging_fee >= 0),   -- Food packaging charge
   discount_amount NUMERIC NOT NULL DEFAULT 0 CHECK (discount_amount >= 0), -- Total discount amount
-  discount NUMERIC NOT NULL DEFAULT 0 CHECK (discount >= 0),             -- Compatible alias for discount_amount
   tax_amount NUMERIC NOT NULL DEFAULT 0 CHECK (tax_amount >= 0),         -- 5% GST tax amount
-  gst NUMERIC NOT NULL DEFAULT 0 CHECK (gst >= 0),                       -- Compatible alias for tax_amount
   total_amount NUMERIC NOT NULL DEFAULT 0 CHECK (total_amount >= 0),     -- Final total payable amount
-  total NUMERIC NOT NULL DEFAULT 0 CHECK (total >= 0),                   -- Compatible alias for total_amount
 
   -- Discount & Coupon Metadata
   discount_type VARCHAR(50) DEFAULT 'NONE',                              -- WELCOME | COUPON | NONE
   discount_code TEXT,                                                    -- Promo code used (e.g. WELCOME30, DESI50)
-  coupon_code TEXT,                                                      -- Compatible alias for discount_code
+  coupon_id TEXT,                                                        -- Coupon UUID/ID reference
+  coupon_discount_amount NUMERIC NOT NULL DEFAULT 0,                     -- Coupon discount in INR
   discount_description TEXT,                                             -- Descriptive discount text
   welcome_discount_applied BOOLEAN DEFAULT false,                        -- Welcome discount boolean flag
   welcome_discount_amount NUMERIC NOT NULL DEFAULT 0,                    -- Welcome discount in INR
@@ -232,7 +230,6 @@ CREATE TABLE IF NOT EXISTS public.orders (
   delivery_address_snapshot JSONB DEFAULT '{}'::jsonb,                   -- Address object snapshot at checkout
   delivery_pincode TEXT,                                                 -- Delivery PIN code
   delivery_instructions TEXT,                                            -- Gate/cooking delivery notes
-  delivery_notes TEXT,                                                   -- Compatible alias for delivery_instructions
   delivery_type VARCHAR(50) DEFAULT 'immediate',                         -- immediate | scheduled
   scheduled_at TIMESTAMPTZ,                                              -- Scheduled delivery timestamp (TIMESTAMPTZ)
   estimated_delivery_minutes INTEGER DEFAULT 35,
@@ -263,12 +260,13 @@ CREATE TABLE IF NOT EXISTS public.orders (
 
 -- Safe Column Migrations for public.orders
 ALTER TABLE IF EXISTS public.orders DROP COLUMN IF EXISTS status;
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS order_number TEXT;
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS customer_address_id UUID REFERENCES public.customer_addresses(id) ON DELETE SET NULL;
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS order_status VARCHAR(50) DEFAULT 'confirmed';
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS delivery_type VARCHAR(50) DEFAULT 'immediate';
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMPTZ;
 ALTER TABLE IF EXISTS public.orders DROP COLUMN IF EXISTS delivery_slot;
+ALTER TABLE IF EXISTS public.orders DROP COLUMN IF EXISTS discount;
+ALTER TABLE IF EXISTS public.orders DROP COLUMN IF EXISTS gst;
+ALTER TABLE IF EXISTS public.orders DROP COLUMN IF EXISTS total;
+ALTER TABLE IF EXISTS public.orders DROP COLUMN IF EXISTS coupon_code;
+ALTER TABLE IF EXISTS public.orders DROP COLUMN IF EXISTS delivery_notes;
+ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS order_number TEXT;
 ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS discount_amount NUMERIC NOT NULL DEFAULT 0;
 ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS tax_amount NUMERIC NOT NULL DEFAULT 0;
 ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS total_amount NUMERIC NOT NULL DEFAULT 0;

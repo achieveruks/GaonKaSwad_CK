@@ -17,7 +17,7 @@ import {
   Store,
 } from 'lucide-react';
 import { Order } from '../../types';
-import { INITIAL_OUTLETS } from '../../data/outlets';
+import { resolveOrderOutletInfo } from '../../lib/locationService';
 
 interface OrderDetailsModalProps {
   order: Order;
@@ -183,67 +183,9 @@ export const OrderDetailsModal: React.FC<OrderDetailsModalProps> = ({
   const statusDateTimestamp = statusInfo.timestamp || rawReceivedAt;
   const formattedStatusTime = formatDateTime(statusDateTimestamp);
 
-  // 4. Resolve Actual Full Outlet Name (e.g. 'Gaon Ka Swad - Khandagiri')
-  const getOutletDisplayName = () => {
-    const rawName = String(order.outletName || (order as any).outlet_name || '').trim();
-    const rawId = String(order.outletId || (order as any).outlet_id || '').trim();
-
-    // Check specific name matches
-    if (rawName) {
-      const lower = rawName.toLowerCase();
-      if (lower.includes('khandagiri')) return 'Gaon Ka Swad - Khandagiri';
-      if (lower.includes('patia')) return 'Gaon Ka Swad - Patia';
-      if (lower.includes('hsr')) return 'Gaon Ka Swad - HSR Layout';
-      if (lower.includes('whitefield')) return 'Gaon Ka Swad - Whitefield';
-      if (lower.includes('indiranagar')) return 'Gaon Ka Swad - Indiranagar';
-
-      const found = INITIAL_OUTLETS.find(
-        (o) => o.name.toLowerCase() === lower || o.id.toLowerCase() === lower
-      );
-      if (found) return found.name;
-
-      if (rawName !== 'Gaon Ka Swad Kitchen' && rawName !== 'Gaon Ka Swad' && rawName !== 'Default Outlet') {
-        return rawName.startsWith('Gaon Ka Swad -') ? rawName : `Gaon Ka Swad - ${rawName}`;
-      }
-    }
-
-    // Check outlet ID matches
-    if (rawId) {
-      const lowerId = rawId.toLowerCase();
-      if (lowerId.includes('khandagiri') || lowerId === 'bbsr-khandagiri') return 'Gaon Ka Swad - Khandagiri';
-      if (lowerId.includes('patia') || lowerId === 'bbsr-patia') return 'Gaon Ka Swad - Patia';
-      if (lowerId.includes('hsr') || lowerId === 'blr-hsr') return 'Gaon Ka Swad - HSR Layout';
-      if (lowerId.includes('whitefield') || lowerId === 'blr-whitefield') return 'Gaon Ka Swad - Whitefield';
-      if (lowerId.includes('indiranagar') || lowerId === 'blr-indiranagar') return 'Gaon Ka Swad - Indiranagar';
-
-      const found = INITIAL_OUTLETS.find((o) => o.id === rawId || o.id === `outlet-${rawId}`);
-      if (found) return found.name;
-    }
-
-    // Check delivery pin code or city
-    const pin = order.deliveryPinCode || order.deliveryAddressSnapshot?.pincode;
-    if (pin) {
-      if (['751030', '751019', '751003', '752054', '751028', '751020', '751001', '751002'].includes(String(pin))) {
-        return 'Gaon Ka Swad - Khandagiri';
-      }
-      if (['751024', '751016', '751031'].includes(String(pin))) {
-        return 'Gaon Ka Swad - Patia';
-      }
-      if (['560102', '560103', '560034', '560068'].includes(String(pin))) {
-        return 'Gaon Ka Swad - HSR Layout';
-      }
-      if (['560066', '560067', '560048', '560037'].includes(String(pin))) {
-        return 'Gaon Ka Swad - Whitefield';
-      }
-      if (['560038', '560008', '560075', '560001'].includes(String(pin))) {
-        return 'Gaon Ka Swad - Indiranagar';
-      }
-    }
-
-    return 'Gaon Ka Swad - Khandagiri';
-  };
-
-  const outletDisplayName = getOutletDisplayName();
+  // 4. Resolve Actual Full Outlet Name & Location (e.g. 'Gaon Ka Swad - Khandagiri')
+  const resolvedOutlet = resolveOrderOutletInfo(order);
+  const outletDisplayName = resolvedOutlet.outletName;
 
   // 5. Customer Details & Delivery Address
   const customerName =
@@ -261,29 +203,33 @@ export const OrderDetailsModal: React.FC<OrderDetailsModalProps> = ({
     (order.deliveryAddressSnapshot as any)?.phone ||
     '';
 
-  const streetAddress =
-    order.deliveryAddressSnapshot?.fullAddress ||
-    (order.deliveryAddressSnapshot as any)?.street ||
-    (order.deliveryAddressSnapshot as any)?.address ||
-    order.customerDetails?.address ||
-    (order as any).deliveryAddress ||
-    (isSelfPickup ? 'Self-Pickup from Kitchen Outlet' : '');
+  const streetAddress = isSelfPickup
+    ? (resolvedOutlet.kitchenAddress ? `Kitchen Pickup: ${resolvedOutlet.kitchenAddress}` : `Self-Pickup from ${resolvedOutlet.outletName}`)
+    : (order.deliveryAddressSnapshot?.fullAddress ||
+      (order.deliveryAddressSnapshot as any)?.street ||
+      (order.deliveryAddressSnapshot as any)?.address ||
+      order.customerDetails?.address ||
+      (order as any).deliveryAddress ||
+      '');
 
-  const landmark =
-    order.deliveryAddressSnapshot?.landmark ||
-    order.customerDetails?.landmark ||
-    '';
+  const landmark = isSelfPickup
+    ? ''
+    : (order.deliveryAddressSnapshot?.landmark ||
+      order.customerDetails?.landmark ||
+      '');
 
-  const city =
-    order.deliveryAddressSnapshot?.city ||
-    order.customerDetails?.city ||
-    'Bhubaneswar';
+  const city = isSelfPickup
+    ? resolvedOutlet.city
+    : (order.deliveryAddressSnapshot?.city ||
+      order.customerDetails?.city ||
+      'Bhubaneswar');
 
-  const pincode =
-    order.deliveryAddressSnapshot?.pincode ||
-    order.deliveryPinCode ||
-    order.customerDetails?.pincode ||
-    '751028';
+  const pincode = isSelfPickup
+    ? ''
+    : (order.deliveryAddressSnapshot?.pincode ||
+      order.deliveryPinCode ||
+      order.customerDetails?.pincode ||
+      '');
 
   const cityPinLine = [city, pincode].filter(Boolean).join(', ');
 
