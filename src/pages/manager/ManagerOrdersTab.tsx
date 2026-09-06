@@ -246,7 +246,7 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
 
       // 2. Also patch backend API
       try {
-        const res = await fetch(`/api/orders/${targetId}/status`, {
+        const res = await fetch(`/api/orders/${encodeURIComponent(targetId)}/status`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useCart } from '../context/CartContext';
 import { useNavigation } from '../context/NavigationContext';
 import { useLocation } from '../context/LocationContext';
@@ -17,7 +17,9 @@ import {
   createSupabaseOrder,
   fetchAvailableCouponsForCustomer,
   recordCouponRedemption,
+  fetchSupabaseOrderById,
 } from '../lib/supabaseService';
+import { lookupPincode } from '../lib/pincodeService';
 import confetti from 'canvas-confetti';
 import {
   CheckCircle2,
@@ -37,6 +39,7 @@ import {
   ChevronDown,
   ChevronUp,
   PhoneCall,
+  ChefHat,
   Utensils,
   Store,
   AlertCircle,
@@ -64,6 +67,7 @@ import {
   Sun,
   Moon,
   X,
+  Loader2,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -327,6 +331,10 @@ export const CheckoutPage: React.FC = () => {
   } | null>(null);
   const [isLookingUpPhone, setIsLookingUpPhone] = useState(false);
 
+  // PIN lookup state
+  const [isPinLookupLoading, setIsPinLookupLoading] = useState(false);
+  const [pinLookupFeedback, setPinLookupFeedback] = useState<string | null>(null);
+
   // Coupon & Promotional Offers Interactive State
   const [couponInputText, setCouponInputText] = useState('');
   const [couponFeedback, setCouponFeedback] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -468,10 +476,11 @@ export const CheckoutPage: React.FC = () => {
       ...prev,
       address: '',
       landmark: '',
-      city: 'Bhubaneswar',
-      state: 'Odisha',
+      city: '',
+      state: '',
       pincode: '',
     }));
+    setPinLookupFeedback(null);
   };
 
   const handleSelectSavedAddress = (addr: any) => {
@@ -699,6 +708,47 @@ export const CheckoutPage: React.FC = () => {
   const enteredPin = (formData.pincode || '').trim();
   const isPinComplete = enteredPin.length === 6 && /^\d{6}$/.test(enteredPin);
 
+  // Trigger PIN lookup to auto-populate City and State
+  const triggerPinLookup = async (pinValue: string) => {
+    const cleanPin = (pinValue || '').replace(/\D/g, '').slice(0, 6);
+    if (cleanPin.length !== 6) {
+      return;
+    }
+    setIsPinLookupLoading(true);
+    setPinLookupFeedback(null);
+    try {
+      const res = await lookupPincode(cleanPin);
+      if (res && res.found && res.city) {
+        setFormData((prev) => ({
+          ...prev,
+          pincode: cleanPin,
+          city: res.city,
+          state: res.state || 'Odisha',
+        }));
+        setErrors((prev) => ({
+          ...prev,
+          pincode: '',
+          city: '',
+          state: '',
+        }));
+        setPinLookupFeedback(null);
+      } else {
+        setPinLookupFeedback('PIN code recognized');
+      }
+    } catch (err) {
+      console.warn('PIN lookup failed in checkout:', err);
+    } finally {
+      setIsPinLookupLoading(false);
+    }
+  };
+
+  // Auto-resolve initial PIN if city/state are empty
+  useEffect(() => {
+    if (isPinComplete && (!formData.city || !formData.state)) {
+      triggerPinLookup(enteredPin);
+    }
+  }, [enteredPin, isPinComplete]);
+
   const pinServiceability = useMemo(() => {
     if (!isPinComplete) {
       return { status: 'INCOMPLETE_PIN' as const, pinCode: enteredPin };
@@ -898,10 +948,10 @@ export const CheckoutPage: React.FC = () => {
 
   const [placedOrder, setPlacedOrder] = useState<Order | null>(null);
   const [orderStage, setOrderStage] = useState<
-    'Received' | 'Preparing in Kitchen' | 'Out for Delivery' | 'Ready for Pickup' | 'Picked Up' | 'Delivered'
+    'Received' | 'Confirmed' | 'Preparing in Kitchen' | 'Out for Delivery' | 'Ready for Pickup' | 'Picked Up' | 'Delivered'
   >('Received');
 
-  // Real-time synchronization of placed order status across devices
+  // Real-time synchronization of placed order status across devices with fallback polling
   useEffect(() => {
     if (!placedOrder) return;
 
@@ -909,36 +959,130 @@ export const CheckoutPage: React.FC = () => {
       setOrderStage(placedOrder.status as any);
     }
 
-    if (!isSupabaseConfigured()) return;
+    // Helper to merge fresh order state from database or API
+    const syncFreshOrder = (fresh: Order) => {
+      setPlacedOrder((prev) => {
+        if (!prev) return fresh;
+        // Check if any tracking fields actually changed before updating state
+        if (
+          prev.status === fresh.status &&
+          prev.orderStatus === fresh.orderStatus &&
+          prev.confirmedAt === fresh.confirmedAt &&
+          prev.preparingAt === fresh.preparingAt &&
+          prev.readyAt === fresh.readyAt &&
+          prev.outForDeliveryAt === fresh.outForDeliveryAt &&
+          prev.deliveredAt === fresh.deliveredAt &&
+          prev.estimatedDeliveryMinutes === fresh.estimatedDeliveryMinutes
+        ) {
+          return prev;
+        }
+        return {
+          ...prev,
+          ...fresh,
+          status: fresh.status || prev.status,
+          orderStatus: fresh.orderStatus || prev.orderStatus,
+          confirmedAt: fresh.confirmedAt || prev.confirmedAt,
+          preparingAt: fresh.preparingAt || prev.preparingAt,
+          readyAt: fresh.readyAt || prev.readyAt,
+          outForDeliveryAt: fresh.outForDeliveryAt || prev.outForDeliveryAt,
+          deliveredAt: fresh.deliveredAt || prev.deliveredAt,
+          cancelledAt: fresh.cancelledAt || prev.cancelledAt,
+          estimatedDeliveryMinutes: fresh.estimatedDeliveryMinutes || prev.estimatedDeliveryMinutes,
+        };
+      });
+      if (fresh.status) {
+        setOrderStage((prev) => (prev === fresh.status ? prev : (fresh.status as any)));
+      }
+    };
 
-    const channel = supabase
-      .channel(`order-live-${placedOrder.id || placedOrder.orderId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'orders',
-        },
-        (payload) => {
-          if (payload.new) {
-            const updated = payload.new;
-            if (
-              (placedOrder.id && updated.id === placedOrder.id) ||
-              (placedOrder.orderId && updated.order_id === placedOrder.orderId)
-            ) {
-              if (updated.status) {
-                setOrderStage(updated.status as any);
-                setPlacedOrder((prev) => (prev ? { ...prev, status: updated.status } : null));
+    const targetOrderId = placedOrder.orderId || placedOrder.id;
+
+    // Supabase Realtime channel listener
+    let channel: any = null;
+    if (isSupabaseConfigured() && targetOrderId) {
+      channel = supabase
+        .channel(`order-live-${targetOrderId}`)
+        .on(
+          'postgres_changes',
+          {
+            event: 'UPDATE',
+            schema: 'public',
+            table: 'orders',
+          },
+          (payload) => {
+            if (payload.new) {
+              const updated = payload.new;
+              if (
+                (placedOrder.id && updated.id === placedOrder.id) ||
+                (placedOrder.orderId && (updated.order_id === placedOrder.orderId || updated.order_number === placedOrder.orderId))
+              ) {
+                // Fetch full normalized order model
+                fetchSupabaseOrderById(targetOrderId).then((refetched) => {
+                  if (refetched) {
+                    syncFreshOrder(refetched);
+                  } else if (updated.status || updated.order_status) {
+                    const nextStatus = updated.status || updated.order_status;
+                    setOrderStage(nextStatus as any);
+                    setPlacedOrder((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            status: nextStatus,
+                            orderStatus: updated.order_status || prev.orderStatus,
+                            confirmedAt: updated.confirmed_at || prev.confirmedAt,
+                            preparingAt: updated.preparing_at || prev.preparingAt,
+                            readyAt: updated.ready_at || prev.readyAt,
+                            outForDeliveryAt: updated.out_for_delivery_at || prev.outForDeliveryAt,
+                            deliveredAt: updated.delivered_at || prev.deliveredAt,
+                            cancelledAt: updated.cancelled_at || prev.cancelledAt,
+                            estimatedDeliveryMinutes:
+                              updated.estimated_delivery_minutes || prev.estimatedDeliveryMinutes,
+                          }
+                        : null
+                    );
+                  }
+                });
               }
             }
           }
+        )
+        .subscribe();
+    }
+
+    // Resilient fallback heartbeat poll every 4 seconds to sync status and timestamps even if websockets lag
+    const pollInterval = setInterval(async () => {
+      if (!targetOrderId) return;
+      try {
+        // First try server API endpoint
+        const res = await fetch(`/api/orders/${targetOrderId}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && data.order) {
+            syncFreshOrder(data.order);
+            return;
+          }
         }
-      )
-      .subscribe();
+      } catch {
+        // Fallback to direct Supabase query
+      }
+
+      if (isSupabaseConfigured()) {
+        try {
+          const directOrder = await fetchSupabaseOrderById(targetOrderId);
+          if (directOrder) {
+            syncFreshOrder(directOrder);
+          }
+        } catch {
+          // Silent catch on poll
+        }
+      }
+    }, 4000);
 
     return () => {
-      supabase.removeChannel(channel);
+      clearInterval(pollInterval);
+      if (channel) {
+        supabase.removeChannel(channel);
+      }
     };
   }, [placedOrder?.id, placedOrder?.orderId]);
 
@@ -977,12 +1121,12 @@ export const CheckoutPage: React.FC = () => {
     }
 
     if (name === 'city') {
-      if (!trimmed) return 'Please enter your city';
+      if (!trimmed) return 'Enter a valid PIN to auto-detect city';
       return '';
     }
 
     if (name === 'state') {
-      if (!trimmed) return 'Please enter your state';
+      if (!trimmed) return 'Enter a valid PIN to auto-detect state';
       return '';
     }
 
@@ -1008,28 +1152,21 @@ export const CheckoutPage: React.FC = () => {
     return errs;
   };
 
-  // Launch confetti on order success
+  // Launch confetti once on initial order success
+  const hasConfettiFiredRef = useRef<string | null>(null);
   useEffect(() => {
     if (placedOrder) {
-      confetti({
-        particleCount: 100,
-        spread: 70,
-        origin: { y: 0.6 },
-      });
-
-      const isPickup = placedOrder.orderType === 'pickup' || placedOrder.isSelfPickup;
-
-      const timer1 = setTimeout(() => setOrderStage('Preparing in Kitchen'), 3500);
-      const timer2 = setTimeout(() => {
-        setOrderStage(isPickup ? 'Ready for Pickup' : 'Out for Delivery');
-      }, 9000);
-
-      return () => {
-        clearTimeout(timer1);
-        clearTimeout(timer2);
-      };
+      const orderIdentifier = placedOrder.orderId || placedOrder.id;
+      if (orderIdentifier && hasConfettiFiredRef.current !== orderIdentifier) {
+        hasConfettiFiredRef.current = orderIdentifier;
+        confetti({
+          particleCount: 100,
+          spread: 70,
+          origin: { y: 0.6 },
+        });
+      }
     }
-  }, [placedOrder]);
+  }, [placedOrder?.orderId, placedOrder?.id]);
 
   const handleChange = (
     e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>
@@ -1045,6 +1182,15 @@ export const CheckoutPage: React.FC = () => {
     }
 
     const nextForm = { ...formData, [name]: nextValue };
+    if (name === 'pincode') {
+      if (nextValue.length === 6) {
+        triggerPinLookup(nextValue);
+      } else {
+        // Reset auto-filled fields when changing PIN to incomplete
+        nextForm.city = '';
+        nextForm.state = '';
+      }
+    }
     if (name === 'phone' && nextValue !== formData.phone) {
       nextForm.isPhoneVerified = false;
 
@@ -1214,24 +1360,22 @@ export const CheckoutPage: React.FC = () => {
       kitchenAddress:
         currentOutlet?.address ||
         `${selectedLocation?.outletName || 'Gaon Ka Swad Kitchen Facility'}, Main Commercial Hub`,
-      deliveryAddressSnapshot: {
-        fullAddress: isSelfPickup
-          ? `Self-Pickup from ${currentOutlet?.name || selectedLocation?.outletName || 'Kitchen'}`
-          : (formData.address || ''),
-        landmark: formData.landmark || '',
-        city: formData.city || 'Bhubaneswar',
-        state: formData.state || 'Odisha',
-        pincode: isSelfPickup
-          ? (currentOutlet?.pinCode || selectedLocation?.pinCode || cleanCustomerPin)
-          : cleanCustomerPin,
-      },
+      deliveryAddressSnapshot: isSelfPickup
+        ? undefined
+        : {
+            fullAddress: formData.address || '',
+            landmark: formData.landmark || '',
+            city: formData.city || '',
+            state: formData.state || '',
+            pincode: cleanCustomerPin,
+          },
       status: 'Received',
       estimatedDeliveryMinutes: isSelfPickup ? 25 : 35,
     };
 
     // Automatically persist customer profile and address for 1-click future reorders
     let resolvedCustId = customer?.id;
-    let resolvedAddrId = activeSavedAddress?.id || defaultAddress?.id;
+    let resolvedAddrId = isSelfPickup ? undefined : (activeSavedAddress?.id || defaultAddress?.id);
 
     if (formData.phone && (!isSelfPickup ? formData.address : true)) {
       try {
@@ -1256,7 +1400,7 @@ export const CheckoutPage: React.FC = () => {
           resolvedCustId = profRes.customer.id;
           newOrder.customerId = profRes.customer.id;
         }
-        if (profRes?.address?.id) {
+        if (!isSelfPickup && profRes?.address?.id) {
           resolvedAddrId = profRes.address.id;
           newOrder.addressId = profRes.address.id;
         }
@@ -1272,7 +1416,8 @@ export const CheckoutPage: React.FC = () => {
         body: JSON.stringify({
           ...newOrder,
           customerId: resolvedCustId || newOrder.customerId,
-          addressId: resolvedAddrId || newOrder.addressId,
+          addressId: isSelfPickup ? null : (resolvedAddrId || newOrder.addressId || null),
+          deliveryAddressSnapshot: isSelfPickup ? null : (newOrder.deliveryAddressSnapshot || null),
         }),
       });
       const data = await res.json();
@@ -1323,6 +1468,127 @@ export const CheckoutPage: React.FC = () => {
   if (placedOrder) {
     const isOrderPickup = placedOrder.orderType === 'pickup' || placedOrder.isSelfPickup;
 
+    // Format timestamps concisely in Indian Standard 12-hour format (e.g. "08:18 PM" or "20:18")
+    const formatTrackerTime = (isoString?: string) => {
+      if (!isoString) return null;
+      try {
+        const d = new Date(isoString);
+        if (isNaN(d.getTime())) return isoString;
+        return d.toLocaleTimeString('en-IN', {
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false,
+        });
+      } catch {
+        return null;
+      }
+    };
+
+    const receivedTime = formatTrackerTime(placedOrder.placedAt || placedOrder.createdAt) || (placedOrder.createdAt ? placedOrder.createdAt.slice(11, 16) : null) || 'Just now';
+    const confirmedTime = formatTrackerTime(placedOrder.confirmedAt);
+    const inKitchenTime = formatTrackerTime(placedOrder.preparingAt);
+    const transitTime = formatTrackerTime(isOrderPickup ? placedOrder.readyAt : placedOrder.outForDeliveryAt);
+    const completedTime = formatTrackerTime(placedOrder.deliveredAt);
+
+    // Normalize order stage for step evaluation
+    const normStage = (orderStage || placedOrder.status || 'Received').toLowerCase().trim();
+    const isConfirmedActive =
+      normStage === 'confirmed' ||
+      normStage === 'preparing' ||
+      normStage === 'in kitchen' ||
+      normStage === 'preparing in kitchen' ||
+      normStage === 'ready' ||
+      normStage === 'ready for pickup' ||
+      normStage === 'out for delivery' ||
+      normStage === 'out_for_delivery' ||
+      normStage === 'picked up' ||
+      normStage === 'delivered';
+
+    const isInKitchenActive =
+      normStage === 'preparing' ||
+      normStage === 'in kitchen' ||
+      normStage === 'preparing in kitchen' ||
+      normStage === 'ready' ||
+      normStage === 'ready for pickup' ||
+      normStage === 'out for delivery' ||
+      normStage === 'out_for_delivery' ||
+      normStage === 'picked up' ||
+      normStage === 'delivered';
+
+    const isReadyActive =
+      normStage === 'ready' ||
+      normStage === 'ready for pickup' ||
+      normStage === 'out for delivery' ||
+      normStage === 'out_for_delivery' ||
+      normStage === 'picked up' ||
+      normStage === 'delivered';
+
+    const isOutForDelivery =
+      normStage === 'out for delivery' ||
+      normStage === 'out_for_delivery' ||
+      normStage === 'delivered';
+
+    const isTransitActive = isOrderPickup ? isReadyActive : isOutForDelivery;
+
+    const isCompletedActive =
+      normStage === 'delivered' ||
+      normStage === 'picked up';
+
+    // Dynamic banner text and description matching actual live status
+    const getBannerStatusInfo = () => {
+      if (isCompletedActive) {
+        return {
+          pill: isOrderPickup ? 'Order Picked Up' : 'Order Delivered',
+          title: isOrderPickup ? 'Order Picked Up!' : 'Delivered Hot & Fresh!',
+          description: isOrderPickup
+            ? 'Your order has been handed over at the counter. Thank you for dining with Gaon Ka Swad!'
+            : 'Your order has been delivered to your doorstep. Savor every bite!',
+        };
+      }
+      if (!isOrderPickup && isOutForDelivery) {
+        return {
+          pill: 'Out for Delivery',
+          title: 'On The Way to Your Doorstep!',
+          description: 'Our delivery partner is on the way and your order is securely packed in an insulated box.',
+        };
+      }
+      if (isReadyActive) {
+        return {
+          pill: isOrderPickup ? 'Ready at Counter' : 'Order Packed & Ready',
+          title: isOrderPickup ? 'Packed & Ready for You!' : 'Packed & Awaiting Dispatch',
+          description: isOrderPickup
+            ? 'Your dishes are securely packed and ready at our pickup counter.'
+            : 'Your order is freshly prepared, packed, and waiting for delivery partner pickup from the kitchen.',
+        };
+      }
+      if (isInKitchenActive) {
+        return {
+          pill: 'Preparing in Kitchen',
+          title: 'Preparing Your Order',
+          description: 'Our kitchen team is freshly preparing your dishes with authentic spices and ingredients.',
+        };
+      }
+      if (isConfirmedActive) {
+        return {
+          pill: isOrderPickup ? 'Pickup Confirmed' : 'Order Confirmed',
+          title: 'Order Confirmed by Kitchen',
+          description: isOrderPickup
+            ? 'Our kitchen manager has acknowledged your order. Preparation is commencing.'
+            : 'Your order is confirmed and scheduled for preparation in our kitchen.',
+        };
+      }
+      return {
+        pill: isOrderPickup ? 'Pickup Order Placed' : 'Order Successfully Placed',
+        title: isOrderPickup ? 'Self-Pickup Order Confirmed!' : 'Thank You for Your Order!',
+        description: isOrderPickup
+          ? 'Our kitchen team has received your request. Your order will be prepared shortly.'
+          : 'Our kitchen team has received your order and will begin preparation shortly.',
+      };
+    };
+
+    const bannerInfo = getBannerStatusInfo();
+    const liveEstDeliveryMinutes = placedOrder.estimatedDeliveryMinutes || (isOrderPickup ? 25 : 35);
+
     return (
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12 space-y-6">
         {/* Success Header */}
@@ -1338,17 +1604,13 @@ export const CheckoutPage: React.FC = () => {
           <div className="space-y-1">
             <div className="inline-flex items-center gap-1.5 bg-emerald-50 text-emerald-800 border border-emerald-200 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider">
               <Sparkles className="w-3 h-3" />
-              <span>
-                {isOrderPickup ? 'Pickup Order Confirmed' : 'Order Successfully Placed'}
-              </span>
+              <span>{bannerInfo.pill}</span>
             </div>
             <h1 className="font-extrabold text-xl sm:text-3xl text-gray-900">
-              {isOrderPickup ? 'Self-Pickup Order Confirmed!' : 'Thank You for Your Order!'}
+              {bannerInfo.title}
             </h1>
             <p className="text-xs text-gray-600 max-w-md mx-auto">
-              {isOrderPickup
-                ? 'Our master chefs are preparing your handi delicacies. Your order will be packed for pickup shortly.'
-                : 'Our master chefs have received your handi request and are preparing your fresh delicacies.'}
+              {bannerInfo.description}
             </p>
           </div>
 
@@ -1376,49 +1638,69 @@ export const CheckoutPage: React.FC = () => {
               <h3 className="font-bold text-sm text-gray-900">Live Kitchen Tracker</h3>
               <p className="text-xs text-gray-500">
                 {isOrderPickup
-                  ? `Estimated Ready Time: ~${placedOrder.estimatedDeliveryMinutes || 25} mins`
-                  : `Estimated Delivery: ~${placedOrder.estimatedDeliveryMinutes || 35} mins`}
+                  ? `Estimated Ready Time: ~${liveEstDeliveryMinutes} mins`
+                  : `Estimated Delivery: ~${liveEstDeliveryMinutes} mins`}
               </p>
             </div>
 
-            <div className="grid grid-cols-4 gap-2 text-center">
-              {/* Step 1 */}
+            <div className="grid grid-cols-5 gap-1.5 sm:gap-2 text-center">
+              {/* Step 1: Received */}
               <div className="space-y-1">
                 <div className="w-8 h-8 rounded-full mx-auto flex items-center justify-center font-bold text-xs bg-emerald-600 text-white shadow-xs">
                   ✓
                 </div>
                 <p className="text-xs font-bold text-gray-900">Received</p>
-                <p className="text-[10px] text-gray-400">{placedOrder.createdAt}</p>
+                <p className="text-[10px] text-gray-500 font-mono">{receivedTime}</p>
               </div>
 
-              {/* Step 2 */}
+              {/* Step 2: Confirmed */}
               <div className="space-y-1">
                 <div
-                  className={`w-8 h-8 rounded-full mx-auto flex items-center justify-center font-bold text-xs transition-colors ${
-                    orderStage === 'Preparing in Kitchen' ||
-                    orderStage === 'Out for Delivery' ||
-                    orderStage === 'Ready for Pickup' ||
-                    orderStage === 'Picked Up' ||
-                    orderStage === 'Delivered'
-                      ? 'bg-orange-600 text-white shadow-xs animate-pulse'
+                  className={`w-8 h-8 rounded-full mx-auto flex items-center justify-center font-bold text-xs transition-all ${
+                    isConfirmedActive
+                      ? 'bg-emerald-600 text-white shadow-xs'
+                      : 'bg-gray-100 text-gray-400'
+                  }`}
+                >
+                  {isConfirmedActive ? <Check className="w-3.5 h-3.5" /> : <ChefHat className="w-3.5 h-3.5" />}
+                </div>
+                <p className={`text-xs font-bold ${isConfirmedActive ? 'text-gray-900' : 'text-gray-400'}`}>
+                  Confirmed
+                </p>
+                <p className="text-[10px] text-gray-500 font-mono">
+                  {confirmedTime || (isConfirmedActive ? 'Kitchen OK' : 'Pending')}
+                </p>
+              </div>
+
+              {/* Step 3: In Kitchen */}
+              <div className="space-y-1">
+                <div
+                  className={`w-8 h-8 rounded-full mx-auto flex items-center justify-center font-bold text-xs transition-all ${
+                    isInKitchenActive
+                      ? isTransitActive
+                        ? 'bg-emerald-600 text-white shadow-xs'
+                        : 'bg-orange-600 text-white shadow-xs animate-pulse'
                       : 'bg-gray-100 text-gray-400'
                   }`}
                 >
                   <Utensils className="w-3.5 h-3.5" />
                 </div>
-                <p className="text-xs font-bold text-gray-900">In Kitchen</p>
-                <p className="text-[10px] text-gray-400">Slow Dum</p>
+                <p className={`text-xs font-bold ${isInKitchenActive ? 'text-gray-900' : 'text-gray-400'}`}>
+                  In Kitchen
+                </p>
+                <p className="text-[10px] text-gray-500 font-mono">
+                  {inKitchenTime || (isInKitchenActive ? 'In Kitchen' : 'Kitchen Prep')}
+                </p>
               </div>
 
-              {/* Step 3 */}
+              {/* Step 4: On The Way / Ready at Counter */}
               <div className="space-y-1">
                 <div
-                  className={`w-8 h-8 rounded-full mx-auto flex items-center justify-center font-bold text-xs transition-colors ${
-                    orderStage === 'Out for Delivery' ||
-                    orderStage === 'Ready for Pickup' ||
-                    orderStage === 'Picked Up' ||
-                    orderStage === 'Delivered'
-                      ? 'bg-orange-600 text-white shadow-xs'
+                  className={`w-8 h-8 rounded-full mx-auto flex items-center justify-center font-bold text-xs transition-all ${
+                    isTransitActive
+                      ? isCompletedActive
+                        ? 'bg-emerald-600 text-white shadow-xs'
+                        : 'bg-orange-600 text-white shadow-xs animate-pulse'
                       : 'bg-gray-100 text-gray-400'
                   }`}
                 >
@@ -1428,29 +1710,31 @@ export const CheckoutPage: React.FC = () => {
                     <Truck className="w-3.5 h-3.5" />
                   )}
                 </div>
-                <p className="text-xs font-bold text-gray-900">
-                  {isOrderPickup ? 'Ready at Counter' : 'On The Way'}
+                <p className={`text-xs font-bold ${isTransitActive ? 'text-gray-900' : 'text-gray-400'}`}>
+                  {isOrderPickup ? 'Ready' : 'On The Way'}
                 </p>
-                <p className="text-[10px] text-gray-400">
-                  {isOrderPickup ? 'Packed Hot' : 'Insulated Box'}
+                <p className="text-[10px] text-gray-500 font-mono">
+                  {transitTime || (isTransitActive ? (isOrderPickup ? 'Packed Hot' : 'In Transit') : (isOrderPickup ? 'Counter' : 'Insulated Box'))}
                 </p>
               </div>
 
-              {/* Step 4 */}
+              {/* Step 5: Delivered / Picked Up */}
               <div className="space-y-1">
                 <div
-                  className={`w-8 h-8 rounded-full mx-auto flex items-center justify-center font-bold text-xs transition-colors ${
-                    orderStage === 'Delivered' || orderStage === 'Picked Up'
+                  className={`w-8 h-8 rounded-full mx-auto flex items-center justify-center font-bold text-xs transition-all ${
+                    isCompletedActive
                       ? 'bg-emerald-600 text-white shadow-xs'
                       : 'bg-gray-100 text-gray-400'
                   }`}
                 >
-                  🎉
+                  {isCompletedActive ? '🎉' : <Sparkles className="w-3.5 h-3.5" />}
                 </div>
-                <p className="text-xs font-bold text-gray-900">
+                <p className={`text-xs font-bold ${isCompletedActive ? 'text-gray-900' : 'text-gray-400'}`}>
                   {isOrderPickup ? 'Picked Up' : 'Delivered'}
                 </p>
-                <p className="text-[10px] text-gray-400">Enjoy Feast</p>
+                <p className="text-[10px] text-gray-500 font-mono">
+                  {completedTime || (isCompletedActive ? 'Delighted' : 'Enjoy Feast')}
+                </p>
               </div>
             </div>
           </div>
@@ -2296,72 +2580,99 @@ export const CheckoutPage: React.FC = () => {
                         />
                       </div>
 
-                      <div className="grid grid-cols-3 gap-2.5">
-                        <div>
-                          <label className="block text-xs font-semibold text-gray-700 mb-1">
-                            City <span className="text-rose-600">*</span>
-                          </label>
-                          <input
-                            type="text"
-                            name="city"
-                            placeholder="e.g. Bhubaneswar"
-                            value={formData.city}
-                            onChange={handleChange}
-                            onBlur={() => handleBlur('city')}
-                            className={`w-full px-3 py-2 bg-gray-50 border rounded-xl text-xs sm:text-sm focus:outline-none transition-colors ${
-                              touched.city && errors.city
-                                ? 'border-rose-500 bg-rose-50/40 focus:border-rose-600 text-rose-950'
-                                : 'border-gray-200 focus:border-orange-500 focus:bg-white text-gray-900'
-                            }`}
-                          />
-                          {touched.city && errors.city && (
-                            <p className="mt-1 text-[10px] text-rose-600 font-medium">{errors.city}</p>
-                          )}
-                        </div>
+                      {/* City, State & PIN Code Grid with PIN-First auto-detection and Locked City/State */}
+                      <div>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                          {/* 1. PIN Code (First) */}
+                          <div>
+                            <label className="block text-xs font-semibold text-gray-700 mb-1 flex items-center justify-between">
+                              <span>PIN Code <span className="text-rose-600">*</span></span>
+                              {isPinLookupLoading && (
+                                <span className="text-[10px] text-amber-800 flex items-center gap-1 font-medium">
+                                  <Loader2 className="w-3 h-3 animate-spin" />
+                                  Detecting...
+                                </span>
+                              )}
+                            </label>
+                            <div className="relative">
+                              <input
+                                type="text"
+                                name="pincode"
+                                maxLength={6}
+                                placeholder="e.g. 751028"
+                                value={formData.pincode}
+                                onChange={handleChange}
+                                onBlur={() => handleBlur('pincode')}
+                                className={`w-full px-3 py-2 bg-gray-50 border rounded-xl text-xs sm:text-sm font-mono tracking-wider focus:outline-none transition-colors ${
+                                  touched.pincode && errors.pincode
+                                    ? 'border-rose-500 bg-rose-50/40 focus:border-rose-600 text-rose-950'
+                                    : 'border-gray-200 focus:border-amber-800 focus:bg-white text-gray-900'
+                                }`}
+                              />
+                              {isPinComplete && !isPinLookupLoading && (
+                                <div className="absolute right-2.5 top-1/2 -translate-y-1/2">
+                                  <Check className="w-4 h-4 text-emerald-600" />
+                                </div>
+                              )}
+                            </div>
+                            {touched.pincode && errors.pincode && (
+                              <p className="mt-1 text-[10px] text-rose-600 font-medium">{errors.pincode}</p>
+                            )}
+                          </div>
 
-                        <div>
-                          <label className="block text-xs font-semibold text-gray-700 mb-1">
-                            State (Odisha) <span className="text-rose-600">*</span>
-                          </label>
-                          <input
-                            type="text"
-                            name="state"
-                            placeholder="Odisha"
-                            value={formData.state}
-                            onChange={handleChange}
-                            onBlur={() => handleBlur('state')}
-                            className={`w-full px-3 py-2 bg-gray-50 border rounded-xl text-xs sm:text-sm focus:outline-none transition-colors ${
-                              touched.state && errors.state
-                                ? 'border-rose-500 bg-rose-50/40 focus:border-rose-600 text-rose-950'
-                                : 'border-gray-200 focus:border-orange-500 focus:bg-white text-gray-900'
-                            }`}
-                          />
-                          {touched.state && errors.state && (
-                            <p className="mt-1 text-[10px] text-rose-600 font-medium">{errors.state}</p>
-                          )}
-                        </div>
+                          {/* 2. City (Auto-filled & Read-only) */}
+                          <div>
+                            <label className="block text-xs font-semibold text-gray-700 mb-1 flex items-center justify-between">
+                              <span>City <span className="text-rose-600">*</span></span>
+                              <span className="text-[10px] text-stone-500 flex items-center gap-0.5">
+                                <Lock className="w-2.5 h-2.5" /> Auto-filled
+                              </span>
+                            </label>
+                            <div className="relative">
+                              <input
+                                type="text"
+                                name="city"
+                                readOnly
+                                disabled
+                                placeholder={isPinLookupLoading ? 'Detecting city...' : 'Auto-filled from PIN'}
+                                value={formData.city}
+                                className="w-full px-3 py-2 bg-stone-100/90 border border-stone-200 rounded-xl text-xs sm:text-sm text-stone-800 font-medium cursor-not-allowed select-none"
+                              />
+                              <div className="absolute right-2.5 top-1/2 -translate-y-1/2 text-stone-400">
+                                <Lock className="w-3.5 h-3.5" />
+                              </div>
+                            </div>
+                            {touched.city && errors.city && !formData.city && (
+                              <p className="mt-1 text-[10px] text-rose-600 font-medium">{errors.city}</p>
+                            )}
+                          </div>
 
-                        <div>
-                          <label className="block text-xs font-semibold text-gray-700 mb-1">
-                            PIN Code <span className="text-rose-600">*</span>
-                          </label>
-                          <input
-                            type="text"
-                            name="pincode"
-                            maxLength={6}
-                            placeholder="e.g. 751024"
-                            value={formData.pincode}
-                            onChange={handleChange}
-                            onBlur={() => handleBlur('pincode')}
-                            className={`w-full px-3 py-2 bg-gray-50 border rounded-xl text-xs sm:text-sm focus:outline-none transition-colors ${
-                              touched.pincode && errors.pincode
-                                ? 'border-rose-500 bg-rose-50/40 focus:border-rose-600 text-rose-950'
-                                : 'border-gray-200 focus:border-orange-500 focus:bg-white text-gray-900'
-                            }`}
-                          />
-                          {touched.pincode && errors.pincode && (
-                            <p className="mt-1 text-[10px] text-rose-600 font-medium">{errors.pincode}</p>
-                          )}
+                          {/* 3. State (Auto-filled & Read-only) */}
+                          <div>
+                            <label className="block text-xs font-semibold text-gray-700 mb-1 flex items-center justify-between">
+                              <span>State <span className="text-rose-600">*</span></span>
+                              <span className="text-[10px] text-stone-500 flex items-center gap-0.5">
+                                <Lock className="w-2.5 h-2.5" /> Auto-filled
+                              </span>
+                            </label>
+                            <div className="relative">
+                              <input
+                                type="text"
+                                name="state"
+                                readOnly
+                                disabled
+                                placeholder={isPinLookupLoading ? 'Detecting state...' : 'Auto-filled from PIN'}
+                                value={formData.state}
+                                className="w-full px-3 py-2 bg-stone-100/90 border border-stone-200 rounded-xl text-xs sm:text-sm text-stone-800 font-medium cursor-not-allowed select-none"
+                              />
+                              <div className="absolute right-2.5 top-1/2 -translate-y-1/2 text-stone-400">
+                                <Lock className="w-3.5 h-3.5" />
+                              </div>
+                            </div>
+                            {touched.state && errors.state && !formData.state && (
+                              <p className="mt-1 text-[10px] text-rose-600 font-medium">{errors.state}</p>
+                            )}
+                          </div>
                         </div>
                       </div>
 
@@ -2381,61 +2692,6 @@ export const CheckoutPage: React.FC = () => {
                             </strong>
                           </span>
                         </label>
-                      )}
-
-                      {/* Action buttons for Edit vs New address */}
-                      {isEditingSavedAddress && (
-                        <div className="pt-2 flex items-center justify-end gap-2">
-                          <button
-                            type="button"
-                            onClick={() => setIsEditingSavedAddress(false)}
-                            className="px-3 py-1.5 bg-stone-100 hover:bg-stone-200 text-stone-700 font-bold rounded-xl text-xs transition-colors cursor-pointer"
-                          >
-                            Cancel
-                          </button>
-                          <button
-                            type="button"
-                            onClick={handleSaveEditedAddress}
-                            disabled={isSavingAddressInProgress}
-                            className="px-4 py-1.5 bg-amber-800 hover:bg-amber-900 text-white font-bold rounded-xl text-xs shadow-xs transition-colors cursor-pointer flex items-center gap-1.5"
-                          >
-                            <Check className="w-3.5 h-3.5" />
-                            <span>{isSavingAddressInProgress ? 'Saving...' : 'Save Changes & Deliver Here'}</span>
-                          </button>
-                        </div>
-                      )}
-
-                      {isCustomAddressMode && (
-                        <div className="pt-2 flex items-center justify-end gap-2">
-                          {activeSavedAddress && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setIsCustomAddressMode(false);
-                                setFormData((prev) => ({
-                                  ...prev,
-                                  address: activeSavedAddress.fullAddress || '',
-                                  landmark: activeSavedAddress.landmark || '',
-                                  city: activeSavedAddress.city || prev.city,
-                                  state: activeSavedAddress.state || prev.state,
-                                  pincode: activeSavedAddress.pincode || prev.pincode,
-                                }));
-                              }}
-                              className="px-3 py-1.5 bg-stone-100 hover:bg-stone-200 text-stone-700 font-bold rounded-xl text-xs transition-colors cursor-pointer"
-                            >
-                              Cancel
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            onClick={handleSaveNewAddress}
-                            disabled={isSavingAddressInProgress}
-                            className="px-4 py-1.5 bg-amber-800 hover:bg-amber-900 text-white font-bold rounded-xl text-xs shadow-xs transition-colors cursor-pointer flex items-center gap-1.5"
-                          >
-                            <Check className="w-3.5 h-3.5" />
-                            <span>{isSavingAddressInProgress ? 'Saving...' : 'Save & Deliver Here'}</span>
-                          </button>
-                        </div>
                       )}
                     </div>
                   )}

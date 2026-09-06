@@ -19,9 +19,9 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { isSupabaseConfigured } from '../lib/supabase';
-import { fetchSupabaseOrdersByPhone } from '../lib/supabaseService';
+import { fetchSupabaseOrdersByPhone, fetchRatedOrderIds } from '../lib/supabaseService';
 import { Order } from '../types';
-import { PRODUCTS } from '../data/products';
+import { useProducts } from '../context/ProductContext';
 import { isProductAvailableAtOutlet, isProductInStockAtOutlet } from '../lib/locationService';
 import { OrderCard } from '../components/profile/OrderCard';
 import { OrderDetailsModal } from '../components/profile/OrderDetailsModal';
@@ -33,6 +33,7 @@ export const MyOrdersPage: React.FC = () => {
   const { goToHome, goToShop, goToProfile } = useNavigation();
   const { addToCart, showToast, setIsCartDrawerOpen } = useCart();
   const { currentOutlet } = useLocation();
+  const { allProducts } = useProducts();
 
   // Orders State
   const [orders, setOrders] = useState<Order[]>([]);
@@ -46,6 +47,7 @@ export const MyOrdersPage: React.FC = () => {
   // Selected Order Modals
   const [selectedOrderForDetails, setSelectedOrderForDetails] = useState<Order | null>(null);
   const [selectedOrderForReview, setSelectedOrderForReview] = useState<Order | null>(null);
+  const [ratedOrderIds, setRatedOrderIds] = useState<Set<string>>(new Set());
 
   // Fetch orders when customer phone is available
   const fetchOrders = async () => {
@@ -95,6 +97,48 @@ export const MyOrdersPage: React.FC = () => {
     }
   }, [customer?.phone]);
 
+  // Query which delivered orders have already been rated in product_reviews (Option A)
+  useEffect(() => {
+    if (!orders || orders.length === 0) {
+      setRatedOrderIds(new Set());
+      return;
+    }
+
+    const candidateIds: string[] = [];
+    orders.forEach((o) => {
+      const st = (o.status || (o as any).order_status || '').toLowerCase().trim();
+      if (st === 'delivered' || st === 'picked up') {
+        if (o.id) candidateIds.push(o.id);
+        if (o.orderId) candidateIds.push(o.orderId);
+        if ((o as any).orderNumber) candidateIds.push((o as any).orderNumber);
+      }
+    });
+
+    if (candidateIds.length === 0) return;
+
+    fetchRatedOrderIds(candidateIds)
+      .then((ratedIds) => {
+        if (Array.isArray(ratedIds) && ratedIds.length > 0) {
+          setRatedOrderIds(new Set(ratedIds));
+        }
+      })
+      .catch((err) => {
+        console.warn('Unable to check rated order status:', err);
+      });
+  }, [orders]);
+
+  // Check if an individual order is rated
+  const isOrderRated = (ord: Order | null | undefined): boolean => {
+    if (!ord) return false;
+    if (ord.isRated) return true;
+    if (ord.id && ratedOrderIds.has(ord.id)) return true;
+    if (ord.orderId && ratedOrderIds.has(ord.orderId)) return true;
+    if ((ord as any).orderNumber && ratedOrderIds.has((ord as any).orderNumber)) return true;
+    if (ord.id && ratedOrderIds.has(ord.id.replace(/^#+/, ''))) return true;
+    if (ord.orderId && ratedOrderIds.has(ord.orderId.replace(/^#+/, ''))) return true;
+    return false;
+  };
+
   // Reorder Handler (Outlet aware, verified portion stock, current catalog prices)
   const handleReorder = (orderToReorder: Order) => {
     if (!orderToReorder.items || orderToReorder.items.length === 0) {
@@ -115,7 +159,7 @@ export const MyOrdersPage: React.FC = () => {
       const itemQuantity = Number(rawItem.quantity || 1);
 
       // Find current product in catalog
-      const product = PRODUCTS.find(
+      const product = allProducts.find(
         (p) =>
           String(p.id) === String(productId) ||
           p.name.toLowerCase().trim() === itemName.toLowerCase().trim()
@@ -488,6 +532,7 @@ export const MyOrdersPage: React.FC = () => {
                     <OrderCard
                       key={ord.orderId || ord.id}
                       order={ord}
+                      isRated={isOrderRated(ord)}
                       isActiveOrder={isAct}
                       onViewDetails={(o) => setSelectedOrderForDetails(o)}
                       onReorder={handleReorder}
@@ -530,6 +575,7 @@ export const MyOrdersPage: React.FC = () => {
       {selectedOrderForDetails && (
         <OrderDetailsModal
           order={selectedOrderForDetails}
+          isRated={isOrderRated(selectedOrderForDetails)}
           onClose={() => setSelectedOrderForDetails(null)}
           onReorder={handleReorder}
           onRate={(o) => setSelectedOrderForReview(o)}
@@ -543,6 +589,30 @@ export const MyOrdersPage: React.FC = () => {
           onClose={() => setSelectedOrderForReview(null)}
           onSuccess={() => {
             showToast('Review Submitted', 'Thank you for your valuable feedback!', 'success');
+            if (selectedOrderForReview) {
+              const id1 = selectedOrderForReview.id;
+              const id2 = selectedOrderForReview.orderId;
+              const id3 = (selectedOrderForReview as any).orderNumber;
+              setRatedOrderIds((prev) => {
+                const next = new Set(prev);
+                if (id1) {
+                  next.add(id1);
+                  next.add(id1.replace(/^#+/, ''));
+                  next.add(`#${id1.replace(/^#+/, '')}`);
+                }
+                if (id2) {
+                  next.add(id2);
+                  next.add(id2.replace(/^#+/, ''));
+                  next.add(`#${id2.replace(/^#+/, '')}`);
+                }
+                if (id3) {
+                  next.add(id3);
+                  next.add(id3.replace(/^#+/, ''));
+                  next.add(`#${id3.replace(/^#+/, '')}`);
+                }
+                return next;
+              });
+            }
           }}
         />
       )}

@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { createClient } from '@supabase/supabase-js';
-import { productStorage, sanitizeOrderItem, deserializeOrderItem } from './server/storage';
+import { productStorage, sanitizeOrderItem, deserializeOrderItem, maskCustomerName, normalizePhone } from './server/storage';
 import {
   createSessionToken,
   verifySessionToken,
@@ -97,6 +97,96 @@ async function startServer() {
   // 3. Auth: Logout
   app.post('/api/auth/logout', (req, res) => {
     return res.json({ success: true, message: 'Logged out successfully' });
+  });
+
+  // 3a. PIN Code Lookup & Auto-fill endpoint
+  const serverPinCache = new Map<string, any>();
+  app.get('/api/pincode/lookup', async (req, res) => {
+    try {
+      const pinParam = typeof req.query.pin === 'string' ? req.query.pin : '';
+      const pin = pinParam.replace(/\D/g, '').slice(0, 6);
+
+      if (!pin || pin.length !== 6) {
+        return res.status(400).json({ success: false, error: 'Valid 6-digit PIN code is required' });
+      }
+
+      if (serverPinCache.has(pin)) {
+        return res.json({ success: true, details: serverPinCache.get(pin) });
+      }
+
+      // 1. Check if PIN matches known outlet or delivery zone
+      try {
+        const { data: zones } = await serverSupabase
+          .from('delivery_zones')
+          .select('pin_codes, outlet_id, name, outlets(id, name, city, state)');
+
+        if (Array.isArray(zones)) {
+          for (const z of zones) {
+            if (Array.isArray(z.pin_codes) && z.pin_codes.includes(pin)) {
+              const outlet = (z as any).outlets;
+              const details = {
+                pincode: pin,
+                city: outlet?.city || (pin.startsWith('751') || pin.startsWith('752') ? 'Bhubaneswar' : 'Bangalore'),
+                state: outlet?.state || (pin.startsWith('751') || pin.startsWith('752') ? 'Odisha' : 'Karnataka'),
+                area: z.name || outlet?.name,
+                found: true,
+              };
+              serverPinCache.set(pin, details);
+              return res.json({ success: true, details });
+            }
+          }
+        }
+      } catch (zoneErr) {
+        console.warn('Zone PIN lookup warning:', zoneErr);
+      }
+
+      // 2. Query India Post API
+      try {
+        const postRes = await fetch(`https://api.postalpincode.in/pincode/${encodeURIComponent(pin)}`);
+        if (postRes.ok) {
+          const postData = await postRes.json();
+          if (Array.isArray(postData) && postData[0]?.Status === 'Success' && Array.isArray(postData[0]?.PostOffice) && postData[0].PostOffice.length > 0) {
+            const po = postData[0].PostOffice[0];
+            let city = po.District || po.Division || po.Block || po.Circle || '';
+            if (city.toLowerCase().includes('bangalore') || city.toLowerCase().includes('bengaluru')) {
+              city = 'Bangalore';
+            } else if (city.toLowerCase().includes('khorda') || city.toLowerCase().includes('bhubaneswar')) {
+              city = 'Bhubaneswar';
+            }
+
+            const details = {
+              pincode: pin,
+              city: city || po.State,
+              state: po.State,
+              district: po.District,
+              area: po.Name,
+              found: true,
+            };
+            serverPinCache.set(pin, details);
+            return res.json({ success: true, details });
+          }
+        }
+      } catch (postErr) {
+        console.warn('India Post API error in server route:', postErr);
+      }
+
+      // 3. Known fallback ranges
+      if (/^751\d{3}$/.test(pin)) {
+        const details = { pincode: pin, city: 'Bhubaneswar', state: 'Odisha', found: true };
+        serverPinCache.set(pin, details);
+        return res.json({ success: true, details });
+      }
+      if (/^560\d{3}$/.test(pin)) {
+        const details = { pincode: pin, city: 'Bangalore', state: 'Karnataka', found: true };
+        serverPinCache.set(pin, details);
+        return res.json({ success: true, details });
+      }
+
+      return res.json({ success: false, error: 'PIN code not found' });
+    } catch (err: any) {
+      console.error('PIN lookup error:', err);
+      return res.status(500).json({ success: false, error: 'Internal server error' });
+    }
   });
 
   // 3b. Auth: Customer Send OTP
@@ -926,8 +1016,8 @@ async function startServer() {
   // REVIEWS & VERIFICATION ENDPOINTS
   // =====================
 
-  // Check review eligibility (Delivered order required)
-  app.get('/api/reviews/eligibility', (req, res) => {
+  // Check review eligibility (Delivered order required from Supabase or memory)
+  app.get('/api/reviews/eligibility', async (req, res) => {
     try {
       const productId = typeof req.query.productId === 'string' ? req.query.productId : '';
       const phone = typeof req.query.phone === 'string' ? req.query.phone : '';
@@ -946,6 +1036,76 @@ async function startServer() {
         });
       }
 
+      const normPhone = normalizePhone(identifier);
+      const pIdStr = String(productId).trim();
+
+      // 1. First check in Supabase public.orders
+      try {
+        const isUUID = (str?: string) =>
+          typeof str === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(str);
+
+        let supaOrders: any[] = [];
+        if (normPhone && normPhone.length >= 10) {
+          const { data } = await serverSupabase
+            .from('orders')
+            .select('*')
+            .ilike('customer_phone', `%${normPhone}%`);
+          if (Array.isArray(data)) supaOrders.push(...data);
+        }
+
+        if (isUUID(identifier)) {
+          const { data } = await serverSupabase
+            .from('orders')
+            .select('*')
+            .eq('customer_id', identifier);
+          if (Array.isArray(data)) supaOrders.push(...data);
+        }
+
+        if (supaOrders.length > 0) {
+          for (const ord of supaOrders) {
+            const rawStatus = (ord.order_status || ord.status || '').toLowerCase().trim();
+            const isDelivered = rawStatus === 'delivered';
+            if (!isDelivered) continue;
+
+            const deliveredAt = ord.delivered_at || ord.placed_at || ord.created_at;
+            const isWithin7Days = deliveredAt
+              ? Date.now() <= new Date(deliveredAt).getTime() + 7 * 24 * 60 * 60 * 1000
+              : true;
+
+            if (!isWithin7Days) continue;
+
+            let itemsList: any[] = [];
+            if (Array.isArray(ord.items)) {
+              itemsList = ord.items;
+            } else if (typeof ord.items === 'string') {
+              try {
+                itemsList = JSON.parse(ord.items);
+              } catch {
+                itemsList = [];
+              }
+            }
+
+            const hasItem = itemsList.some((it: any) => {
+              const itProdId = String(it.productId || it.product?.id || it.id || '');
+              return itProdId === pIdStr;
+            });
+
+            if (hasItem) {
+              return res.json({
+                success: true,
+                eligible: true,
+                verified: true,
+                orderId: ord.order_id || ord.id,
+                message: 'Eligible for verified rating! You ordered and received this authentic dish.',
+              });
+            }
+          }
+        }
+      } catch (dbErr) {
+        console.warn('Database review eligibility check notice:', dbErr);
+      }
+
+      // 2. Fallback check in local storage
       const check = productStorage.checkProductReviewEligibility(identifier, productId);
       return res.json({ success: true, ...check });
     } catch (err: any) {
@@ -954,8 +1114,8 @@ async function startServer() {
     }
   });
 
-  // Add verified review
-  app.post('/api/reviews', (req, res) => {
+  // Add verified review (Directly persists to Supabase public.product_reviews)
+  app.post('/api/reviews', async (req, res) => {
     try {
       const { productId, userName, userLocation, rating, comment, phone, customerId, orderId } = req.body;
 
@@ -966,10 +1126,74 @@ async function startServer() {
         });
       }
 
+      const numRating = Math.min(5, Math.max(1, Math.round(Number(rating))));
+      const cleanText = String(comment).trim().slice(0, 500);
       const identifier = customerId || phone;
+      const normPhone = phone ? normalizePhone(phone) : (identifier ? normalizePhone(identifier) : undefined);
+      const pIdStr = String(productId).trim();
+
+      // Check eligibility from Supabase or storage
+      let resolvedOrderId = orderId || '';
+      let isEligible = false;
+
       if (identifier) {
-        const check = productStorage.checkProductReviewEligibility(identifier, productId);
-        if (!check.eligible) {
+        try {
+          const isUUID = (str?: string) =>
+            typeof str === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(str);
+
+          let supaOrders: any[] = [];
+          if (normPhone && normPhone.length >= 10) {
+            const { data } = await serverSupabase
+              .from('orders')
+              .select('*')
+              .ilike('customer_phone', `%${normPhone}%`);
+            if (Array.isArray(data)) supaOrders.push(...data);
+          }
+
+          if (isUUID(identifier)) {
+            const { data } = await serverSupabase
+              .from('orders')
+              .select('*')
+              .eq('customer_id', identifier);
+            if (Array.isArray(data)) supaOrders.push(...data);
+          }
+
+          if (Array.isArray(supaOrders)) {
+            for (const ord of supaOrders) {
+              const rawStatus = (ord.order_status || ord.status || '').toLowerCase().trim();
+              if (rawStatus !== 'delivered') continue;
+
+              let itemsList: any[] = [];
+              if (Array.isArray(ord.items)) itemsList = ord.items;
+              else if (typeof ord.items === 'string') {
+                try { itemsList = JSON.parse(ord.items); } catch { itemsList = []; }
+              }
+
+              const hasItem = itemsList.some((it: any) => {
+                const itProdId = String(it.productId || it.product?.id || it.id || '');
+                return itProdId === pIdStr;
+              });
+
+              if (hasItem) {
+                isEligible = true;
+                resolvedOrderId = ord.order_id || ord.id;
+                break;
+              }
+            }
+          }
+        } catch (dbErr) {
+          console.warn('Review submission eligibility verify notice:', dbErr);
+        }
+
+        if (!isEligible) {
+          const check = productStorage.checkProductReviewEligibility(identifier, productId);
+          if (check.eligible) {
+            isEligible = true;
+            resolvedOrderId = check.orderId || resolvedOrderId;
+          }
+        }
+
+        if (!isEligible) {
           return res.status(403).json({
             success: false,
             error: 'Review submission is restricted to verified customers with delivered orders for this item.',
@@ -977,21 +1201,62 @@ async function startServer() {
         }
       }
 
+      const maskedName = maskCustomerName(userName || 'Verified Patron');
+      const isUUID = (str?: string) =>
+        typeof str === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(str);
+
+      // Save directly into Supabase public.product_reviews
+      let createdDbReview: any = null;
+      try {
+        const reviewPayload: any = {
+          product_id: pIdStr,
+          order_id: String(resolvedOrderId || 'GKSWAD-VERIFIED'),
+          order_item_id: `${resolvedOrderId || 'ord'}-${pIdStr}-0`,
+          outlet_id: 'bbsr-kendriyavihar',
+          rating: numRating,
+          review_text: cleanText,
+          customer_display_name: maskedName,
+          customer_phone: normPhone || null,
+          is_verified_purchase: true,
+          is_published: true,
+          reviewed_at: new Date().toISOString(),
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+
+        if (customerId && isUUID(customerId)) {
+          reviewPayload.customer_id = customerId;
+        }
+
+        const { data, error } = await serverSupabase
+          .from('product_reviews')
+          .insert(reviewPayload)
+          .select()
+          .maybeSingle();
+
+        if (data && !error) {
+          createdDbReview = data;
+        }
+      } catch (dbInsertErr) {
+        console.warn('Insert to Supabase product_reviews error:', dbInsertErr);
+      }
+
+      // Also mirror to local storage
       const result = productStorage.addVerifiedProductReview(productId, {
-        userName,
+        userName: maskedName,
         userLocation: userLocation || 'Verified Customer',
-        rating: Number(rating),
-        comment,
+        rating: numRating,
+        comment: cleanText,
         customerId,
-        phone,
-        orderId,
+        phone: normPhone,
+        orderId: resolvedOrderId,
       });
 
       return res.status(201).json({
         success: true,
         message: 'Your verified culinary review has been published!',
         product: result.product,
-        review: result.review,
+        review: createdDbReview ? mapDbReview(createdDbReview) : result.review,
       });
     } catch (err: any) {
       console.error('Submit review error:', err);
@@ -1966,8 +2231,109 @@ async function startServer() {
   });
 
   // =====================
-  // ORDERS ENDPOINTS
+  // ORDERS ENDPOINTS & HELPERS
   // =====================
+
+  async function getNextServerOrderId(): Promise<string> {
+    try {
+      const { data, error } = await serverSupabase
+        .from('orders')
+        .select('order_id, order_number')
+        .order('created_at', { ascending: false })
+        .limit(100);
+
+      if (error || !data || data.length === 0) {
+        return 'GKSWAD-#00001';
+      }
+
+      let maxNum = 0;
+      for (const row of data) {
+        const idToCheck = row.order_number || row.order_id;
+        if (idToCheck) {
+          const match = idToCheck.match(/GKSWAD-#?0*(\d+)/i) || idToCheck.match(/GKS-#?0*(\d+)/i);
+          if (match && match[1]) {
+            const num = parseInt(match[1], 10);
+            if (!isNaN(num) && num > maxNum) {
+              maxNum = num;
+            }
+          }
+        }
+      }
+      const nextSeq = maxNum + 1;
+      return `GKSWAD-#${String(nextSeq).padStart(5, '0')}`;
+    } catch {
+      return 'GKSWAD-#00001';
+    }
+  }
+
+  function mapDbOrderRow(data: any): any {
+    if (!data) return null;
+    const isPickup = data.order_type === 'pickup' || !!data.is_self_pickup;
+    const rawStatus = String(data.order_status || data.status || 'received').toLowerCase().trim();
+    const displayStatus =
+      rawStatus === 'received'
+        ? 'Received'
+        : rawStatus === 'confirmed'
+        ? 'Confirmed'
+        : rawStatus === 'preparing' || rawStatus === 'in kitchen' || rawStatus === 'preparing in kitchen'
+        ? 'Preparing in Kitchen'
+        : rawStatus === 'ready'
+        ? 'Ready'
+        : rawStatus === 'ready_for_pickup' || rawStatus === 'ready for pickup'
+        ? 'Ready for Pickup'
+        : rawStatus === 'ready_for_dispatch' || rawStatus === 'ready for dispatch'
+        ? 'Ready for Dispatch'
+        : rawStatus === 'out_for_delivery' || rawStatus === 'out for delivery'
+        ? 'Out for Delivery'
+        : rawStatus === 'delivered'
+        ? 'Delivered'
+        : rawStatus === 'picked_up' || rawStatus === 'picked up'
+        ? 'Picked Up'
+        : rawStatus === 'cancelled'
+        ? 'Cancelled'
+        : rawStatus.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase());
+
+    return {
+      id: data.id,
+      orderId: data.order_id || data.order_number || data.id,
+      orderNumber: data.order_number || data.order_id,
+      outletId: data.outlet_id,
+      outletName: data.outlet_name || (data.delivery_address_snapshot as any)?.outletName || undefined,
+      customerId: data.customer_id,
+      addressId: isPickup ? undefined : (data.address_id || undefined),
+      orderType: data.order_type || (isPickup ? 'pickup' : 'delivery'),
+      isSelfPickup: isPickup,
+      items: Array.isArray(data.items) ? data.items.map(deserializeOrderItem) : [],
+      subtotal: Number(data.subtotal || 0),
+      discount: Number(data.discount_amount || data.discount || 0),
+      welcomeDiscountAmount: Number(data.welcome_discount_amount || 0),
+      isWelcomeDiscountApplied: !!data.welcome_discount_applied,
+      deliveryFee: Number(data.delivery_fee || 0),
+      packagingFee: Number(data.packaging_fee || 0),
+      gst: Number(data.tax_amount || data.gst || 0),
+      total: Number(data.total_amount || data.total || 0),
+      couponCode: data.discount_code || data.coupon_code || undefined,
+      deliveryPinCode: data.delivery_pincode || '',
+      customerDetails: data.customer_details || {
+        fullName: data.customer_name,
+        phone: data.customer_phone,
+      },
+      deliveryAddressSnapshot: isPickup ? undefined : (data.delivery_address_snapshot || undefined),
+      status: displayStatus,
+      orderStatus: data.order_status,
+      estimatedDeliveryMinutes: data.estimated_delivery_minutes || (isPickup ? 25 : 35),
+      createdAt: data.placed_at || data.created_at,
+      placedAt: data.placed_at || data.created_at,
+      confirmedAt: data.confirmed_at || undefined,
+      preparingAt: data.preparing_at || undefined,
+      readyAt: data.ready_at || undefined,
+      outForDeliveryAt: data.out_for_delivery_at || undefined,
+      deliveredAt: data.delivered_at || undefined,
+      cancelledAt: data.cancelled_at || undefined,
+      cancellationReason: data.cancellation_reason || undefined,
+      scheduledAt: data.scheduled_at || undefined,
+    };
+  }
 
   // 21. Orders: Create Order (Fresh Implementation with server-side discount & totals recalculation and Supabase synchronization)
   app.post('/api/orders', async (req, res) => {
@@ -2231,35 +2597,49 @@ async function startServer() {
           }
         }
 
+        let finalOrderId = order.orderId;
+        if (!finalOrderId || finalOrderId === 'GKSWAD-#001') {
+          finalOrderId = await getNextServerOrderId();
+        }
+
+        // Check if finalOrderId already exists in Supabase to prevent duplicate key constraint violation
+        const { data: existingOrderCheck } = await serverSupabase
+          .from('orders')
+          .select('id, order_number')
+          .or(`order_number.eq.${finalOrderId},order_id.eq.${finalOrderId}`)
+          .maybeSingle();
+
+        if (existingOrderCheck) {
+          finalOrderId = await getNextServerOrderId();
+        }
+
         const supaPayload: any = {
           id: order.id || `order-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
-          order_id: order.orderId,
+          order_id: finalOrderId,
+          order_number: finalOrderId,
           outlet_id: safeOutletId,
           customer_id: isUUID(supaCustomerId) ? supaCustomerId : null,
-          address_id: isUUID(supaAddressId) ? supaAddressId : null,
+          address_id: isSelfPickup ? null : (isUUID(supaAddressId) ? supaAddressId : null),
           customer_name: supaCustomerName,
           customer_phone: supaCustomerPhone,
           order_type: isSelfPickup ? 'pickup' : 'delivery',
           is_self_pickup: isSelfPickup,
           items: safeItems,
           subtotal: Number(order.subtotal || 0),
-          discount: Number(order.discount || 0),
-          discount_amount: Number(order.discount || 0),
-          welcome_discount_applied: !!order.isWelcomeDiscountApplied,
-          welcome_discount_amount: Number(order.welcomeDiscountAmount || 0),
           delivery_fee: Number(order.deliveryFee || 0),
           packaging_fee: Number(order.packagingFee || 0),
+          discount_amount: Number(order.discount || 0),
           tax_amount: Number(order.gst || 0),
-          gst: Number(order.gst || 0),
           total_amount: Number(order.total || 0),
-          total: Number(order.total || 0),
-          coupon_code: order.couponCode || null,
+          discount_type: (order.discount && Number(order.discount) > 0) ? 'coupon' : 'NONE',
           discount_code: order.couponCode || null,
+          discount_description: null,
+          welcome_discount_applied: !!order.isWelcomeDiscountApplied,
+          welcome_discount_amount: Number(order.welcomeDiscountAmount || 0),
           payment_method: order.customerDetails?.paymentMethod || 'cod',
           payment_status: 'PENDING',
           delivery_type: deliveryType,
           scheduled_at: scheduledAt,
-          delivery_notes: supaDeliveryInstructions,
           delivery_instructions: supaDeliveryInstructions,
           order_status: (order.orderStatus || order.status || 'received').toLowerCase().replace(/\s+/g, '_'),
           placed_at: new Date().toISOString(),
@@ -2269,19 +2649,32 @@ async function startServer() {
           out_for_delivery_at: null,
           delivered_at: null,
           cancelled_at: null,
+          cancellation_reason: null,
           customer_details: order.customerDetails || {},
-          delivery_address_snapshot: order.deliveryAddressSnapshot || {},
+          delivery_address_snapshot: isSelfPickup ? null : (order.deliveryAddressSnapshot || null),
           delivery_pincode: order.deliveryPinCode || order.customerDetails?.pincode || '',
-          estimated_delivery_minutes: Number(order.estimatedDeliveryMinutes || 35),
+          estimated_delivery_minutes: Number(order.estimatedDeliveryMinutes || (isSelfPickup ? 25 : 35)),
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
         };
 
-        const res1 = await serverSupabase
+        let res1 = await serverSupabase
           .from('orders')
           .insert(supaPayload)
           .select()
           .single();
+
+        // If duplicate constraint race occurs, retry with newly computed next ID
+        if (res1.error && (res1.error.code === '23505' || res1.error.message.includes('unique constraint') || res1.error.message.includes('order_number'))) {
+          const freshId = await getNextServerOrderId();
+          supaPayload.order_id = freshId;
+          supaPayload.order_number = freshId;
+          res1 = await serverSupabase
+            .from('orders')
+            .insert(supaPayload)
+            .select()
+            .single();
+        }
 
         if (res1.data) {
           console.log(`Order ${res1.data.order_id || res1.data.id} successfully persisted to Supabase.`);
@@ -2520,46 +2913,22 @@ async function startServer() {
   // 22. Orders: Get Single Order
   app.get('/api/orders/:orderId', async (req, res) => {
     try {
-      let order = productStorage.getOrderById(req.params.orderId);
-      if (!order) {
-        // Try Supabase lookup
-        try {
-          const { data } = await serverSupabase
-            .from('orders')
-            .select('*')
-            .or(`order_id.eq.${req.params.orderId},id.eq.${req.params.orderId}`)
-            .maybeSingle();
+      const param = req.params.orderId;
+      try {
+        const { data } = await serverSupabase
+          .from('orders')
+          .select('*')
+          .or(`order_number.eq.${param},order_id.eq.${param},id.eq.${param}`)
+          .maybeSingle();
 
-          if (data) {
-            order = {
-              id: data.id,
-              orderId: data.order_id,
-              outletId: data.outlet_id,
-              customerId: data.customer_id,
-              addressId: data.address_id,
-              orderType: data.order_type || (data.is_self_pickup ? 'pickup' : 'delivery'),
-              isSelfPickup: !!data.is_self_pickup,
-              items: Array.isArray(data.items) ? data.items.map(deserializeOrderItem) : [],
-              subtotal: Number(data.subtotal || 0),
-              discount: Number(data.discount || 0),
-              welcomeDiscountAmount: Number(data.welcome_discount_amount || 0),
-              isWelcomeDiscountApplied: !!data.welcome_discount_applied,
-              deliveryFee: Number(data.delivery_fee || 0),
-              packagingFee: Number(data.packaging_fee || 0),
-              gst: Number(data.gst || 0),
-              total: Number(data.total || 0),
-              couponCode: data.coupon_code || undefined,
-              deliveryPinCode: data.delivery_pincode || '',
-              customerDetails: data.customer_details || {},
-              deliveryAddressSnapshot: data.delivery_address_snapshot || {},
-              status: data.status || 'Received',
-              estimatedDeliveryMinutes: data.estimated_delivery_minutes || 35,
-              createdAt: data.created_at,
-            };
-          }
-        } catch {}
+        if (data) {
+          return res.json({ success: true, order: mapDbOrderRow(data) });
+        }
+      } catch (e) {
+        console.warn('Supabase get order notice:', e);
       }
 
+      const order = productStorage.getOrderById(param);
       if (!order) {
         return res.status(404).json({ success: false, error: 'Order not found' });
       }
@@ -2570,16 +2939,621 @@ async function startServer() {
     }
   });
 
-  // 23. Orders: List Orders (Supports filtering by outletId and status)
-  app.get('/api/orders', (req, res) => {
+  // 23. Orders: List Orders (Supports filtering by outletId, status, phone, customerId)
+  app.get('/api/orders', async (req, res) => {
     try {
       const outletId = req.query.outletId as string | undefined;
       const status = req.query.status as string | undefined;
+      const phone = req.query.phone as string | undefined;
+      const customerId = req.query.customerId as string | undefined;
+
+      try {
+        let supaQuery = serverSupabase.from('orders').select('*').order('created_at', { ascending: false });
+        if (outletId) {
+          supaQuery = supaQuery.eq('outlet_id', outletId);
+        }
+        if (customerId) {
+          supaQuery = supaQuery.eq('customer_id', customerId);
+        }
+        if (phone) {
+          const cleanPhone = phone.replace(/\D/g, '').slice(-10);
+          supaQuery = supaQuery.ilike('customer_phone', `%${cleanPhone}%`);
+        }
+
+        const { data, error } = await supaQuery;
+        if (!error && data && data.length > 0) {
+          let mapped = data.map(mapDbOrderRow);
+          if (status) {
+            const normStatus = status.toLowerCase().replace(/\s+/g, '_');
+            mapped = mapped.filter((o: any) =>
+              (o.orderStatus || '').toLowerCase() === normStatus ||
+              (o.status || '').toLowerCase() === status.toLowerCase()
+            );
+          }
+          return res.json({ success: true, orders: mapped, count: mapped.length });
+        }
+      } catch (supaErr) {
+        console.warn('GET /api/orders Supabase query notice:', supaErr);
+      }
+
       const orders = productStorage.getAllOrders(outletId, status);
       return res.json({ success: true, orders, count: orders.length });
     } catch (err: any) {
       console.error('Fetch orders error:', err);
       return res.status(500).json({ success: false, error: 'Failed to retrieve orders' });
+    }
+  });
+
+  // =====================
+  // VERIFIED FOOD RATING & REVIEW ENDPOINTS
+  // =====================
+
+  // Helper to map DB review row to clean API format
+  function mapDbReview(row: any) {
+    if (!row) return null;
+    return {
+      id: row.id,
+      orderItemId: row.order_item_id,
+      orderId: row.order_id,
+      productId: String(row.product_id),
+      outletId: row.outlet_id,
+      customerId: row.customer_id,
+      customerDisplayName: row.customer_display_name || 'Verified Customer',
+      rating: Number(row.rating || 5),
+      reviewText: row.review_text || undefined,
+      isVerifiedPurchase: row.is_verified_purchase !== false,
+      isPublished: row.is_published !== false,
+      reviewedAt: row.reviewed_at || row.created_at,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  // 23c. Batch check which orders are already rated in product_reviews
+  app.post('/api/orders/rated-status', async (req, res) => {
+    try {
+      const { orderIds } = req.body || {};
+      if (!Array.isArray(orderIds) || orderIds.length === 0) {
+        return res.json({ success: true, ratedOrderIds: [] });
+      }
+
+      const candidateSet = new Set<string>();
+      for (const raw of orderIds) {
+        const str = String(raw || '').trim();
+        if (str) {
+          candidateSet.add(str);
+          const clean = str.replace(/^#+/, '');
+          candidateSet.add(clean);
+          candidateSet.add(`#${clean}`);
+        }
+      }
+
+      const candidateList = Array.from(candidateSet);
+      const { data, error } = await serverSupabase
+        .from('product_reviews')
+        .select('order_id, rating')
+        .in('order_id', candidateList);
+
+      if (error) {
+        console.warn('/api/orders/rated-status query error:', error);
+        return res.json({ success: true, ratedOrderIds: [] });
+      }
+
+      const foundSet = new Set<string>();
+      (data || []).forEach((row: any) => {
+        if (row.order_id) {
+          const r = String(row.order_id).trim();
+          foundSet.add(r);
+          const c = r.replace(/^#+/, '');
+          foundSet.add(c);
+          foundSet.add(`#${c}`);
+        }
+      });
+
+      return res.json({
+        success: true,
+        ratedOrderIds: Array.from(foundSet),
+      });
+    } catch (err: any) {
+      console.warn('/api/orders/rated-status catch error:', err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // 24a. Get Reviewable Items for an Order (Checks Delivered status and 7-day window from DB ONLY)
+  app.get('/api/orders/:orderId/reviewable-items', async (req, res) => {
+    try {
+      const rawOrderId = String(req.params.orderId || '').trim();
+      const noHashOrderId = rawOrderId.replace(/^#+/, '');
+
+      // 1. Fetch order from Supabase
+      let orderRow: any = null;
+      try {
+        const q1 = await serverSupabase.from('orders').select('*').eq('order_id', rawOrderId).maybeSingle();
+        if (q1.data) {
+          orderRow = q1.data;
+        } else {
+          const q2 = await serverSupabase.from('orders').select('*').eq('order_id', noHashOrderId).maybeSingle();
+          if (q2.data) {
+            orderRow = q2.data;
+          } else {
+            const q3 = await serverSupabase.from('orders').select('*').eq('id', rawOrderId).maybeSingle();
+            if (q3.data) {
+              orderRow = q3.data;
+            } else {
+              const q4 = await serverSupabase.from('orders').select('*').ilike('order_id', `%${noHashOrderId}%`).maybeSingle();
+              if (q4.data) orderRow = q4.data;
+            }
+          }
+        }
+      } catch (dbErr) {
+        console.error('Fetch order from Supabase error:', dbErr);
+      }
+
+      // If not in Supabase, check storage for order metadata (e.g. guest checkout placed before DB sync)
+      if (!orderRow) {
+        const localOrd: any = productStorage.getOrderById(rawOrderId) || productStorage.getOrderById(noHashOrderId);
+        if (localOrd) {
+          orderRow = {
+            id: localOrd.id,
+            order_id: localOrd.orderId || localOrd.id,
+            status: localOrd.status,
+            order_status: localOrd.status,
+            items: localOrd.items,
+            outlet_id: localOrd.outletId,
+            delivered_at: localOrd.statusTimeline?.find((t: any) => t.status?.toLowerCase() === 'delivered')?.timestamp || localOrd.createdAt,
+            placed_at: localOrd.createdAt,
+            created_at: localOrd.createdAt,
+          };
+        }
+      }
+
+      if (!orderRow) {
+        return res.status(404).json({ success: false, error: `Order ${rawOrderId} not found in database.` });
+      }
+
+      const rawStatus = String(orderRow.order_status || orderRow.status || '').toLowerCase().trim();
+      const isDelivered = rawStatus === 'delivered';
+      const deliveredAt = orderRow.delivered_at || (isDelivered ? (orderRow.placed_at || orderRow.created_at) : undefined);
+
+      let isEligible = false;
+      let isExpired = false;
+      let remainingDays = 0;
+      let deadlineIso: string | undefined = undefined;
+
+      if (isDelivered && deliveredAt) {
+        const deliveredTime = new Date(deliveredAt).getTime();
+        const deadline = deliveredTime + 7 * 24 * 60 * 60 * 1000;
+        deadlineIso = new Date(deadline).toISOString();
+        const now = Date.now();
+
+        if (now <= deadline) {
+          isEligible = true;
+          isExpired = false;
+          remainingDays = Math.max(1, Math.ceil((deadline - now) / (24 * 60 * 60 * 1000)));
+        } else {
+          isEligible = false;
+          isExpired = true;
+          remainingDays = 0;
+        }
+      }
+
+      // Parse items
+      let itemsList: any[] = [];
+      if (Array.isArray(orderRow.items)) {
+        itemsList = orderRow.items;
+      } else if (typeof orderRow.items === 'string') {
+        try {
+          itemsList = JSON.parse(orderRow.items);
+        } catch {
+          itemsList = [];
+        }
+      }
+
+      // Fetch reviews for this order directly from Supabase product_reviews table ONLY
+      let dbReviews: any[] = [];
+      try {
+        const candidateKeys = [orderRow.id, orderRow.order_id, rawOrderId, noHashOrderId].filter(Boolean);
+        const { data: revData } = await serverSupabase
+          .from('product_reviews')
+          .select('*')
+          .in('order_id', candidateKeys);
+        if (revData && Array.isArray(revData)) {
+          dbReviews = revData;
+        }
+      } catch (dbRevErr) {
+        console.error('Fetch product_reviews from database error:', dbRevErr);
+      }
+
+      const reviewableItems = itemsList.map((it: any, index: number) => {
+        const productId = String(it.productId || it.product?.id || it.id || '');
+        const orderItemId = String(it.id || `${orderRow.order_id || orderRow.id}-${productId}-${index}`);
+        const productName = String(it.name || it.product_name || it.product?.name || `Dish #${productId}`);
+        const productImage = String(it.image || it.product?.image || '');
+        const variantName = it.selectedVariant?.name || it.variantName || it.product_variant_name || undefined;
+        const quantity = Math.max(1, Number(it.quantity) || 1);
+
+        // Match existing in DB strictly
+        const existing = dbReviews.find(
+          (r: any) =>
+            r.order_item_id === orderItemId ||
+            (String(r.product_id) === productId && (r.order_id === orderRow.id || r.order_id === orderRow.order_id || r.order_id === rawOrderId || r.order_id === noHashOrderId))
+        );
+
+        return {
+          orderItemId,
+          productId,
+          productName,
+          productImage,
+          variantName,
+          quantity,
+          reviewed: !!existing,
+          reviewId: existing?.id,
+          rating: existing?.rating,
+          reviewText: existing?.review_text,
+          reviewedAt: existing?.reviewed_at || existing?.created_at,
+          isVerifiedPurchase: existing ? existing.is_verified_purchase !== false : true,
+        };
+      });
+
+      const isFullyReviewed = reviewableItems.length > 0 && reviewableItems.every((it) => it.reviewed);
+
+      let eligibilityMessage = '';
+      if (!isDelivered) {
+        eligibilityMessage = 'Rating will be unlocked once your order is delivered.';
+      } else if (isExpired) {
+        eligibilityMessage = 'The 7-day review window for this order has ended.';
+      } else if (isFullyReviewed) {
+        eligibilityMessage = 'You have shared feedback for all items in this order. You can edit your reviews anytime within the 7-day window.';
+      } else {
+        eligibilityMessage = `Verified Purchase: Rate your dishes (${remainingDays} ${remainingDays === 1 ? 'day' : 'days'} left).`;
+      }
+
+      return res.json({
+        success: true,
+        orderId: orderRow.order_id || orderRow.id,
+        orderStatus: rawStatus,
+        isDelivered,
+        deliveredAt,
+        isEligible,
+        isExpired,
+        deadline: deadlineIso,
+        remainingDays,
+        isFullyReviewed,
+        eligibilityMessage,
+        items: reviewableItems,
+      });
+    } catch (err: any) {
+      console.error('Fetch reviewable items error:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Failed to fetch reviewable items' });
+    }
+  });
+
+  // 24b. Submit Verified Food Review (Protected & Verified Order Item Check)
+  app.post('/api/product-reviews', async (req, res) => {
+    try {
+      const { orderItemId, orderId, productId, rating, reviewText, customerId, customerName, customerPhone } = req.body;
+
+      if (!orderItemId && !productId) {
+        return res.status(400).json({ success: false, error: 'Order item or product reference is required.' });
+      }
+
+      const numRating = Math.round(Number(rating));
+      if (isNaN(numRating) || numRating < 1 || numRating > 5) {
+        return res.status(400).json({ success: false, error: 'Rating must be an integer between 1 and 5 stars.' });
+      }
+
+      const cleanText = (reviewText || '').trim().slice(0, 500);
+      const effectiveCustId = customerId || (customerPhone ? normalizePhone(customerPhone) : 'verified-guest');
+      const maskedName = maskCustomerName(customerName || 'Valued Patron');
+
+      const isUUID = (str?: string) =>
+        typeof str === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(str);
+
+      // 1. Resolve order details from DB or memory
+      let targetOrderId = orderId || '';
+      let targetProductId = productId ? String(productId) : '';
+      let targetOutletId = 'bbsr-kendriyavihar';
+      let validCustomerUuid: string | null = isUUID(effectiveCustId) ? effectiveCustId : null;
+
+      try {
+        const rawIdentifier = String(targetOrderId || (orderItemId ? orderItemId.split('-')[0] : '')).trim();
+        const noHashIdentifier = rawIdentifier.replace(/^#+/, '');
+
+        if (rawIdentifier) {
+          let orderRow: any = null;
+
+          // Search order in Supabase without broken .or() syntax
+          const q1 = await serverSupabase.from('orders').select('*').eq('order_id', rawIdentifier).maybeSingle();
+          if (q1.data) {
+            orderRow = q1.data;
+          } else {
+            const q2 = await serverSupabase.from('orders').select('*').eq('order_id', noHashIdentifier).maybeSingle();
+            if (q2.data) {
+              orderRow = q2.data;
+            } else {
+              const q3 = await serverSupabase.from('orders').select('*').eq('id', rawIdentifier).maybeSingle();
+              if (q3.data) {
+                orderRow = q3.data;
+              } else {
+                const q4 = await serverSupabase.from('orders').select('*').ilike('order_id', `%${noHashIdentifier}%`).maybeSingle();
+                if (q4.data) orderRow = q4.data;
+              }
+            }
+          }
+
+          if (orderRow) {
+            targetOrderId = orderRow.id || orderRow.order_id || targetOrderId;
+            targetOutletId = orderRow.outlet_id || targetOutletId;
+            if (orderRow.customer_id && isUUID(orderRow.customer_id)) {
+              validCustomerUuid = orderRow.customer_id;
+            }
+
+            const rawStatus = (orderRow.order_status || orderRow.status || '').toLowerCase().trim();
+            if (rawStatus && rawStatus !== 'delivered') {
+              return res.status(400).json({ success: false, error: 'You can only review items from delivered orders.' });
+            }
+
+            const delAt = orderRow.delivered_at || orderRow.placed_at || orderRow.created_at;
+            if (delAt) {
+              const deadline = new Date(delAt).getTime() + 7 * 24 * 60 * 60 * 1000;
+              if (Date.now() > deadline) {
+                return res.status(400).json({ success: false, error: 'The 7-day review period for this order has expired.' });
+              }
+            }
+          }
+        }
+      } catch (dbCheckErr) {
+        console.warn('Supabase review order resolution notice:', dbCheckErr);
+      }
+
+      if (!targetProductId && orderItemId) {
+        const parts = orderItemId.split('-');
+        if (parts.length >= 2) targetProductId = parts[1];
+        else targetProductId = '1';
+      }
+
+      // Check if duplicate review exists in Supabase, and update it directly
+      let existingDbReviewId: string | null = null;
+      try {
+        if (orderItemId) {
+          const { data: dup1 } = await serverSupabase
+            .from('product_reviews')
+            .select('id')
+            .eq('order_item_id', orderItemId)
+            .maybeSingle();
+          if (dup1?.id) existingDbReviewId = dup1.id;
+        }
+
+        if (!existingDbReviewId && targetOrderId && targetProductId) {
+          const { data: dup2 } = await serverSupabase
+            .from('product_reviews')
+            .select('id')
+            .eq('order_id', targetOrderId)
+            .eq('product_id', targetProductId)
+            .maybeSingle();
+          if (dup2?.id) existingDbReviewId = dup2.id;
+        }
+      } catch (chkErr) {
+        console.warn('Duplicate review check notice:', chkErr);
+      }
+
+      if (existingDbReviewId) {
+        // Direct UPDATE on product_reviews table
+        const { data, error } = await serverSupabase
+          .from('product_reviews')
+          .update({
+            rating: numRating,
+            review_text: cleanText || null,
+            customer_display_name: maskedName,
+            customer_phone: customerPhone ? normalizePhone(customerPhone) : null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', existingDbReviewId)
+          .select()
+          .maybeSingle();
+
+        if (error) {
+          console.error('Supabase product_reviews update error:', error.message);
+          return res.status(500).json({ success: false, error: `Database update failed: ${error.message}` });
+        }
+
+        return res.status(200).json({
+          success: true,
+          review: mapDbReview(data),
+          message: 'Your review has been updated successfully in product_reviews.',
+        });
+      } else {
+        // Direct INSERT on product_reviews table
+        const reviewPayload: any = {
+          product_id: String(targetProductId || '1'),
+          order_id: String(targetOrderId || 'order-verified'),
+          order_item_id: orderItemId || null,
+          outlet_id: targetOutletId,
+          rating: numRating,
+          review_text: cleanText || null,
+          customer_display_name: maskedName,
+          customer_phone: customerPhone ? normalizePhone(customerPhone) : null,
+          is_verified_purchase: true,
+          is_published: true,
+          reviewed_at: new Date().toISOString(),
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+
+        if (validCustomerUuid) {
+          reviewPayload.customer_id = validCustomerUuid;
+        }
+
+        const { data, error } = await serverSupabase
+          .from('product_reviews')
+          .insert(reviewPayload)
+          .select()
+          .maybeSingle();
+
+        if (error) {
+          console.error('Supabase product_reviews direct insert error:', error.message);
+          return res.status(500).json({ success: false, error: `Database insert failed: ${error.message}` });
+        }
+
+        return res.status(201).json({
+          success: true,
+          review: mapDbReview(data),
+          message: 'Thank you! Your verified food review has been saved to product_reviews.',
+        });
+      }
+    } catch (err: any) {
+      console.error('Submit product review error:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Failed to submit review' });
+    }
+  });
+
+  // 24c. Update Verified Review within 7-Day Window (DATABASE ONLY)
+  app.put('/api/product-reviews/:reviewId', async (req, res) => {
+    try {
+      const { reviewId } = req.params;
+      const { rating, reviewText } = req.body;
+
+      const numRating = Math.round(Number(rating));
+      if (isNaN(numRating) || numRating < 1 || numRating > 5) {
+        return res.status(400).json({ success: false, error: 'Rating must be an integer between 1 and 5 stars.' });
+      }
+
+      const cleanText = (reviewText || '').trim().slice(0, 500);
+
+      // Direct Update in Supabase
+      const { data, error } = await serverSupabase
+        .from('product_reviews')
+        .update({
+          rating: numRating,
+          review_text: cleanText || null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', reviewId)
+        .select()
+        .maybeSingle();
+
+      if (error) {
+        console.error('Supabase product review update error:', error.message);
+        return res.status(500).json({ success: false, error: `Database update failed: ${error.message}` });
+      }
+
+      if (!data) {
+        return res.status(404).json({ success: false, error: 'Review not found in product_reviews table.' });
+      }
+
+      return res.json({
+        success: true,
+        review: mapDbReview(data),
+        message: 'Your review has been updated successfully in the database.',
+      });
+    } catch (err: any) {
+      console.error('Update review error:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Failed to update review' });
+    }
+  });
+
+  // 24d. Get Published Reviews for a Product (DATABASE ONLY)
+  app.get('/api/products/:productId/reviews', async (req, res) => {
+    try {
+      const productId = String(req.params.productId);
+
+      const { data, error } = await serverSupabase
+        .from('product_reviews')
+        .select('*')
+        .eq('product_id', productId)
+        .eq('is_published', true)
+        .order('reviewed_at', { ascending: false });
+
+      if (error) {
+        console.error('Supabase product reviews fetch error:', error.message);
+        return res.status(500).json({ success: false, error: error.message });
+      }
+
+      const reviews = (data || []).map(mapDbReview);
+      return res.json({ success: true, reviews, count: reviews.length, source: 'database' });
+    } catch (err: any) {
+      console.error('Fetch product reviews error:', err);
+      return res.status(500).json({ success: false, error: 'Failed to fetch product reviews' });
+    }
+  });
+
+  // 24e. Get Rating Summary for a Product (DATABASE ONLY)
+  app.get('/api/products/:productId/rating', async (req, res) => {
+    try {
+      const productId = String(req.params.productId);
+
+      const { data, error } = await serverSupabase
+        .from('product_reviews')
+        .select('rating, is_verified_purchase')
+        .eq('product_id', productId)
+        .eq('is_published', true);
+
+      if (error) {
+        console.error('Supabase product rating summary query error:', error.message);
+        return res.status(500).json({ success: false, error: error.message });
+      }
+
+      const rows = data || [];
+      const breakdown: Record<1 | 2 | 3 | 4 | 5, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+      let sum = 0;
+      let verifiedCount = 0;
+
+      for (const row of rows) {
+        const star = (Math.min(5, Math.max(1, Math.round(Number(row.rating) || 5))) as 1 | 2 | 3 | 4 | 5);
+        breakdown[star] = (breakdown[star] || 0) + 1;
+        sum += star;
+        if (row.is_verified_purchase !== false) verifiedCount++;
+      }
+
+      const totalReviews = rows.length;
+      const averageRating = totalReviews > 0 ? Number((sum / totalReviews).toFixed(1)) : 4.5;
+
+      return res.json({
+        success: true,
+        rating: {
+          productId,
+          averageRating,
+          totalReviews,
+          totalVerifiedRatings: verifiedCount,
+          breakdown,
+        },
+        source: 'database',
+      });
+    } catch (err: any) {
+      console.error('Fetch product rating error:', err);
+      return res.status(500).json({ success: false, error: 'Failed to fetch product rating summary' });
+    }
+  });
+
+  // 24f. Reviews & Database Diagnostics
+  app.get('/api/database/reviews-diagnostics', async (req, res) => {
+    try {
+      const productReviewsCheck = await serverSupabase.from('product_reviews').select('count', { count: 'exact', head: true });
+      const reviewsCheck = await serverSupabase.from('reviews').select('count', { count: 'exact', head: true });
+      const ordersCheck = await serverSupabase.from('orders').select('count', { count: 'exact', head: true });
+
+      return res.json({
+        success: true,
+        productReviewsTable: {
+          accessible: !productReviewsCheck.error,
+          error: productReviewsCheck.error ? productReviewsCheck.error.message : null,
+          count: productReviewsCheck.count ?? null,
+        },
+        reviewsTable: {
+          accessible: !reviewsCheck.error,
+          error: reviewsCheck.error ? reviewsCheck.error.message : null,
+          count: reviewsCheck.count ?? null,
+        },
+        ordersTable: {
+          accessible: !ordersCheck.error,
+          error: ordersCheck.error ? ordersCheck.error.message : null,
+          count: ordersCheck.count ?? null,
+        },
+        storageReviewsCount: productStorage.getProductReviews().length,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
     }
   });
 

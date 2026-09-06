@@ -32,12 +32,15 @@ import {
   Filter,
   RotateCcw,
   Zap,
+  Lock,
+  Loader2,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { isSupabaseConfigured } from '../lib/supabase';
 import { fetchSupabaseOrdersByPhone } from '../lib/supabaseService';
+import { lookupPincode } from '../lib/pincodeService';
 import { CustomerAddress, Order, Product } from '../types';
-import { PRODUCTS } from '../data/products';
+import { useProducts } from '../context/ProductContext';
 import { isProductAvailableAtOutlet, isProductInStockAtOutlet } from '../lib/locationService';
 import { OrderCard } from '../components/profile/OrderCard';
 import { OrderDetailsModal } from '../components/profile/OrderDetailsModal';
@@ -62,6 +65,7 @@ export const ProfilePage: React.FC = () => {
   const { goToHome, goToShop, goToCheckout, goToOrders } = useNavigation();
   const { addToCart, showToast, setIsCartDrawerOpen } = useCart();
   const { currentOutlet } = useLocation();
+  const { allProducts } = useProducts();
 
   // Profile Form State
   const [fullName, setFullName] = useState(customer?.fullName || '');
@@ -86,7 +90,31 @@ export const ProfilePage: React.FC = () => {
   const [formIsDefault, setFormIsDefault] = useState(false);
 
   const [isSubmittingAddress, setIsSubmittingAddress] = useState(false);
+  const [isLookingUpModalPin, setIsLookingUpModalPin] = useState(false);
   const [addressFormError, setAddressFormError] = useState<string | null>(null);
+
+  const handleProfilePincodeChange = async (val: string) => {
+    const cleanPin = val.replace(/\D/g, '').slice(0, 6);
+    setFormPincode(cleanPin);
+    if (cleanPin.length === 6) {
+      setIsLookingUpModalPin(true);
+      try {
+        const details = await lookupPincode(cleanPin);
+        if (details && details.found && details.city) {
+          setFormCity(details.city);
+          setFormState(details.state || 'Odisha');
+          setAddressFormError(null);
+        }
+      } catch (err) {
+        console.warn('Profile PIN lookup error:', err);
+      } finally {
+        setIsLookingUpModalPin(false);
+      }
+    } else {
+      setFormCity('');
+      setFormState('');
+    }
+  };
   const [addressFeedbackMessage, setAddressFeedbackMessage] = useState<{
     type: 'success' | 'error';
     text: string;
@@ -188,7 +216,7 @@ export const ProfilePage: React.FC = () => {
       const itemQuantity = Number(rawItem.quantity || 1);
 
       // Find current product in catalog
-      const product = PRODUCTS.find(
+      const product = allProducts.find(
         (p) =>
           String(p.id) === String(productId) ||
           p.name.toLowerCase().trim() === itemName.toLowerCase().trim()
@@ -331,8 +359,8 @@ export const ProfilePage: React.FC = () => {
     setFormCustomLabel('');
     setFormFullAddress('');
     setFormLandmark('');
-    setFormCity('Bhubaneswar');
-    setFormState('Odisha');
+    setFormCity('');
+    setFormState('');
     setFormPincode('');
     setFormIsDefault(savedAddresses.length === 0);
     setAddressFormError(null);
@@ -1162,52 +1190,76 @@ export const ProfilePage: React.FC = () => {
                   />
                 </div>
 
-                {/* City, State & Pincode Grid */}
+                {/* PIN Code, City & State Grid */}
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  {/* City */}
-                  <div>
-                    <label className="block text-xs font-bold text-stone-700 uppercase tracking-wider mb-1.5">
-                      City <span className="text-rose-600">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      value={formCity}
-                      onChange={(e) => setFormCity(e.target.value)}
-                      placeholder="e.g. Bhubaneswar"
-                      required
-                      className="w-full px-3 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-xs sm:text-sm font-medium text-stone-900 focus:outline-none focus:border-amber-700 focus:bg-white"
-                    />
-                  </div>
-
-                  {/* State */}
-                  <div>
-                    <label className="block text-xs font-bold text-stone-700 uppercase tracking-wider mb-1.5">
-                      State <span className="text-rose-600">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      value={formState}
-                      onChange={(e) => setFormState(e.target.value)}
-                      placeholder="e.g. Odisha"
-                      required
-                      className="w-full px-3 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-xs sm:text-sm font-medium text-stone-900 focus:outline-none focus:border-amber-700 focus:bg-white"
-                    />
-                  </div>
-
                   {/* PIN Code */}
                   <div>
-                    <label className="block text-xs font-bold text-stone-700 uppercase tracking-wider mb-1.5">
-                      PIN Code <span className="text-rose-600">*</span>
+                    <label className="block text-xs font-bold text-stone-700 uppercase tracking-wider mb-1.5 flex items-center justify-between">
+                      <span>PIN Code <span className="text-rose-600">*</span></span>
+                      {isLookingUpModalPin && (
+                        <span className="text-[10px] text-amber-800 flex items-center gap-1 font-medium lowercase">
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                          detecting...
+                        </span>
+                      )}
                     </label>
                     <input
                       type="text"
                       maxLength={6}
                       value={formPincode}
-                      onChange={(e) => setFormPincode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                      placeholder="e.g. 751024"
+                      onChange={(e) => handleProfilePincodeChange(e.target.value)}
+                      placeholder="e.g. 751028"
                       required
                       className="w-full px-3 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-xs sm:text-sm font-medium text-stone-900 focus:outline-none focus:border-amber-700 focus:bg-white font-mono"
                     />
+                  </div>
+
+                  {/* City */}
+                  <div>
+                    <label className="block text-xs font-bold text-stone-700 uppercase tracking-wider mb-1.5 flex items-center justify-between">
+                      <span>City <span className="text-rose-600">*</span></span>
+                      <span className="text-[10px] text-stone-400 lowercase font-normal flex items-center gap-0.5">
+                        <Lock className="w-2.5 h-2.5" /> locked
+                      </span>
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="text"
+                        value={formCity}
+                        readOnly
+                        disabled
+                        placeholder={isLookingUpModalPin ? 'Detecting...' : 'Auto-filled from PIN'}
+                        required
+                        className="w-full px-3 py-2.5 bg-stone-100 border border-stone-200 rounded-xl text-xs sm:text-sm font-medium text-stone-700 cursor-not-allowed select-none"
+                      />
+                      <div className="absolute right-2.5 top-1/2 -translate-y-1/2 text-stone-400">
+                        <Lock className="w-3.5 h-3.5" />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* State */}
+                  <div>
+                    <label className="block text-xs font-bold text-stone-700 uppercase tracking-wider mb-1.5 flex items-center justify-between">
+                      <span>State <span className="text-rose-600">*</span></span>
+                      <span className="text-[10px] text-stone-400 lowercase font-normal flex items-center gap-0.5">
+                        <Lock className="w-2.5 h-2.5" /> locked
+                      </span>
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="text"
+                        value={formState}
+                        readOnly
+                        disabled
+                        placeholder={isLookingUpModalPin ? 'Detecting...' : 'Auto-filled from PIN'}
+                        required
+                        className="w-full px-3 py-2.5 bg-stone-100 border border-stone-200 rounded-xl text-xs sm:text-sm font-medium text-stone-700 cursor-not-allowed select-none"
+                      />
+                      <div className="absolute right-2.5 top-1/2 -translate-y-1/2 text-stone-400">
+                        <Lock className="w-3.5 h-3.5" />
+                      </div>
+                    </div>
                   </div>
                 </div>
 

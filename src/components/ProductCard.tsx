@@ -191,9 +191,18 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, viewMode = 'g
       {/* Footer Row: Rating & + Add Button */}
       <div className="flex items-center justify-between pt-2 border-t border-stone-100">
         <div className="flex items-center gap-1">
-          <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
-          <span className="text-xs font-bold text-stone-700">{product.rating}</span>
-          <span className="text-[10px] text-stone-400">({product.reviewsCount})</span>
+          {product.reviewsCount && product.reviewsCount > 0 && product.rating ? (
+            <>
+              <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
+              <span className="text-xs font-bold text-stone-700">{product.rating}</span>
+              <span className="text-[10px] text-stone-400">({product.reviewsCount})</span>
+            </>
+          ) : (
+            <div className="flex items-center gap-1">
+              <Star className="w-3.5 h-3.5 text-stone-300" />
+              <span className="text-[11px] font-medium text-stone-400">No ratings yet</span>
+            </div>
+          )}
         </div>
 
         {/* Cart Actions & Portion Status */}

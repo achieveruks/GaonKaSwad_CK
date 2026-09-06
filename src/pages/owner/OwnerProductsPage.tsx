@@ -3,7 +3,6 @@ import { OwnerLayout } from './OwnerLayout';
 import { useProducts } from '../../context/ProductContext';
 import { useNavigation } from '../../context/NavigationContext';
 import { useAuth } from '../../context/AuthContext';
-import { CATEGORIES } from '../../data/products';
 import { Product, Outlet, ProductOutletConfig } from '../../types';
 import { getOutlets } from '../../lib/locationService';
 import {
@@ -39,6 +38,7 @@ export const OwnerProductsPage: React.FC = () => {
     updateOutletProduct,
     batchUpdateOutletProducts,
     isLoading,
+    categories,
   } = useProducts();
   const { goToOwnerAddProduct, goToOwnerEditProduct } = useNavigation();
   const { token } = useAuth();
@@ -83,7 +83,7 @@ export const OwnerProductsPage: React.FC = () => {
   }, [token]);
 
   const getCategoryLabel = (cat: string) => {
-    const found = CATEGORIES.find((c) => c.slug === cat || c.id === cat);
+    const found = categories.find((c) => c.slug === cat || c.id === cat);
     return found ? found.name : cat.replace(/-/g, ' ');
   };
 
@@ -101,7 +101,7 @@ export const OwnerProductsPage: React.FC = () => {
 
       // Category matching
       if (selectedCategory !== 'all') {
-        const catObj = CATEGORIES.find(
+        const catObj = categories.find(
           (c) => c.slug === selectedCategory || c.id === selectedCategory
         );
         const matchSlugs = catObj ? [catObj.slug, catObj.id] : [selectedCategory];
@@ -354,7 +354,7 @@ export const OwnerProductsPage: React.FC = () => {
               className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs text-gray-700 font-medium focus:outline-none focus:border-orange-500 focus:bg-white"
             >
               <option value="all">All Categories ({allProducts.length} items)</option>
-              {CATEGORIES.map((cat) => {
+              {categories.map((cat) => {
                 const count = allProducts.filter(
                   (p) => p.category === cat.slug || p.category === cat.id
                 ).length;

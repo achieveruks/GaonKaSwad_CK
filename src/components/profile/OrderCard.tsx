@@ -19,6 +19,7 @@ interface OrderCardProps {
   onReorder: (order: Order) => void;
   onRate?: (order: Order) => void;
   isActiveOrder?: boolean;
+  isRated?: boolean;
 }
 
 export const OrderCard: React.FC<OrderCardProps> = ({
@@ -27,7 +28,9 @@ export const OrderCard: React.FC<OrderCardProps> = ({
   onReorder,
   onRate,
   isActiveOrder = false,
+  isRated,
 }) => {
+  const isOrderRated = isRated ?? order.isRated ?? false;
   const currentStatus =
     (order as any).order_status ||
     order.orderStatus ||
@@ -271,11 +274,17 @@ export const OrderCard: React.FC<OrderCardProps> = ({
         <div className="flex items-center gap-2">
           {isDelivered && onRate && (
             <button
+              type="button"
               onClick={() => onRate(order)}
-              className="px-3 py-1.5 rounded-xl text-xs font-semibold text-amber-900 bg-amber-50 hover:bg-amber-100 border border-amber-200 transition-colors flex items-center gap-1"
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors flex items-center gap-1 cursor-pointer ${
+                isOrderRated
+                  ? 'text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200'
+                  : 'text-amber-900 bg-amber-50 hover:bg-amber-100 border border-amber-200'
+              }`}
+              title={isOrderRated ? 'Order rated. Click to view or edit review' : 'Rate dishes in this delivered order'}
             >
               <Star className="w-3.5 h-3.5 fill-amber-500 text-amber-500" />
-              Rate
+              {isOrderRated ? 'Rated' : 'Rate'}
             </button>
           )}
 

@@ -82,8 +82,6 @@ CREATE TABLE IF NOT EXISTS public.products (
   price NUMERIC NOT NULL,
   original_price NUMERIC,
   category TEXT NOT NULL,
-  rating NUMERIC DEFAULT 4.8,
-  reviews_count INTEGER DEFAULT 1,
   image TEXT NOT NULL,
   gallery_images JSONB DEFAULT '[]'::jsonb,
   is_veg BOOLEAN DEFAULT TRUE NOT NULL,
@@ -99,10 +97,34 @@ CREATE TABLE IF NOT EXISTS public.products (
   addons JSONB DEFAULT '[]'::jsonb,
   ingredients JSONB DEFAULT '[]'::jsonb,
   allergens JSONB DEFAULT '[]'::jsonb,
-  reviews_list JSONB DEFAULT '[]'::jsonb,
   created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
   updated_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
 );
+
+-- Safe Column Migrations for public.products (Drop deprecated rating and reviews columns)
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns 
+    WHERE table_schema = 'public' AND table_name = 'products' AND column_name = 'rating'
+  ) THEN
+    ALTER TABLE public.products DROP COLUMN rating;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns 
+    WHERE table_schema = 'public' AND table_name = 'products' AND column_name = 'reviews_count'
+  ) THEN
+    ALTER TABLE public.products DROP COLUMN reviews_count;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns 
+    WHERE table_schema = 'public' AND table_name = 'products' AND column_name = 'reviews_list'
+  ) THEN
+    ALTER TABLE public.products DROP COLUMN reviews_list;
+  END IF;
+END $$;
 
 -- 5. CUSTOMERS TABLE (Phone-first Customer Accounts & Profiles)
 CREATE TABLE IF NOT EXISTS public.customers (
@@ -422,7 +444,55 @@ AFTER INSERT ON public.orders
 FOR EACH ROW
 EXECUTE FUNCTION public.trg_on_order_placed();
 
--- 8. PRODUCT REVIEWS TABLE (Verified Customer Tastings)
+-- 8. PRODUCT REVIEWS TABLE (Verified Customer Tastings & Food Reviews)
+CREATE TABLE IF NOT EXISTS public.product_reviews (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  product_id TEXT NOT NULL,
+  order_id TEXT NOT NULL,
+  order_item_id TEXT,
+  customer_id UUID REFERENCES public.customers(id) ON DELETE SET NULL,
+  customer_phone TEXT,
+  outlet_id TEXT,
+  rating INTEGER NOT NULL CHECK (rating >= 1 AND rating <= 5),
+  review_text TEXT CHECK (char_length(review_text) <= 500),
+  customer_display_name TEXT,
+  is_verified_purchase BOOLEAN NOT NULL DEFAULT true,
+  is_published BOOLEAN NOT NULL DEFAULT true,
+  reviewed_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
+  updated_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
+);
+
+-- Safe Column Migrations for public.product_reviews
+ALTER TABLE IF EXISTS public.product_reviews ADD COLUMN IF NOT EXISTS product_id TEXT;
+ALTER TABLE IF EXISTS public.product_reviews ADD COLUMN IF NOT EXISTS order_id TEXT;
+ALTER TABLE IF EXISTS public.product_reviews ADD COLUMN IF NOT EXISTS order_item_id TEXT;
+ALTER TABLE IF EXISTS public.product_reviews ADD COLUMN IF NOT EXISTS customer_id UUID;
+ALTER TABLE IF EXISTS public.product_reviews ADD COLUMN IF NOT EXISTS customer_phone TEXT;
+ALTER TABLE IF EXISTS public.product_reviews ADD COLUMN IF NOT EXISTS outlet_id TEXT;
+ALTER TABLE IF EXISTS public.product_reviews ADD COLUMN IF NOT EXISTS rating INTEGER;
+ALTER TABLE IF EXISTS public.product_reviews ADD COLUMN IF NOT EXISTS review_text TEXT;
+ALTER TABLE IF EXISTS public.product_reviews ADD COLUMN IF NOT EXISTS customer_display_name TEXT;
+ALTER TABLE IF EXISTS public.product_reviews ADD COLUMN IF NOT EXISTS is_verified_purchase BOOLEAN DEFAULT true;
+ALTER TABLE IF EXISTS public.product_reviews ADD COLUMN IF NOT EXISTS is_published BOOLEAN DEFAULT true;
+ALTER TABLE IF EXISTS public.product_reviews ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW());
+ALTER TABLE IF EXISTS public.product_reviews ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW());
+ALTER TABLE IF EXISTS public.product_reviews ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW());
+
+-- Migration: Relax strict constraints if previously created
+ALTER TABLE IF EXISTS public.product_reviews ALTER COLUMN order_item_id TYPE TEXT;
+ALTER TABLE IF EXISTS public.product_reviews ALTER COLUMN order_item_id DROP NOT NULL;
+ALTER TABLE IF EXISTS public.product_reviews ALTER COLUMN customer_id DROP NOT NULL;
+
+-- Performance Indexes for product_reviews
+CREATE INDEX IF NOT EXISTS idx_product_reviews_product_id ON public.product_reviews(product_id);
+CREATE INDEX IF NOT EXISTS idx_product_reviews_order_id ON public.product_reviews(order_id);
+CREATE INDEX IF NOT EXISTS idx_product_reviews_order_item_id ON public.product_reviews(order_item_id);
+CREATE INDEX IF NOT EXISTS idx_product_reviews_customer_id ON public.product_reviews(customer_id);
+CREATE INDEX IF NOT EXISTS idx_product_reviews_published ON public.product_reviews(product_id, is_published);
+CREATE INDEX IF NOT EXISTS idx_product_reviews_outlet_id ON public.product_reviews(outlet_id);
+
+-- Legacy reviews table compatibility
 CREATE TABLE IF NOT EXISTS public.reviews (
   id TEXT PRIMARY KEY,
   product_id TEXT NOT NULL,
@@ -785,6 +855,22 @@ CREATE POLICY "Public Read Reviews" ON public.reviews
 CREATE POLICY "Reviews Insert Policy" ON public.reviews 
   FOR INSERT WITH CHECK (true);
 
+-- 8b. Product Reviews Policies
+ALTER TABLE public.product_reviews ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Public Read Product Reviews" ON public.product_reviews;
+DROP POLICY IF EXISTS "Product Reviews Insert Policy" ON public.product_reviews;
+DROP POLICY IF EXISTS "Product Reviews Update Policy" ON public.product_reviews;
+
+CREATE POLICY "Public Read Product Reviews" ON public.product_reviews 
+  FOR SELECT USING (is_published = true OR auth.uid() = customer_id OR public.is_owner());
+
+CREATE POLICY "Product Reviews Insert Policy" ON public.product_reviews 
+  FOR INSERT WITH CHECK (true);
+
+CREATE POLICY "Product Reviews Update Policy" ON public.product_reviews 
+  FOR UPDATE USING (auth.uid() = customer_id OR public.is_owner())
+  WITH CHECK (auth.uid() = customer_id OR public.is_owner());
+
 -- 9. Abouts Policies
 CREATE POLICY "Public Read Abouts" ON public.abouts 
   FOR SELECT USING (true);
@@ -807,5 +893,6 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.outlets;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.delivery_zones;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.orders;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.order_items;
+ALTER PUBLICATION supabase_realtime ADD TABLE public.product_reviews;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.profiles;
 ALTER PUBLICATION supabase_realtime ADD TABLE public.abouts;

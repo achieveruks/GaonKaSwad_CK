@@ -3,7 +3,6 @@ import { useNavigation } from '../context/NavigationContext';
 import { useCart } from '../context/CartContext';
 import { useProducts } from '../context/ProductContext';
 import { useLocation } from '../context/LocationContext';
-import { CATEGORIES } from '../data/products';
 import { ProductCard } from '../components/ProductCard';
 import { CategoryCard } from '../components/CategoryCard';
 import {
@@ -36,7 +35,7 @@ import { motion, AnimatePresence } from 'motion/react';
 export const HomePage: React.FC = () => {
   const { goToShop, goToProduct, goToCategories, goToAbout } = useNavigation();
   const { addToCart } = useCart();
-  const { activeProducts, outletProducts, bestsellerProducts, chefSignatures } = useProducts();
+  const { activeProducts, outletProducts, bestsellerProducts, chefSignatures, categories } = useProducts();
   const { currentZone, currentOutlet, selectedLocation } = useLocation();
 
   const deliveryTime =
@@ -411,7 +410,7 @@ export const HomePage: React.FC = () => {
         </div>
 
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
-          {CATEGORIES.map((category) => {
+          {categories.map((category) => {
             const count = outletProducts.filter(
               (p) => p.category === category.slug || p.category === category.id
             ).length;

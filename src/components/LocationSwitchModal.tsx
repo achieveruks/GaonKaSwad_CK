@@ -3,6 +3,12 @@ import { motion, AnimatePresence } from 'motion/react';
 import { AlertCircle, ArrowRight, Store, X, RefreshCw, CheckCircle2, ShieldAlert } from 'lucide-react';
 import { useLocation } from '../context/LocationContext';
 import { useCart } from '../context/CartContext';
+import { useProducts } from '../context/ProductContext';
+import {
+  isProductAvailableAtOutlet,
+  isProductInStockAtOutlet,
+  getProductPortionsLeftAtOutlet,
+} from '../lib/locationService';
 
 export const LocationSwitchModal: React.FC = () => {
   const {
@@ -13,36 +19,55 @@ export const LocationSwitchModal: React.FC = () => {
     selectedLocation,
   } = useLocation();
   const { cart, adaptCartForNewOutlet, clearCart } = useCart();
+  const { allProducts } = useProducts();
 
   const currentOutletName = selectedLocation?.outletName || 'Current Kitchen';
   const newOutletName = pendingLocation?.outlet?.name || 'New Kitchen';
   const newOutletId = pendingLocation?.outlet?.id || '';
 
-  // Smart preview of what will happen to the cart
+  // Smart preview of what will happen to the cart - mirror adaptCartForNewOutlet accurately
   const cartPreview = React.useMemo(() => {
     if (!pendingLocation || !newOutletId) return { unAvailableCount: 0, availableCount: cart.length };
     
     let unAvailableCount = 0;
     let availableCount = 0;
+    const allocatedPerProduct: Record<string, number> = {};
 
     for (const item of cart) {
-      const prod = item.product;
-      const isServed = prod.outlets?.some((o) => o.outletId === newOutletId) ||
-        prod.outletIds?.includes(newOutletId) ||
-        (!prod.outlets?.length && !prod.outletIds?.length);
-      
-      const config = prod.outlets?.find((o) => o.outletId === newOutletId);
-      const isSoldOut = config?.inStock === false || config?.portionsLeft === 0;
+      // Find latest product definition from allProducts if available, fallback to item.product
+      const product = allProducts.find((p) => String(p.id) === String(item.product.id)) || item.product;
+      const isServed = isProductAvailableAtOutlet(product, newOutletId, allProducts);
+      const isInStock = isProductInStockAtOutlet(product, newOutletId);
+      const portionsLeft = getProductPortionsLeftAtOutlet(product, newOutletId);
 
-      if (!isServed || isSoldOut) {
+      if (!isServed || !isInStock || portionsLeft === 0) {
         unAvailableCount += item.quantity;
+        continue;
+      }
+
+      if (portionsLeft !== null && portionsLeft !== undefined) {
+        const prodIdStr = String(product.id);
+        const alreadyAllocated = allocatedPerProduct[prodIdStr] || 0;
+        const remainingAllowed = Math.max(0, portionsLeft - alreadyAllocated);
+
+        if (remainingAllowed <= 0) {
+          unAvailableCount += item.quantity;
+        } else if (item.quantity > remainingAllowed) {
+          const unavailablePart = item.quantity - remainingAllowed;
+          unAvailableCount += unavailablePart;
+          availableCount += remainingAllowed;
+          allocatedPerProduct[prodIdStr] = alreadyAllocated + remainingAllowed;
+        } else {
+          availableCount += item.quantity;
+          allocatedPerProduct[prodIdStr] = alreadyAllocated + item.quantity;
+        }
       } else {
         availableCount += item.quantity;
       }
     }
 
     return { unAvailableCount, availableCount };
-  }, [pendingLocation, newOutletId, cart]);
+  }, [pendingLocation, newOutletId, cart, allProducts]);
 
   const handleSmartSwitch = () => {
     confirmLocationSwitch(() => {

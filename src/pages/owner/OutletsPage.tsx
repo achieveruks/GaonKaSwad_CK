@@ -4,7 +4,6 @@ import { useNavigation } from '../../context/NavigationContext';
 import { useAuth } from '../../context/AuthContext';
 import { useProducts } from '../../context/ProductContext';
 import { Outlet, DeliveryZone, Product, OutletAbout } from '../../types';
-import { CATEGORIES } from '../../data/products';
 import { getAboutByOutletId, saveAboutByOutletId } from '../../lib/aboutService';
 import {
   getOutlets,
@@ -67,7 +66,7 @@ interface OutletProductItemState {
 export const OutletsPage: React.FC = () => {
   const { goToOwnerDeliveryZones } = useNavigation();
   const { token } = useAuth();
-  const { allProducts, batchUpdateOutletProducts, refreshProducts } = useProducts();
+  const { allProducts, batchUpdateOutletProducts, refreshProducts, categories } = useProducts();
 
   const [outlets, setOutlets] = useState<Outlet[]>([]);
   const [zones, setZones] = useState<DeliveryZone[]>([]);
@@ -467,7 +466,7 @@ export const OutletsPage: React.FC = () => {
   const totalPinsCovered = new Set(safeZones.flatMap((z) => z?.pinCodes || [])).size;
 
   const getCategoryLabel = (catSlugOrId: string) => {
-    const found = CATEGORIES.find((c) => c.slug === catSlugOrId || c.id === catSlugOrId);
+    const found = categories.find((c) => c.slug === catSlugOrId || c.id === catSlugOrId);
     return found ? found.name : catSlugOrId.replace(/-/g, ' ');
   };
 
@@ -475,15 +474,15 @@ export const OutletsPage: React.FC = () => {
   const availableCategories = useMemo(() => {
     const categoryMap = new Map<string, { slug: string; name: string }>();
 
-    // 1. Add standard categories
-    CATEGORIES.forEach((cat) => {
+    // 1. Add categories from DB
+    categories.forEach((cat) => {
       categoryMap.set(cat.slug, { slug: cat.slug, name: cat.name });
     });
 
     // 2. Detect any custom categories from products
     allProducts.forEach((p) => {
       if (p.category && !categoryMap.has(p.category)) {
-        const match = CATEGORIES.find((c) => c.id === p.category || c.slug === p.category);
+        const match = categories.find((c) => c.id === p.category || c.slug === p.category);
         if (match) {
           categoryMap.set(match.slug, { slug: match.slug, name: match.name });
         } else {
@@ -496,14 +495,14 @@ export const OutletsPage: React.FC = () => {
     });
 
     return Array.from(categoryMap.values());
-  }, [allProducts]);
+  }, [allProducts, categories]);
 
   // Filter products inside modal Menu tab
   const modalFilteredProducts = useMemo(() => {
     return allProducts.filter((p) => {
       let matchesCategory = modalMenuCategory === 'all';
       if (!matchesCategory) {
-        const catObj = CATEGORIES.find(
+        const catObj = categories.find(
           (c) => c.slug === modalMenuCategory || c.id === modalMenuCategory
         );
         const matchSlugs = catObj ? [catObj.slug, catObj.id] : [modalMenuCategory];
@@ -514,7 +513,7 @@ export const OutletsPage: React.FC = () => {
       const matchesSearch = !q || p.name.toLowerCase().includes(q) || (p.slug || '').toLowerCase().includes(q);
       return matchesCategory && matchesSearch;
     });
-  }, [allProducts, modalMenuCategory, modalMenuSearch]);
+  }, [allProducts, modalMenuCategory, modalMenuSearch, categories]);
 
   const modalAssignedCount = useMemo(() => {
     const list = Object.values(outletItemStates) as OutletProductItemState[];
@@ -2107,7 +2106,7 @@ export const OutletsPage: React.FC = () => {
                         <option value="all">All Categories ({allProducts.length})</option>
                         {availableCategories.map((cat) => {
                           const count = allProducts.filter((p) => {
-                            const catObj = CATEGORIES.find(
+                            const catObj = categories.find(
                               (c) => c.slug === cat.slug || c.id === cat.slug
                             );
                             const matchSlugs = catObj ? [catObj.slug, catObj.id] : [cat.slug];

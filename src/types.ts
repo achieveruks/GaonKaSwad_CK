@@ -103,6 +103,72 @@ export interface ProductAddon {
   isVeg: boolean;
 }
 
+export interface ProductReview {
+  id: string;
+  productId: string | number;
+  orderId: string;
+  orderItemId: string;
+  customerId?: string;
+  outletId?: string;
+  rating: number; // 1 - 5
+  reviewText?: string | null;
+  customerDisplayName?: string;
+  customerPhone?: string;
+  isVerifiedPurchase: boolean;
+  isPublished?: boolean;
+  reviewedAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ReviewableItem {
+  orderItemId: string;
+  productId: string;
+  productName: string;
+  productImage?: string;
+  variantName?: string;
+  quantity: number;
+  reviewed: boolean;
+  reviewId?: string;
+  rating?: number;
+  reviewText?: string;
+  reviewedAt?: string;
+  isVerifiedPurchase?: boolean;
+}
+
+export interface OrderReviewableDetails {
+  orderId: string;
+  orderNumber?: string;
+  status?: string;
+  orderStatus?: string;
+  deliveredAt?: string;
+  isDelivered: boolean;
+  isEligible: boolean;
+  isExpired: boolean;
+  deadlineIso?: string;
+  deadline?: string;
+  remainingDays?: number;
+  isFullyReviewed?: boolean;
+  eligibilityMessage?: string;
+  items: ReviewableItem[];
+}
+
+export interface ProductRatingSummary {
+  productId: string;
+  averageRating: number;
+  totalReviews: number;
+  totalVerifiedRatings?: number;
+  ratingDistribution?: {
+    5: number;
+    4: number;
+    3: number;
+    2: number;
+    1: number;
+  };
+  breakdown?: Record<1 | 2 | 3 | 4 | 5, number>;
+  reviews?: ProductReview[];
+}
+
 export interface Review {
   id: string;
   userName: string;
@@ -430,6 +496,7 @@ export interface Order {
   cancelledAt?: string;
   cancellationReason?: string;
   estimatedDeliveryMinutes?: number;
+  isRated?: boolean;
 }
 
 export interface FilterState {
@@ -441,3 +508,4 @@ export interface FilterState {
   maxPrice: number;
   sortBy: 'popular' | 'price-low' | 'price-high' | 'rating' | 'newest';
 }
+

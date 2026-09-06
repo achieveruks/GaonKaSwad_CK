@@ -1,8 +1,8 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 import { Product, Category, ProductOutletConfig } from '../types';
-import { CATEGORIES as INITIAL_CATEGORIES } from '../data/products';
 import {
   getProducts,
+  getCategories,
   getProductBySlug as apiGetProductBySlug,
   createProduct as apiCreateProduct,
   updateProduct as apiUpdateProduct,
@@ -71,6 +71,7 @@ export const ProductProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const { token, isAuthenticated } = useAuth();
   const { selectedLocation } = useLocation();
   const [products, setProducts] = useState<Product[]>([]);
+  const [dbCategories, setDbCategories] = useState<Category[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -78,9 +79,13 @@ export const ProductProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setIsLoading(true);
     setError(null);
     try {
-      // If owner is logged in, fetch all products including inactive
-      const data = await getProducts(isAuthenticated, token || undefined);
-      setProducts(data);
+      // Fetch products and categories in parallel from database
+      const [productsData, categoriesData] = await Promise.all([
+        getProducts(isAuthenticated, token || undefined),
+        getCategories(),
+      ]);
+      setProducts(productsData);
+      setDbCategories(categoriesData);
     } catch (err: any) {
       console.error('Failed to load products in ProductProvider:', err);
       setError('Could not load products. Please check your connection.');
@@ -130,16 +135,35 @@ export const ProductProvider: React.FC<{ children: React.ReactNode }> = ({ child
     return outletProducts.filter((p) => isProductChefSpecialAtOutlet(p, activeOutletId));
   }, [outletProducts, selectedLocation?.outletId]);
 
-  // Dynamic Categories with updated product counts for current outlet
+  // Dynamic Categories from Supabase DB with live item counts for selected outlet
   const categories = useMemo(() => {
-    return INITIAL_CATEGORIES.map((cat) => {
-      const count = outletProducts.filter((p) => p.category === cat.id).length;
+    // If dbCategories loaded from database, calculate counts
+    if (dbCategories.length > 0) {
+      return dbCategories.map((cat) => {
+        const count = outletProducts.filter((p) => p.category === cat.id || p.category === cat.slug).length;
+        return {
+          ...cat,
+          itemCount: count,
+        };
+      });
+    }
+
+    // Fallback: dynamically construct categories from distinct product categories in DB
+    const uniqueCategoryIds = Array.from(new Set(products.map((p) => p.category).filter(Boolean)));
+    return uniqueCategoryIds.map((catId) => {
+      const name = catId.charAt(0).toUpperCase() + catId.slice(1).replace(/-/g, ' ');
+      const count = outletProducts.filter((p) => p.category === catId).length;
       return {
-        ...cat,
+        id: catId,
+        name,
+        slug: catId,
+        tagline: `Authentic traditional ${name.toLowerCase()}`,
+        image: 'https://images.unsplash.com/photo-1589301760014-d929f3979dbc?q=80&w=800&auto=format&fit=crop',
+        iconName: 'Utensils',
         itemCount: count,
       };
     });
-  }, [outletProducts]);
+  }, [dbCategories, products, outletProducts]);
 
   const isAvailableInCurrentOutlet = useCallback(
     (productId: string | number): boolean => {

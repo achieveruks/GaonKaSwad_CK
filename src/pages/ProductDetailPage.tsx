@@ -52,7 +52,7 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
   const { goToHome, goToShop, goToCheckout } = useNavigation();
   const { addToCart, setIsCartDrawerOpen, showToast } = useCart();
   const { allProducts, activeProducts, refreshProducts } = useProducts();
-  const { selectedLocation, setIsLocationModalOpen } = useLocation();
+  const { selectedLocation, setIsLocationModalOpen, outlets, deliveryZones, requestLocationChange } = useLocation();
   const { customer, isCustomerLoggedIn, checkReviewEligibility, submitVerifiedReview, openOtpModal } = useCustomer();
 
   const product =
@@ -106,6 +106,38 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
       setReviews(product.reviewsList || []);
       setIsAddingReview(false);
       setEligibilityResult({ checked: false, eligible: false });
+
+      // Fetch verified reviews from backend
+      fetch(`/api/products/${encodeURIComponent(product.id)}/reviews`)
+        .then((r) => r.json())
+        .then((data) => {
+          if (data.success && Array.isArray(data.reviews) && data.reviews.length > 0) {
+            const mappedDbReviews: Review[] = data.reviews.map((r: any) => ({
+              id: r.id,
+              userName: r.customerDisplayName || 'Verified Customer',
+              userLocation: 'Verified Foodie',
+              rating: Number(r.rating || 5),
+              comment: r.reviewText || '',
+              date: r.reviewedAt
+                ? new Date(r.reviewedAt).toLocaleDateString('en-IN', {
+                    day: 'numeric',
+                    month: 'short',
+                    year: 'numeric',
+                  })
+                : 'Recent',
+              verified: r.isVerifiedPurchase !== false,
+            }));
+
+            // Combine with product's default review list without duplicates
+            const existingIds = new Set(mappedDbReviews.map((m) => m.id));
+            const combined = [
+              ...mappedDbReviews,
+              ...(product.reviewsList || []).filter((r) => !existingIds.has(r.id)),
+            ];
+            setReviews(combined);
+          }
+        })
+        .catch((err) => console.warn('Product reviews fetch notice:', err));
     }
   }, [product?.id, slug]);
 
@@ -141,15 +173,11 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
     );
   }
 
-  // Consistent rating and review count from database product
-  const baseReviewsCount = product.reviewsCount !== undefined && product.reviewsCount !== null
-    ? Number(product.reviewsCount)
-    : (product.reviewsList?.length || 0);
-
-  const initialListLen = product.reviewsList?.length || 0;
-  const userAddedReviewsCount = Math.max(0, reviews.length - initialListLen);
-  const totalReviewsCount = baseReviewsCount + userAddedReviewsCount;
-  const displayRating = product.rating !== undefined && product.rating !== null ? Number(product.rating) : 4.8;
+  // Dynamic rating and review count from published reviews
+  const totalReviewsCount = reviews.length;
+  const displayRating = totalReviewsCount > 0
+    ? Number((reviews.reduce((sum, r) => sum + (Number(r.rating) || 5), 0) / totalReviewsCount).toFixed(1))
+    : (product.rating !== undefined && product.rating !== null ? Number(product.rating) : null);
 
   const currentOutletId = selectedLocation?.outletId;
   const isAvailableAtOutlet = isProductServedAtOutlet(product, currentOutletId);
@@ -202,11 +230,46 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
       setIsLocationModalOpen(true);
       return;
     }
-    if (!isItemInStock || !isAvailableAtOutlet) return;
+    if (!isItemInStock || !isAvailableAtOutlet) {
+      showToast('Item Unavailable', 'This dish is currently unavailable at the selected outlet.', 'error');
+      return;
+    }
     const added = addToCart(product, quantity, selectedVariant, selectedSpiceLevel, selectedAddons);
     if (added) {
       goToCheckout();
     }
+  };
+
+  // Dedicated action for "Order this dish now to unlock verified review"
+  const handleOrderNowForReview = () => {
+    if (!selectedLocation) {
+      const activeOutlet = outlets && outlets.length > 0
+        ? (outlets.find((o) => o.isActive !== false) || outlets[0])
+        : null;
+      const zone = deliveryZones && deliveryZones.length > 0
+        ? (deliveryZones.find((z) => !activeOutlet || z.outletId === activeOutlet.id) || deliveryZones[0])
+        : null;
+
+      if (activeOutlet && zone) {
+        requestLocationChange(
+          activeOutlet.pinCode || zone.pinCodes?.[0] || '751001',
+          activeOutlet,
+          zone,
+          false,
+          () => {
+            addToCart(product, quantity || 1, selectedVariant, selectedSpiceLevel, selectedAddons);
+            goToCheckout();
+          }
+        );
+        return;
+      }
+      showToast('Select Location', 'Please select your delivery location to order this dish.', 'info');
+      setIsLocationModalOpen(true);
+      return;
+    }
+
+    addToCart(product, quantity || 1, selectedVariant, selectedSpiceLevel, selectedAddons);
+    goToCheckout();
   };
 
   const handleShare = () => {
@@ -372,13 +435,20 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
 
             {/* Rating and quick stats */}
             <div className="flex flex-wrap items-center gap-2.5 text-xs text-gray-500 mt-2.5 pb-3 border-b border-gray-200">
-              <div className="flex items-center gap-1 text-orange-600 font-bold bg-orange-50 px-2 py-0.5 rounded-lg border border-orange-200">
-                <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
-                <span>{displayRating}</span>
-                <span className="text-gray-400 font-normal">
-                  ({totalReviewsCount})
-                </span>
-              </div>
+              {totalReviewsCount > 0 && displayRating !== null ? (
+                <div className="flex items-center gap-1 text-orange-600 font-bold bg-orange-50 px-2 py-0.5 rounded-lg border border-orange-200">
+                  <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
+                  <span>{displayRating}</span>
+                  <span className="text-gray-400 font-normal">
+                    ({totalReviewsCount})
+                  </span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-1 text-stone-500 font-medium bg-stone-100 px-2.5 py-0.5 rounded-lg border border-stone-200">
+                  <Star className="w-3 h-3 text-stone-400" />
+                  <span className="text-stone-600 font-semibold text-xs">No ratings yet</span>
+                </div>
+              )}
 
               <div className="flex items-center gap-1 font-medium text-gray-700">
                 <Clock className="w-3.5 h-3.5 text-orange-600" />
@@ -883,7 +953,9 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
                   </span>
                 </h3>
                 <p className="text-xs text-gray-500 mt-0.5">
-                  {totalReviewsCount} verified ratings • {displayRating} out of 5 stars
+                  {totalReviewsCount > 0 && displayRating !== null
+                    ? `${totalReviewsCount} verified rating${totalReviewsCount > 1 ? 's' : ''} • ${displayRating} out of 5 stars`
+                    : 'No customer reviews yet. Be the first to review after receiving your order!'}
                 </p>
               </div>
 
@@ -910,60 +982,26 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
 
                 {/* Eligibility Verification Check */}
                 {!eligibilityResult.eligible ? (
-                  <div className="bg-white p-3.5 rounded-xl border border-stone-200 space-y-2.5">
-                    <p className="text-xs text-stone-700 leading-relaxed">
-                      To ensure genuine feedback, reviews can only be submitted by customers who have received a delivered order of <strong>{product.name}</strong>.
+                  <div className="bg-white p-4 rounded-xl border border-stone-200 space-y-3">
+                    <p className="text-xs text-stone-700 leading-relaxed font-medium">
+                      To maintain 100% verified customer ratings, reviews are submitted directly from your delivered orders.
                     </p>
 
-                    <div className="flex flex-col sm:flex-row items-center gap-2">
-                      <div className="relative flex-1 w-full">
-                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-stone-500">
-                          +91
-                        </span>
-                        <input
-                          type="tel"
-                          maxLength={10}
-                          value={checkPhone}
-                          onChange={(e) => setCheckPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
-                          placeholder="Enter your order mobile number"
-                          className="w-full pl-10 pr-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs focus:outline-none focus:border-amber-600 focus:bg-white text-stone-900"
-                        />
+                    <div className="p-3 bg-amber-50/80 border border-amber-200 rounded-xl text-xs text-amber-950 flex items-start gap-2.5">
+                      <ShieldCheck className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                      <div className="leading-relaxed space-y-1">
+                        <p className="font-medium text-stone-700">
+                          Verified reviews are available for customers with delivered orders within 7 days.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={handleOrderNowForReview}
+                          className="block font-bold text-amber-900 hover:text-amber-950 underline cursor-pointer text-xs text-left"
+                        >
+                          Order this dish now to unlock verified review
+                        </button>
                       </div>
-                      <button
-                        type="button"
-                        onClick={handleVerifyPhoneEligibility}
-                        disabled={isCheckingEligibility}
-                        className="w-full sm:w-auto px-4 py-2 bg-amber-800 hover:bg-amber-900 text-white font-bold text-xs rounded-xl transition-colors shrink-0 flex items-center justify-center gap-1.5"
-                      >
-                        {isCheckingEligibility ? (
-                          <>
-                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                            <span>Checking...</span>
-                          </>
-                        ) : (
-                          <>
-                            <ShieldCheck className="w-3.5 h-3.5" />
-                            <span>Verify Order</span>
-                          </>
-                        )}
-                      </button>
                     </div>
-
-                    {eligibilityResult.checked && !eligibilityResult.eligible && (
-                      <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-950 flex items-start gap-2">
-                        <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
-                        <div className="leading-relaxed">
-                          <span>{eligibilityResult.message || 'No delivered orders found containing this dish for this mobile number.'}</span>
-                          <button
-                            type="button"
-                            onClick={handleAddToCart}
-                            className="block font-bold text-amber-900 underline mt-1"
-                          >
-                            Order this dish now to unlock verified review
-                          </button>
-                        </div>
-                      </div>
-                    )}
                   </div>
                 ) : (
                   /* Form for Verified Eligible User */
@@ -1050,32 +1088,44 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
             )}
 
             {/* Reviews List */}
-            <div className="divide-y divide-gray-100 space-y-3 pt-2">
-              {reviews.map((rev) => (
-                <div key={rev.id} className="pt-3 first:pt-0 space-y-1">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-1.5">
-                      <span className="font-bold text-xs text-gray-900">{rev.userName}</span>
-                      <span className="text-[10px] text-gray-400">({rev.userLocation || 'Verified'})</span>
-                      {rev.verified && (
-                        <span className="inline-flex items-center gap-0.5 text-[10px] bg-emerald-50 text-emerald-700 px-1.5 py-0.2 rounded font-semibold border border-emerald-200">
-                          <Check className="w-2.5 h-2.5" /> Verified Purchase
-                        </span>
-                      )}
+            {reviews.length > 0 ? (
+              <div className="divide-y divide-gray-100 space-y-3 pt-2">
+                {reviews.map((rev) => (
+                  <div key={rev.id} className="pt-3 first:pt-0 space-y-1">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-bold text-xs text-gray-900">{rev.userName}</span>
+                        <span className="text-[10px] text-gray-400">({rev.userLocation || 'Verified'})</span>
+                        {rev.verified && (
+                          <span className="inline-flex items-center gap-0.5 text-[10px] bg-emerald-50 text-emerald-700 px-1.5 py-0.2 rounded font-semibold border border-emerald-200">
+                            <Check className="w-2.5 h-2.5" /> Verified Purchase
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-[10px] text-gray-400">{rev.date}</span>
                     </div>
-                    <span className="text-[10px] text-gray-400">{rev.date}</span>
-                  </div>
 
-                  <div className="flex text-amber-400 gap-0.5">
-                    {[...Array(rev.rating)].map((_, i) => (
-                      <Star key={i} className="w-3 h-3 fill-amber-400" />
-                    ))}
-                  </div>
+                    <div className="flex text-amber-400 gap-0.5">
+                      {[...Array(rev.rating)].map((_, i) => (
+                        <Star key={i} className="w-3 h-3 fill-amber-400" />
+                      ))}
+                    </div>
 
-                  <p className="text-xs text-gray-600 leading-relaxed">{rev.comment}</p>
+                    <p className="text-xs text-gray-600 leading-relaxed">{rev.comment}</p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-center py-8 bg-stone-50/70 rounded-2xl border border-dashed border-stone-200 p-6 space-y-2 mt-2">
+                <div className="w-10 h-10 rounded-full bg-amber-50 border border-amber-200 flex items-center justify-center mx-auto text-amber-700">
+                  <Star className="w-5 h-5 text-amber-500" />
                 </div>
-              ))}
-            </div>
+                <h4 className="text-sm font-bold text-stone-800">No ratings yet</h4>
+                <p className="text-xs text-stone-500 max-w-sm mx-auto leading-relaxed">
+                  Have you tasted {product.name}? Leave a verified review from your delivered order to share your thoughts with fellow food lovers!
+                </p>
+              </div>
+            )}
           </div>
         )}
       </div>

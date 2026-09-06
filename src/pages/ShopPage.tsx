@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigation } from '../context/NavigationContext';
 import { useProducts } from '../context/ProductContext';
-import { CATEGORIES } from '../data/products';
 import { ProductCard } from '../components/ProductCard';
 import { FilterSidebar } from '../components/FilterSidebar';
 import { FilterState, Product } from '../types';
@@ -19,7 +18,7 @@ import { motion, AnimatePresence } from 'motion/react';
 
 export const ShopPage: React.FC = () => {
   const { currentRoute, goToShop } = useNavigation();
-  const { outletProducts } = useProducts();
+  const { outletProducts, categories } = useProducts();
 
   // Extract route params if passed
   const initialCategory = currentRoute.path === '/shop' ? currentRoute.category || '' : '';
@@ -81,7 +80,7 @@ export const ShopPage: React.FC = () => {
 
       // 2. Category
       if (filters.category) {
-        const catObj = CATEGORIES.find(
+        const catObj = categories.find(
           (c) => c.slug === filters.category || c.id === filters.category
         );
         const matchSlugs = catObj ? [catObj.slug, catObj.id] : [filters.category];
@@ -112,28 +111,28 @@ export const ShopPage: React.FC = () => {
         case 'price-high':
           return b.price - a.price;
         case 'rating':
-          return b.rating - a.rating;
+          return (Number(b.rating) || 0) - (Number(a.rating) || 0);
         case 'newest':
           return (b.newArrival ? 1 : 0) - (a.newArrival ? 1 : 0);
         case 'popular':
         default:
-          return (b.bestseller ? 2 : 0) + b.rating - ((a.bestseller ? 2 : 0) + a.rating);
+          return (b.bestseller ? 2 : 0) + (Number(b.rating) || 0) - ((a.bestseller ? 2 : 0) + (Number(a.rating) || 0));
       }
     });
-  }, [filters, outletProducts]);
+  }, [filters, outletProducts, categories]);
 
   // Dynamic category counts map based on outlet products
   const categoryCounts = useMemo(() => {
     const counts: Record<string, number> = {};
-    for (const cat of CATEGORIES) {
+    for (const cat of categories) {
       counts[cat.slug] = outletProducts.filter(
         (p) => p.category === cat.slug || p.category === cat.id
       ).length;
     }
     return counts;
-  }, [outletProducts]);
+  }, [outletProducts, categories]);
 
-  const activeCategoryObj = CATEGORIES.find((c) => c.slug === filters.category);
+  const activeCategoryObj = categories.find((c) => c.slug === filters.category);
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8 space-y-6">
@@ -235,7 +234,7 @@ export const ShopPage: React.FC = () => {
             All Specialties ({outletProducts.length})
           </button>
 
-          {CATEGORIES.map((cat) => {
+          {categories.map((cat) => {
             const count = categoryCounts[cat.slug] ?? 0;
             return (
               <button

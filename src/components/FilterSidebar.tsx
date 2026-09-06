@@ -1,6 +1,5 @@
 import React, { useMemo } from 'react';
 import { FilterState } from '../types';
-import { CATEGORIES } from '../data/products';
 import { useProducts } from '../context/ProductContext';
 import { RotateCcw, SlidersHorizontal, Check } from 'lucide-react';
 
@@ -17,18 +16,18 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
   onReset,
   totalResultsCount
 }) => {
-  const { outletProducts } = useProducts();
+  const { outletProducts, categories } = useProducts();
   const spiceOptions = ['All', 'Mild', 'Medium', 'Spicy', 'Extra Spicy'];
 
   const categoryCounts = useMemo(() => {
     const counts: Record<string, number> = {};
-    for (const cat of CATEGORIES) {
+    for (const cat of categories) {
       counts[cat.slug] = outletProducts.filter(
         (p) => p.category === cat.slug || p.category === cat.id
       ).length;
     }
     return counts;
-  }, [outletProducts]);
+  }, [categories, outletProducts]);
 
   return (
     <aside className="bg-white rounded-xl border border-gray-200 p-4 shadow-xs space-y-5">
@@ -138,7 +137,7 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
             </span>
           </button>
 
-          {CATEGORIES.map((cat) => {
+          {categories.map((cat) => {
             const count = categoryCounts[cat.slug] ?? 0;
             return (
               <button

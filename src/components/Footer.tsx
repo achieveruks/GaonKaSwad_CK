@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useNavigation } from '../context/NavigationContext';
 import { useCart } from '../context/CartContext';
 import { useLocation } from '../context/LocationContext';
+import { useProducts } from '../context/ProductContext';
 import {
   Flame,
   ShieldCheck,
@@ -15,12 +16,12 @@ import {
   Heart,
   UtensilsCrossed
 } from 'lucide-react';
-import { CATEGORIES } from '../data/products';
 
 export const Footer: React.FC = () => {
   const { goToHome, goToShop, goToCategories, goToAbout, goToContact, goToOwnerLogin } = useNavigation();
   const { showToast } = useCart();
   const { currentOutlet, outlets } = useLocation();
+  const { categories } = useProducts();
   const [newsletterEmail, setNewsletterEmail] = useState('');
 
   const activeOutlet = currentOutlet || (outlets && outlets.length > 0 ? outlets[0] : null);
@@ -127,7 +128,7 @@ export const Footer: React.FC = () => {
                   All Delicacies
                 </button>
               </li>
-              {CATEGORIES.slice(0, 4).map((cat) => (
+              {categories.slice(0, 4).map((cat) => (
                 <li key={cat.id}>
                   <button
                     type="button"

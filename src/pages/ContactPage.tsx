@@ -2,7 +2,6 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigation } from '../context/NavigationContext';
 import { useCart } from '../context/CartContext';
 import { useLocation } from '../context/LocationContext';
-import { INITIAL_OUTLETS, INITIAL_DELIVERY_ZONES } from '../data/outlets';
 import { Outlet } from '../types';
 import {
   MapPin,
@@ -36,15 +35,14 @@ export const ContactPage: React.FC = () => {
     deliveryZones
   } = useLocation();
 
-  // Active list of all outlets with fallback to initial data
+  // Active list of all outlets
   const availableOutlets: Outlet[] = useMemo(() => {
-    const active = outlets.filter((o) => o.isActive);
-    return active.length > 0 ? active : INITIAL_OUTLETS;
+    return outlets.filter((o) => o.isActive);
   }, [outlets]);
 
   // Current outlet for the left-side Kitchen Concierge & Helpline card
-  const currentHub: Outlet = useMemo(() => {
-    return currentOutlet || availableOutlets[0] || INITIAL_OUTLETS[0];
+  const currentHub: Outlet | undefined = useMemo(() => {
+    return currentOutlet || availableOutlets[0];
   }, [currentOutlet, availableOutlets]);
 
   // Target outlet chosen by the user in the right-hand inquiry form
@@ -59,24 +57,23 @@ export const ContactPage: React.FC = () => {
     }
   }, [currentHub?.id]);
 
-  const targetOutlet: Outlet = useMemo(() => {
+  const targetOutlet: Outlet | undefined = useMemo(() => {
     return (
       availableOutlets.find((o) => o.id === targetOutletId) ||
       currentHub ||
-      availableOutlets[0] ||
-      INITIAL_OUTLETS[0]
+      availableOutlets[0]
     );
   }, [availableOutlets, targetOutletId, currentHub]);
 
   // City calculation for the "Active Cloud Kitchen Network" card (current city only)
-  const currentCity = currentHub.city || 'Bangalore';
+  const currentCity = currentHub?.city || 'Bangalore';
 
   // Outlets in the current city only
   const cityOutlets = useMemo(() => {
     const matched = availableOutlets.filter(
       (o) => o.city.trim().toLowerCase() === currentCity.trim().toLowerCase()
     );
-    return matched.length > 0 ? matched : [currentHub];
+    return matched.length > 0 ? matched : (currentHub ? [currentHub] : []);
   }, [availableOutlets, currentCity, currentHub]);
 
   const [form, setForm] = useState({
@@ -341,7 +338,7 @@ export const ContactPage: React.FC = () => {
               {/* Location Pins with Delivery Zone PINs beside it */}
               <div className="flex flex-wrap gap-2 pt-1">
                 {cityOutlets.map((o) => {
-                  const allZones = deliveryZones.length > 0 ? deliveryZones : INITIAL_DELIVERY_ZONES;
+                  const allZones = deliveryZones || [];
                   const outletPins = Array.from(
                     new Set(
                       allZones

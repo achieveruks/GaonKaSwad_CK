@@ -3,7 +3,6 @@ import { OwnerLayout } from './OwnerLayout';
 import { useProducts } from '../../context/ProductContext';
 import { useNavigation } from '../../context/NavigationContext';
 import { useAuth } from '../../context/AuthContext';
-import { CATEGORIES } from '../../data/products';
 import { Product, Outlet, ProductOutletConfig } from '../../types';
 import { getOutlets } from '../../lib/locationService';
 import { getCulinaryHighlights, CATEGORY_CULINARY_DEFAULTS, normalizeCategorySlug } from '../../utils/culinaryHighlights';
@@ -46,7 +45,7 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
   mode,
   productId,
 }) => {
-  const { allProducts, addProduct, editProduct } = useProducts();
+  const { allProducts, addProduct, editProduct, categories } = useProducts();
   const { goToOwnerProducts } = useNavigation();
   const { token } = useAuth();
 
@@ -60,7 +59,7 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
   const [slug, setSlug] = useState('');
   const [isSlugUnlocked, setIsSlugUnlocked] = useState(mode === 'new');
   const [slugManuallyEdited, setSlugManuallyEdited] = useState(false);
-  const [category, setCategory] = useState(CATEGORIES[0]?.slug || 'dum-biryanis');
+  const [category, setCategory] = useState(categories[0]?.slug || 'dum-biryanis');
   const [shortDescription, setShortDescription] = useState('');
   const [description, setDescription] = useState('');
   // Custom Culinary Story & Highlights State
@@ -130,7 +129,7 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
         setName(found.name);
         setHindiName(found.hindiName || '');
         setSlug(found.slug);
-        const matchedCat = CATEGORIES.find(
+        const matchedCat = categories.find(
           (c) => c.slug === found.category || c.id === found.category
         );
         setCategory(matchedCat ? matchedCat.slug : found.category);
@@ -542,7 +541,7 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
                     onChange={(e) => setCategory(e.target.value)}
                     className="w-full px-3.5 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs text-gray-900 font-medium focus:outline-none focus:border-orange-500 focus:bg-white"
                   >
-                    {CATEGORIES.map((cat) => (
+                    {categories.map((cat) => (
                       <option key={cat.id} value={cat.slug || cat.id}>
                         {cat.name}
                       </option>

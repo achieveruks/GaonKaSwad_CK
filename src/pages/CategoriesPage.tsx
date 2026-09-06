@@ -1,5 +1,4 @@
 import React from 'react';
-import { CATEGORIES } from '../data/products';
 import { useNavigation } from '../context/NavigationContext';
 import { useProducts } from '../context/ProductContext';
 import { CategoryCard } from '../components/CategoryCard';
@@ -13,7 +12,7 @@ import {
 
 export const CategoriesPage: React.FC = () => {
   const { goToShop } = useNavigation();
-  const { outletProducts } = useProducts();
+  const { outletProducts, categories } = useProducts();
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8 space-y-6">
@@ -35,7 +34,7 @@ export const CategoriesPage: React.FC = () => {
 
       {/* Categories Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5">
-        {CATEGORIES.map((category) => {
+        {categories.map((category) => {
           const categoryProducts = outletProducts.filter(
             (p) => p.category === category.slug || p.category === category.id
           );

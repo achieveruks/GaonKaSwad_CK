@@ -133,11 +133,15 @@ export const SearchBar: React.FC<SearchBarProps> = ({
                       </div>
                       <div className="flex items-center flex-wrap gap-2 text-xs text-stone-500 mt-1">
                         <span className="font-extrabold text-amber-900">₹{p.price}</span>
-                        <span className="text-stone-300">•</span>
-                        <span className="flex items-center gap-0.5 text-amber-700 font-semibold">
-                          <Star className="w-3 h-3 fill-amber-400 text-amber-500" />
-                          {p.rating}
-                        </span>
+                        {p.reviewsCount && p.reviewsCount > 0 && p.rating ? (
+                          <>
+                            <span className="text-stone-300">•</span>
+                            <span className="flex items-center gap-0.5 text-amber-700 font-semibold">
+                              <Star className="w-3 h-3 fill-amber-400 text-amber-500" />
+                              {p.rating}
+                            </span>
+                          </>
+                        ) : null}
                         <span className="text-stone-300">•</span>
                         <span className="capitalize text-[11px] text-stone-600 bg-stone-100 px-1.5 py-0.5 rounded font-medium">
                           {p.spiceLevel}

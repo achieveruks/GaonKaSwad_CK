@@ -263,6 +263,12 @@ export const ManagerOrderDetailsModal: React.FC<ManagerOrderDetailsModalProps> =
                         {resolvedOutlet.kitchenAddress}, {resolvedOutlet.city}
                       </span>
                     )}
+                    {resolvedOutlet.phone && (
+                      <span className="flex items-center gap-1 text-stone-700 font-medium text-[11px] mt-1">
+                        <Phone className="w-3 h-3 text-stone-400 shrink-0" />
+                        Outlet Contact: <a href={`tel:${resolvedOutlet.phone.replace(/\s+/g, '')}`} className="font-mono font-bold text-amber-800 hover:underline">{resolvedOutlet.phone}</a>
+                      </span>
+                    )}
                   </p>
                 ) : (
                   <>

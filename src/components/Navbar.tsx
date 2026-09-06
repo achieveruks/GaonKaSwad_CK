@@ -19,14 +19,13 @@ import {
   LogOut,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { CATEGORIES } from '../data/products';
 
 export const Navbar: React.FC = () => {
   const { currentRoute, goToHome, goToShop, goToCategories, goToAbout, goToContact, goToProfile, goToOrders } =
     useNavigation();
   const { totalItemsCount, setIsCartDrawerOpen } = useCart();
   const { selectedLocation, setIsLocationModalOpen, currentOutlet, currentZone } = useLocation();
-  const { outletProducts } = useProducts();
+  const { outletProducts, categories } = useProducts();
   const { customer, isCustomerLoggedIn, openOtpModal, logoutCustomer } = useCustomer();
 
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -239,7 +238,7 @@ export const Navbar: React.FC = () => {
                     <div className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-stone-400">
                       Our Specialties
                     </div>
-                    {CATEGORIES.map((cat) => {
+                    {categories.map((cat) => {
                       const count = outletProducts.filter(
                         (p) => p.category === cat.slug || p.category === cat.id
                       ).length;

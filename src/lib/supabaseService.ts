@@ -1,7 +1,5 @@
 import { supabase, isSupabaseConfigured } from './supabase';
 import { Product, Outlet, OutletAbout, DeliveryZone, Order, OrderItem, CleanOrderItem, Category, DashboardStats, Profile, UserRole, Customer, CustomerAddress, Coupon, CouponRedemption, CouponValidationResult } from '../types';
-import { PRODUCTS as INITIAL_PRODUCTS, CATEGORIES as INITIAL_CATEGORIES } from '../data/products';
-import { INITIAL_OUTLETS, INITIAL_DELIVERY_ZONES } from '../data/outlets';
 
 // ============================================================================
 // DATA MAPPERS (Database Snake_case <-> TypeScript CamelCase)
@@ -39,8 +37,6 @@ export function mapDbProductToProduct(row: any): Product {
     price: Number(row.price),
     originalPrice: row.original_price ? Number(row.original_price) : undefined,
     category: row.category,
-    rating: row.rating !== undefined && row.rating !== null ? Number(row.rating) : 4.8,
-    reviewsCount: row.reviews_count !== undefined && row.reviews_count !== null ? Number(row.reviews_count) : (Array.isArray(row.reviews_list) ? row.reviews_list.length : 0),
     image: row.image,
     galleryImages: Array.isArray(row.gallery_images) ? row.gallery_images : [row.image],
     isVeg: row.is_veg !== false,
@@ -57,7 +53,7 @@ export function mapDbProductToProduct(row: any): Product {
     addons: Array.isArray(row.addons) ? row.addons : [],
     ingredients: Array.isArray(row.ingredients) ? row.ingredients : [],
     allergens: Array.isArray(row.allergens) ? row.allergens : [],
-    reviewsList: Array.isArray(row.reviews_list) ? row.reviews_list : [],
+    reviewsList: [],
   };
 }
 
@@ -78,8 +74,6 @@ export function mapProductToDbProduct(p: Partial<Product>): any {
   if (p.price !== undefined) dbObj.price = Number(p.price);
   if (p.originalPrice !== undefined) dbObj.original_price = p.originalPrice ? Number(p.originalPrice) : null;
   if (p.category !== undefined) dbObj.category = p.category;
-  if (p.rating !== undefined) dbObj.rating = Number(p.rating);
-  if (p.reviewsCount !== undefined) dbObj.reviews_count = Number(p.reviewsCount);
   if (p.image !== undefined) dbObj.image = p.image.trim();
   if (p.galleryImages !== undefined) dbObj.gallery_images = p.galleryImages;
   if (p.isVeg !== undefined) dbObj.is_veg = !!p.isVeg;
@@ -95,7 +89,6 @@ export function mapProductToDbProduct(p: Partial<Product>): any {
   if (p.addons !== undefined) dbObj.addons = p.addons;
   if (p.ingredients !== undefined) dbObj.ingredients = p.ingredients;
   if (p.allergens !== undefined) dbObj.allergens = p.allergens;
-  if (p.reviewsList !== undefined) dbObj.reviews_list = p.reviewsList;
   dbObj.updated_at = new Date().toISOString();
   return dbObj;
 }
@@ -267,11 +260,59 @@ export async function fetchSupabaseProducts(includeInactive = false): Promise<Pr
     query = query.eq('active', true);
   }
 
-  const { data, error } = await query;
-  if (error) throw error;
-  if (!data || data.length === 0) return [];
+  const [{ data: productsData, error: prodErr }, { data: reviewsData }] = await Promise.all([
+    query,
+    supabase
+      .from('product_reviews')
+      .select('id, product_id, rating, review_text, customer_display_name, is_verified_purchase, is_published, reviewed_at, created_at')
+      .eq('is_published', true)
+      .order('reviewed_at', { ascending: false }),
+  ]);
 
-  return data.map(mapDbProductToProduct);
+  if (prodErr) throw prodErr;
+  if (!productsData || productsData.length === 0) return [];
+
+  // Group published reviews by product_id
+  const reviewsByProduct = new Map<string, any[]>();
+  if (Array.isArray(reviewsData)) {
+    for (const r of reviewsData) {
+      const pid = String(r.product_id);
+      if (!reviewsByProduct.has(pid)) {
+        reviewsByProduct.set(pid, []);
+      }
+      reviewsByProduct.get(pid)!.push({
+        id: r.id,
+        userName: r.customer_display_name || 'Verified Foodie',
+        userLocation: 'Verified Foodie',
+        rating: Number(r.rating || 5),
+        comment: r.review_text || '',
+        date: r.reviewed_at
+          ? new Date(r.reviewed_at).toLocaleDateString('en-IN', {
+              day: 'numeric',
+              month: 'short',
+              year: 'numeric',
+            })
+          : 'Recent',
+        verified: r.is_verified_purchase !== false,
+      });
+    }
+  }
+
+  return productsData.map((row) => {
+    const product = mapDbProductToProduct(row);
+    const prodReviews = reviewsByProduct.get(String(product.id)) || [];
+    const reviewsCount = prodReviews.length;
+    const rating = reviewsCount > 0
+      ? Number((prodReviews.reduce((sum, r) => sum + r.rating, 0) / reviewsCount).toFixed(1))
+      : undefined;
+
+    return {
+      ...product,
+      reviewsList: prodReviews,
+      reviewsCount,
+      rating,
+    };
+  });
 }
 
 export async function fetchSupabaseProductBySlug(slug: string): Promise<Product | null> {
@@ -284,7 +325,43 @@ export async function fetchSupabaseProductBySlug(slug: string): Promise<Product 
     .maybeSingle();
 
   if (error || !data) return null;
-  return mapDbProductToProduct(data);
+  const product = mapDbProductToProduct(data);
+
+  // Fetch reviews from product_reviews table
+  const { data: revData } = await supabase
+    .from('product_reviews')
+    .select('id, product_id, rating, review_text, customer_display_name, is_verified_purchase, is_published, reviewed_at, created_at')
+    .eq('product_id', String(product.id))
+    .eq('is_published', true)
+    .order('reviewed_at', { ascending: false });
+
+  const prodReviews = (revData || []).map((r: any) => ({
+    id: r.id,
+    userName: r.customer_display_name || 'Verified Foodie',
+    userLocation: 'Verified Foodie',
+    rating: Number(r.rating || 5),
+    comment: r.review_text || '',
+    date: r.reviewed_at
+      ? new Date(r.reviewed_at).toLocaleDateString('en-IN', {
+          day: 'numeric',
+          month: 'short',
+          year: 'numeric',
+        })
+      : 'Recent',
+    verified: r.is_verified_purchase !== false,
+  }));
+
+  const reviewsCount = prodReviews.length;
+  const rating = reviewsCount > 0
+    ? Number((prodReviews.reduce((sum, r) => sum + r.rating, 0) / reviewsCount).toFixed(1))
+    : undefined;
+
+  return {
+    ...product,
+    reviewsList: prodReviews,
+    reviewsCount,
+    rating,
+  };
 }
 
 export async function createSupabaseProduct(productData: Partial<Product>): Promise<Product> {
@@ -1139,23 +1216,24 @@ export async function deleteSupabaseCustomerAddress(addressId: string): Promise<
 
 export async function getNextSequentialOrderId(): Promise<string> {
   if (!isSupabaseConfigured()) {
-    return `GKSWAD-#001`;
+    return `GKSWAD-#00001`;
   }
   try {
     const { data, error } = await supabase
       .from('orders')
-      .select('order_id')
+      .select('order_id, order_number')
       .order('created_at', { ascending: false })
-      .limit(50);
+      .limit(100);
 
     if (error || !data || data.length === 0) {
-      return `GKSWAD-#001`;
+      return `GKSWAD-#00001`;
     }
 
     let maxNum = 0;
     for (const row of data) {
-      if (row.order_id) {
-        const match = row.order_id.match(/GKSWAD-#?(\d+)/i) || row.order_id.match(/GKS-#?(\d+)/i);
+      const idToCheck = row.order_number || row.order_id;
+      if (idToCheck) {
+        const match = idToCheck.match(/GKSWAD-#?0*(\d+)/i) || idToCheck.match(/GKS-#?0*(\d+)/i);
         if (match && match[1]) {
           const num = parseInt(match[1], 10);
           if (!isNaN(num) && num > maxNum) {
@@ -1165,9 +1243,9 @@ export async function getNextSequentialOrderId(): Promise<string> {
       }
     }
     const nextSeq = maxNum + 1;
-    return `GKSWAD-#${String(nextSeq).padStart(3, '0')}`;
+    return `GKSWAD-#${String(nextSeq).padStart(5, '0')}`;
   } catch {
-    return `GKSWAD-#001`;
+    return `GKSWAD-#00001`;
   }
 }
 
@@ -1340,149 +1418,85 @@ export function deserializeOrderItem(it: any): OrderItem {
   };
 }
 
+export function mapDbCategoryToCategory(row: any): Category {
+  return {
+    id: row.id,
+    name: row.name,
+    slug: row.slug,
+    tagline: row.tagline || '',
+    image: row.image || '',
+    iconName: row.icon_name || row.iconName || 'Utensils',
+    itemCount: row.item_count || 0,
+  };
+}
+
+/**
+ * Fetch all categories from Supabase PostgreSQL
+ */
+export async function fetchSupabaseCategories(): Promise<Category[]> {
+  if (!isSupabaseConfigured()) return [];
+  try {
+    const { data, error } = await supabase
+      .from('categories')
+      .select('*')
+      .order('sort_order', { ascending: true });
+
+    if (error) {
+      console.warn('Supabase categories fetch notice:', error.message);
+      return [];
+    }
+    return (data || []).map(mapDbCategoryToCategory);
+  } catch (err) {
+    console.warn('Supabase fetch categories error:', err);
+    return [];
+  }
+}
+
 import { computeScheduledIsoTimestamp } from '../utils/dateUtils';
 
-export function resolveDbOrderOutlet(row: any): { outletId: string; outletName: string; kitchenAddress?: string } {
+export function resolveDbOrderOutlet(row: any, allOutlets: Outlet[] = []): { outletId: string; outletName: string; kitchenAddress?: string } {
   const rawId = String(row.outlet_id || '').trim();
   const rawName = String(row.outlets?.name || row.outlet_name || '').trim();
-  const pin = String(row.delivery_pincode || row.customer_details?.pincode || row.delivery_address_snapshot?.pincode || '').trim();
-  const fullAddress = String(row.delivery_address_snapshot?.fullAddress || row.customer_details?.address || '').toLowerCase();
+  const rawAddress = String(row.outlets?.address || row.kitchen_address || '').trim();
 
-  // 1. Direct outlet match by rawId
-  if (rawId) {
-    const cleanId = rawId.replace(/^outlet-/, '').toLowerCase();
-    const foundById = INITIAL_OUTLETS.find(
-      (o) => o.id.toLowerCase() === rawId.toLowerCase() || o.id.toLowerCase() === cleanId
-    );
-    if (foundById) {
-      return { outletId: foundById.id, outletName: foundById.name, kitchenAddress: foundById.address };
+  // 1. Direct match from provided allOutlets
+  if (allOutlets.length > 0) {
+    if (rawId) {
+      const found = allOutlets.find((o) => o.id.toLowerCase() === rawId.toLowerCase());
+      if (found) return { outletId: found.id, outletName: found.name, kitchenAddress: found.address };
     }
-    if (cleanId.includes('kendriya') || cleanId === 'bbsr-kendriyavihar') {
-      const o = INITIAL_OUTLETS.find((x) => x.id === 'bbsr-kendriyavihar') || INITIAL_OUTLETS[5] || INITIAL_OUTLETS[4];
-      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
-    }
-    if (cleanId.includes('patia') || cleanId === 'bbsr-patia') {
-      const o = INITIAL_OUTLETS[3];
-      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
-    }
-    if (cleanId.includes('khandagiri') || cleanId === 'bbsr-khandagiri') {
-      const o = INITIAL_OUTLETS[4];
-      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
-    }
-    if (cleanId.includes('hsr') || cleanId === 'blr-hsr') {
-      const o = INITIAL_OUTLETS[0];
-      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
-    }
-    if (cleanId.includes('whitefield') || cleanId === 'blr-whitefield') {
-      const o = INITIAL_OUTLETS[1];
-      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
-    }
-    if (cleanId.includes('indiranagar') || cleanId === 'blr-indiranagar') {
-      const o = INITIAL_OUTLETS[2];
-      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
+    if (rawName) {
+      const found = allOutlets.find((o) => o.name.toLowerCase() === rawName.toLowerCase());
+      if (found) return { outletId: found.id, outletName: found.name, kitchenAddress: found.address };
     }
   }
 
-  // 2. Direct outlet match by rawName
-  if (rawName && rawName !== 'Gaon Ka Swad Kitchen' && rawName !== 'Gaon Ka Swad' && rawName !== 'Default Outlet') {
-    const lowerName = rawName.toLowerCase();
-    const foundByName = INITIAL_OUTLETS.find(
-      (o) => o.name.toLowerCase() === lowerName || o.name.toLowerCase().includes(lowerName) || lowerName.includes(o.name.toLowerCase())
-    );
-    if (foundByName) {
-      return { outletId: foundByName.id, outletName: foundByName.name, kitchenAddress: foundByName.address };
-    }
-    if (lowerName.includes('kendriya')) {
-      const o = INITIAL_OUTLETS.find((x) => x.id === 'bbsr-kendriyavihar') || INITIAL_OUTLETS[5] || INITIAL_OUTLETS[4];
-      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
-    }
-    if (lowerName.includes('patia')) {
-      const o = INITIAL_OUTLETS[3];
-      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
-    }
-    if (lowerName.includes('khandagiri')) {
-      const o = INITIAL_OUTLETS[4];
-      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
-    }
-    if (lowerName.includes('hsr')) {
-      const o = INITIAL_OUTLETS[0];
-      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
-    }
-    if (lowerName.includes('whitefield')) {
-      const o = INITIAL_OUTLETS[1];
-      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
-    }
-    if (lowerName.includes('indiranagar')) {
-      const o = INITIAL_OUTLETS[2];
-      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
-    }
+  // 2. Fallback heuristic mappings
+  const cleanId = rawId.replace(/^outlet-/, '').toLowerCase();
+  if (cleanId.includes('kendriya') || cleanId === 'bbsr-kendriyavihar') {
+    return { outletId: 'bbsr-kendriyavihar', outletName: 'Gaon Ka Swad - Kendriya Vihar', kitchenAddress: 'Kendriya Vihar, C.C.S. Complex, Jagamara / Baramunda Road, Bhubaneswar' };
+  }
+  if (cleanId.includes('patia') || cleanId === 'bbsr-patia') {
+    return { outletId: 'bbsr-patia', outletName: 'Gaon Ka Swad - Patia', kitchenAddress: 'KIIT Square, Infocity Rd, Patia, Bhubaneswar' };
+  }
+  if (cleanId.includes('khandagiri') || cleanId === 'bbsr-khandagiri') {
+    return { outletId: 'bbsr-khandagiri', outletName: 'Gaon Ka Swad - Khandagiri', kitchenAddress: 'Khandagiri Square, NH-16, Bhubaneswar' };
+  }
+  if (cleanId.includes('hsr') || cleanId === 'blr-hsr') {
+    return { outletId: 'blr-hsr', outletName: 'Gaon Ka Swad - HSR Layout', kitchenAddress: 'Sector 3, 27th Main Rd, HSR Layout, Bangalore' };
+  }
+  if (cleanId.includes('whitefield') || cleanId === 'blr-whitefield') {
+    return { outletId: 'blr-whitefield', outletName: 'Gaon Ka Swad - Whitefield', kitchenAddress: 'ITPL Main Rd, Near Hope Farm, Whitefield, Bangalore' };
+  }
+  if (cleanId.includes('indiranagar') || cleanId === 'blr-indiranagar') {
+    return { outletId: 'blr-indiranagar', outletName: 'Gaon Ka Swad - Indiranagar', kitchenAddress: '100 Feet Rd, HAL 2nd Stage, Indiranagar, Bangalore' };
   }
 
-  // 3. Match by delivery PIN
-  if (pin && /^\d{6}$/.test(pin)) {
-    const matchedZone = INITIAL_DELIVERY_ZONES.find((z) => (z.pinCodes || []).includes(pin));
-    if (matchedZone) {
-      const foundByZone = INITIAL_OUTLETS.find((o) => o.id === matchedZone.outletId);
-      if (foundByZone) {
-        return { outletId: foundByZone.id, outletName: foundByZone.name, kitchenAddress: foundByZone.address };
-      }
-    }
-    if (['752054', '751028'].includes(pin)) {
-      const o = INITIAL_OUTLETS.find((x) => x.id === 'bbsr-kendriyavihar') || INITIAL_OUTLETS[5] || INITIAL_OUTLETS[4];
-      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
-    }
-    if (['751024', '751016', '751031'].includes(pin)) {
-      const o = INITIAL_OUTLETS[3];
-      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
-    }
-    if (['751030', '751019', '751003', '751020', '751001', '751002'].includes(pin)) {
-      const o = INITIAL_OUTLETS[4];
-      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
-    }
-    if (['560102', '560103', '560034', '560068'].includes(pin)) {
-      const o = INITIAL_OUTLETS[0];
-      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
-    }
-    if (['560066', '560067', '560048', '560037'].includes(pin)) {
-      const o = INITIAL_OUTLETS[1];
-      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
-    }
-    if (['560038', '560008', '560075', '560001'].includes(pin)) {
-      const o = INITIAL_OUTLETS[2];
-      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
-    }
-  }
-
-  // 4. Address text heuristic
-  if (fullAddress) {
-    if (fullAddress.includes('kendriya vihar') || fullAddress.includes('kendriyavihar') || fullAddress.includes('baramunda') || fullAddress.includes('jagamara')) {
-      const o = INITIAL_OUTLETS.find((x) => x.id === 'bbsr-kendriyavihar') || INITIAL_OUTLETS[5] || INITIAL_OUTLETS[4];
-      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
-    }
-    if (fullAddress.includes('patia') || fullAddress.includes('kiit') || fullAddress.includes('infocity') || fullAddress.includes('kanan vihar') || fullAddress.includes('chandrasekharpur')) {
-      const o = INITIAL_OUTLETS[3];
-      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
-    }
-    if (fullAddress.includes('khandagiri') || fullAddress.includes('sundarpada') || fullAddress.includes('aiims')) {
-      const o = INITIAL_OUTLETS[4];
-      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
-    }
-    if (fullAddress.includes('hsr') || fullAddress.includes('koramangala') || fullAddress.includes('bellandur') || fullAddress.includes('btm') || fullAddress.includes('sarjapur')) {
-      const o = INITIAL_OUTLETS[0];
-      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
-    }
-    if (fullAddress.includes('whitefield') || fullAddress.includes('itpl') || fullAddress.includes('hoodi') || fullAddress.includes('kadugodi') || fullAddress.includes('marathahalli')) {
-      const o = INITIAL_OUTLETS[1];
-      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
-    }
-    if (fullAddress.includes('indiranagar') || fullAddress.includes('domlur') || fullAddress.includes('hal') || fullAddress.includes('ulsoor')) {
-      const o = INITIAL_OUTLETS[2];
-      return { outletId: o.id, outletName: o.name, kitchenAddress: o.address };
-    }
-  }
-
-  const def = INITIAL_OUTLETS[4] || INITIAL_OUTLETS[0];
-  return { outletId: rawId || def.id, outletName: rawName || def.name, kitchenAddress: def.address };
+  return {
+    outletId: rawId || (allOutlets[0]?.id ?? 'blr-hsr'),
+    outletName: rawName || (allOutlets[0]?.name ?? 'Gaon Ka Swad Kitchen'),
+    kitchenAddress: rawAddress || allOutlets[0]?.address,
+  };
 }
 
 export function mapDbOrderToOrder(row: any): Order {
@@ -1557,10 +1571,10 @@ export function mapDbOrderToOrder(row: any): Order {
       fullName: row.customer_name || 'Customer',
       phone: row.customer_phone || '',
       email: row.customer_email || '',
-      address: row.delivery_address_snapshot?.fullAddress || '',
-      city: row.delivery_address_snapshot?.city || 'Bhubaneswar',
-      state: row.delivery_address_snapshot?.state || 'Odisha',
-      pincode: row.delivery_pincode || '',
+      address: isPickup ? '' : (row.delivery_address_snapshot?.fullAddress || ''),
+      city: isPickup ? '' : (row.delivery_address_snapshot?.city || 'Bhubaneswar'),
+      state: isPickup ? '' : (row.delivery_address_snapshot?.state || 'Odisha'),
+      pincode: isPickup ? '' : (row.delivery_pincode || ''),
       deliveryType,
       scheduledAt,
       scheduledDate: row.customer_details?.scheduledDate,
@@ -1571,12 +1585,7 @@ export function mapDbOrderToOrder(row: any): Order {
       deliveryNotes: row.delivery_instructions || undefined,
       includeCutlery: true,
     },
-    deliveryAddressSnapshot: row.delivery_address_snapshot || {
-      fullAddress: isPickup ? 'Self-Pickup from Kitchen' : '',
-      city: 'Bhubaneswar',
-      state: 'Odisha',
-      pincode: row.delivery_pincode || '',
-    },
+    deliveryAddressSnapshot: isPickup ? undefined : (row.delivery_address_snapshot || undefined),
     status: displayStatus as Order['status'],
     orderStatus: rawStatus,
     placedAt: row.placed_at || row.created_at,
@@ -1767,25 +1776,26 @@ export async function createSupabaseOrder(orderData: Partial<Order>): Promise<Or
   const payload: any = {
     id,
     order_id: orderId,
+    order_number: orderId,
     outlet_id: safeOutletId,
     customer_id: isUUID(orderData.customerId) ? orderData.customerId : null,
-    address_id: isUUID(orderData.addressId) ? orderData.addressId : null,
+    address_id: isSelfPickup ? null : (isUUID(orderData.addressId) ? orderData.addressId : null),
     customer_name: supaCustomerName,
     customer_phone: supaCustomerPhone,
     order_type: isSelfPickup ? 'pickup' : 'delivery',
     is_self_pickup: isSelfPickup,
     items: safeItems,
     subtotal: Number(orderData.subtotal || 0),
-    discount_amount: Number(orderData.discount || 0),
-    welcome_discount_applied: !!orderData.isWelcomeDiscountApplied,
-    welcome_discount_amount: Number(orderData.welcomeDiscountAmount || 0),
     delivery_fee: Number(orderData.deliveryFee || 0),
     packaging_fee: Number(orderData.packagingFee || 0),
+    discount_amount: Number(orderData.discount || 0),
     tax_amount: Number(orderData.gst || 0),
     total_amount: Number(orderData.total || 0),
+    discount_type: (orderData.discount && Number(orderData.discount) > 0) ? 'coupon' : 'NONE',
     discount_code: orderData.couponCode || null,
-    coupon_id: orderData.couponId || null,
-    coupon_discount_amount: orderData.couponDiscountAmount ?? orderData.discount ?? 0,
+    discount_description: null,
+    welcome_discount_applied: !!orderData.isWelcomeDiscountApplied,
+    welcome_discount_amount: Number(orderData.welcomeDiscountAmount || 0),
     payment_method: orderData.customerDetails?.paymentMethod || 'cod',
     payment_status: 'PENDING',
     delivery_type: deliveryType,
@@ -1799,8 +1809,9 @@ export async function createSupabaseOrder(orderData: Partial<Order>): Promise<Or
     out_for_delivery_at: null,
     delivered_at: null,
     cancelled_at: null,
+    cancellation_reason: null,
     customer_details: orderData.customerDetails || {},
-    delivery_address_snapshot: orderData.deliveryAddressSnapshot || {},
+    delivery_address_snapshot: isSelfPickup ? null : (orderData.deliveryAddressSnapshot || null),
     delivery_pincode: orderData.deliveryPinCode || orderData.customerDetails?.pincode || '',
     estimated_delivery_minutes: Number(orderData.estimatedDeliveryMinutes || (isSelfPickup ? 25 : 35)),
     created_at: now,
@@ -1943,107 +1954,15 @@ export async function seedSupabaseDatabase(force = false): Promise<{
   let insertedCategories = 0;
   let insertedOutlets = 0;
   let insertedZones = 0;
-  let insertedProducts = 0;
-  let insertedAbouts = 0;
-
-  // 2. Seed Categories
-  if (health.tableCounts.categories === 0 || force) {
-    const catPayloads = INITIAL_CATEGORIES.map((c, i) => ({
-      id: c.id,
-      name: c.name,
-      slug: c.slug,
-      tagline: c.tagline,
-      image: c.image,
-      icon_name: c.iconName,
-      sort_order: i,
-    }));
-    const { error: catErr } = await supabase.from('categories').upsert(catPayloads, { onConflict: 'id' });
-    if (catErr) console.warn('Categories seed warning:', catErr);
-    else insertedCategories = catPayloads.length;
-  }
-
-  // 3. Seed Outlets
-  if (health.tableCounts.outlets === 0 || force) {
-    const outletPayloads = INITIAL_OUTLETS.map(mapOutletToDbOutlet);
-    const { error: outletErr } = await supabase.from('outlets').upsert(outletPayloads, { onConflict: 'id' });
-    if (outletErr) console.warn('Outlets seed warning:', outletErr);
-    else insertedOutlets = outletPayloads.length;
-  }
-
-  // 4. Seed Delivery Zones
-  if (health.tableCounts.zones === 0 || force) {
-    const zonePayloads = INITIAL_DELIVERY_ZONES.map(mapZoneToDbZone);
-    const { error: zoneErr } = await supabase.from('delivery_zones').upsert(zonePayloads, { onConflict: 'id' });
-    if (zoneErr) console.warn('Zones seed warning:', zoneErr);
-    else insertedZones = zonePayloads.length;
-  }
-
-  // 5. Seed Abouts
-  if ((health.tableCounts.abouts || 0) === 0 || force) {
-    const aboutPayloads = INITIAL_OUTLETS.map((o) =>
-      mapAboutToDbAbout({
-        outletId: o.id,
-        heroFireLine: `THE HERITAGE BEHIND GAON KA SWAD • ${o.name.replace(/^Gaon Ka Swad - /i, '').toUpperCase()}`,
-        heroHeader: o.heroHeader || `Crafting Authentic Culinary Memories in ${o.city}`,
-        heroDescription: o.heroDescription || `Born out of a deep reverence for forgotten village recipes and slow-cooking traditions, our ${o.name} kitchen brings soulful tastes to modern dining tables.`,
-        storyLine: `WHO WE ARE • ${o.name.replace(/^Gaon Ka Swad - /i, '').toUpperCase()}`,
-        storyTitle: 'A Modern Cloud Kitchen with Heirloom Roots',
-        storyDescription: 'Gaon Ka Swad was founded with a singular conviction: genuine taste cannot be rushed. In a world of 10-minute industrial microwave prep, we chose the path of slow-simmered handis, 24-hour charcoal embers, whole stone-ground spices, and pure cow desi ghee.\n\nEvery recipe in our menu traces back to traditional culinary masters. We do not use chemical preservatives, artificial food coloring, or pre-packaged spice pastes.',
-        storyHighlight1Title: '100% Pure Desi Ghee',
-        storyHighlight1Description: 'Pure Desi Ghee & Raw Spices',
-        storyHighlight2Title: '24 Hrs Slow-Simmered',
-        storyHighlight2Description: 'Slow-Simmered Dal Bukhara',
-        outletImage: 'https://images.unsplash.com/photo-1556910103-1c02745aae4d?q=80&w=1000&auto=format&fit=crop',
-        expLine: 'THE GAON KA SWAD EXPERIENCE',
-        expHeader: 'Food That Feels Like Home',
-        expDescription: 'From the way we cook to the way we serve, every detail is designed to make your meal feel a little more special.',
-        expCard1Title: '🏠 Familiar Flavours',
-        expCard1Header: 'Taste That Feels Like Home',
-        expCard1Description: 'Comforting Indian flavours inspired by the food we know, love, and grew up sharing.',
-        expCard2Title: '🍽️ Made With Care',
-        expCard2Header: 'Every Order Matters',
-        expCard2Description: 'We prepare each order with attention to freshness, consistency, and the little details that make a meal memorable.',
-        expCard3Title: '❤️ Your Experience',
-        expCard3Header: 'We Listen & Improve',
-        expCard3Description: 'Your feedback helps us get better. Every rating, review, and suggestion helps shape the Gaon Ka Swad experience.',
-      })
-    );
-    const { error: aboutErr } = await supabase.from('abouts').upsert(aboutPayloads, { onConflict: 'outlet_id' });
-    if (aboutErr) console.warn('Abouts seed warning:', aboutErr);
-    else insertedAbouts = aboutPayloads.length;
-  }
-
-  // 6. Seed Products
-  if (health.tableCounts.products === 0 || force) {
-    const productPayloads = INITIAL_PRODUCTS.map((p) =>
-      mapProductToDbProduct({
-        ...p,
-        outlets: Array.isArray(p.outlets)
-          ? p.outlets
-          : INITIAL_OUTLETS.map((o) => ({
-              outletId: o.id,
-              inStock: true,
-              isFeatured: !!p.featured,
-              isBestseller: !!p.bestseller,
-              isChefSpecial: !!p.chefSpecial,
-            })),
-        outletIds: Array.isArray(p.outletIds) ? p.outletIds : INITIAL_OUTLETS.map((o) => o.id),
-      })
-    );
-
-    const { error: prodErr } = await supabase.from('products').upsert(productPayloads, { onConflict: 'id' });
-    if (prodErr) throw prodErr;
-    insertedProducts = productPayloads.length;
-  }
-
+  // 2. Health check summary
   return {
     success: true,
-    insertedProducts,
-    insertedOutlets,
-    insertedZones,
-    insertedCategories,
-    insertedAbouts,
-    message: `Successfully seeded ${insertedProducts} products, ${insertedOutlets} outlets, ${insertedAbouts} about pages, and ${insertedZones} delivery zones to Supabase PostgreSQL.`,
+    insertedProducts: health.tableCounts.products,
+    insertedOutlets: health.tableCounts.outlets,
+    insertedZones: health.tableCounts.zones,
+    insertedCategories: health.tableCounts.categories,
+    insertedAbouts: health.tableCounts.abouts || 0,
+    message: `Database connection verified. Live PostgreSQL tables: ${health.tableCounts.products} products, ${health.tableCounts.outlets} outlets, ${health.tableCounts.zones} delivery zones, ${health.tableCounts.categories} categories.`,
   };
 }
 
@@ -2684,5 +2603,68 @@ export const fetchAvailableCouponsForCustomer = async (
   });
   return active;
 };
+
+/**
+ * Fetches the set of order IDs that have already been reviewed/rated
+ */
+export async function fetchRatedOrderIds(orderIds: string[]): Promise<string[]> {
+  if (!orderIds || orderIds.length === 0) return [];
+
+  // 1. Try direct Supabase query if configured
+  if (isSupabaseConfigured()) {
+    try {
+      const candidates = new Set<string>();
+      orderIds.forEach((id) => {
+        const str = String(id || '').trim();
+        if (str) {
+          candidates.add(str);
+          const clean = str.replace(/^#+/, '');
+          candidates.add(clean);
+          candidates.add(`#${clean}`);
+        }
+      });
+
+      const { data, error } = await supabase
+        .from('product_reviews')
+        .select('order_id')
+        .in('order_id', Array.from(candidates));
+
+      if (!error && data) {
+        const found = new Set<string>();
+        data.forEach((r: any) => {
+          if (r.order_id) {
+            const raw = String(r.order_id).trim();
+            found.add(raw);
+            const c = raw.replace(/^#+/, '');
+            found.add(c);
+            found.add(`#${c}`);
+          }
+        });
+        return Array.from(found);
+      }
+    } catch (err) {
+      console.warn('fetchRatedOrderIds direct Supabase error, falling back to API:', err);
+    }
+  }
+
+  // 2. Fallback to server API endpoint
+  try {
+    const res = await fetch('/api/orders/rated-status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ orderIds }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && Array.isArray(data.ratedOrderIds)) {
+        return data.ratedOrderIds;
+      }
+    }
+  } catch (err) {
+    console.warn('fetchRatedOrderIds API fallback error:', err);
+  }
+
+  return [];
+}
 
 

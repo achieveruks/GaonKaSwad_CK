@@ -120,8 +120,6 @@ CREATE TABLE IF NOT EXISTS public.products (
   price NUMERIC NOT NULL,
   original_price NUMERIC,
   category TEXT NOT NULL,
-  rating NUMERIC DEFAULT 4.8,
-  reviews_count INTEGER DEFAULT 1,
   image TEXT NOT NULL,
   gallery_images JSONB DEFAULT '[]'::jsonb,
   is_veg BOOLEAN DEFAULT TRUE NOT NULL,
@@ -137,7 +135,6 @@ CREATE TABLE IF NOT EXISTS public.products (
   addons JSONB DEFAULT '[]'::jsonb,
   ingredients JSONB DEFAULT '[]'::jsonb,
   allergens JSONB DEFAULT '[]'::jsonb,
-  reviews_list JSONB DEFAULT '[]'::jsonb,
   created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
   updated_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
 );
@@ -148,6 +145,9 @@ ALTER TABLE IF EXISTS public.products DROP COLUMN IF EXISTS bestseller;
 ALTER TABLE IF EXISTS public.products DROP COLUMN IF EXISTS new_arrival;
 ALTER TABLE IF EXISTS public.products DROP COLUMN IF EXISTS chef_special;
 ALTER TABLE IF EXISTS public.products DROP COLUMN IF EXISTS in_stock;
+ALTER TABLE IF EXISTS public.products DROP COLUMN IF EXISTS rating;
+ALTER TABLE IF EXISTS public.products DROP COLUMN IF EXISTS reviews_count;
+ALTER TABLE IF EXISTS public.products DROP COLUMN IF EXISTS reviews_list;
 ALTER TABLE IF EXISTS public.delivery_zones DROP COLUMN IF EXISTS minimum_order_value;
 
 CREATE TABLE IF NOT EXISTS public.orders (

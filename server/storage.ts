@@ -1,8 +1,24 @@
 import fs from 'fs';
 import path from 'path';
-import { Product, Outlet, OutletAbout, DeliveryZone, Order, OrderItem, CleanOrderItem, DashboardStats, Customer, CustomerAddress, Coupon, CouponRedemption, CouponValidationResult } from '../src/types';
-import { PRODUCTS as INITIAL_PRODUCTS } from '../src/data/products';
-import { INITIAL_OUTLETS, INITIAL_DELIVERY_ZONES } from '../src/data/outlets';
+import {
+  Product,
+  Outlet,
+  OutletAbout,
+  DeliveryZone,
+  Order,
+  OrderItem,
+  CleanOrderItem,
+  DashboardStats,
+  Customer,
+  CustomerAddress,
+  Coupon,
+  CouponRedemption,
+  CouponValidationResult,
+  ProductReview,
+  ReviewableItem,
+  OrderReviewableDetails,
+  ProductRatingSummary,
+} from '../src/types';
 
 /**
  * Clean Architecture Database Serializer for Order Items
@@ -127,6 +143,7 @@ const CUSTOMERS_FILE = path.join(DATA_DIR, 'customers_store.json');
 const CUSTOMER_ADDRESSES_FILE = path.join(DATA_DIR, 'customer_addresses_store.json');
 const COUPONS_FILE = path.join(DATA_DIR, 'coupons_store.json');
 const COUPON_REDEMPTIONS_FILE = path.join(DATA_DIR, 'coupon_redemptions_store.json');
+const PRODUCT_REVIEWS_FILE = path.join(DATA_DIR, 'product_reviews_store.json');
 
 export function normalizePhone(rawPhone?: string): string {
   if (!rawPhone) return '';
@@ -134,7 +151,17 @@ export function normalizePhone(rawPhone?: string): string {
   return digits.length >= 10 ? digits.slice(-10) : digits;
 }
 
-const ALL_INITIAL_OUTLET_IDS = INITIAL_OUTLETS.map((o) => o.id);
+export function maskCustomerName(fullName?: string): string {
+  if (!fullName || !fullName.trim()) return 'Customer';
+  const parts = fullName.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 1) {
+    const single = parts[0];
+    return single.charAt(0).toUpperCase() + single.slice(1);
+  }
+  const first = parts[0].charAt(0).toUpperCase() + parts[0].slice(1);
+  const lastInitial = parts[parts.length - 1].charAt(0).toUpperCase() + '.';
+  return `${first} ${lastInitial}`;
+}
 
 function safeReadJson<T>(filePath: string, fallback: T): T {
   try {
@@ -159,6 +186,7 @@ class AppStorage {
   private customerAddresses: CustomerAddress[] = [];
   private coupons: Coupon[] = [];
   private couponRedemptions: CouponRedemption[] = [];
+  private productReviews: ProductReview[] = [];
   private isInitialized = false;
 
   constructor() {
@@ -168,80 +196,10 @@ class AppStorage {
   private init() {
     if (this.isInitialized) return;
 
-    this.outlets = INITIAL_OUTLETS.map((o: any) => ({
-      ...o,
-      packagingFee: o.packagingFee !== undefined ? Number(o.packagingFee) : 25,
-      avgCookingTime: o.avgCookingTime || o.estimatedDeliveryTime || '25-35 mins',
-      heroFireLine: o.heroFireLine || 'ARTISANAL CLOUD KITCHEN • SLOW-COOKED DUM',
-      heroHeader: o.heroHeader || 'Authentic Indian Flavors, Slow-Cooked to Perfection',
-      heroDescription:
-        o.heroDescription ||
-        'Experience royal dum biryanis, 24-hour slow-simmered dal makhani, and smoky clay-oven tandoori grills, delivered piping hot to your doorstep in sealed eco-handis.',
-      trustBadgeRating: o.trustBadgeRating || '4.9 ★ (2.8k+)',
-      trustBadgeRatingSub: o.trustBadgeRatingSub || 'Google & Zomato',
-      trustBadgeUsp: o.trustBadgeUsp || '100% Pure',
-      trustBadgeUspSub: o.trustBadgeUspSub || 'Desi Ghee Recipe',
-    }));
-
-    this.zones = [...INITIAL_DELIVERY_ZONES];
-    this.abouts = this.outlets.map((o) => ({
-      outletId: o.id,
-      heroFireLine: `THE HERITAGE BEHIND GAON KA SWAD • ${o.name.replace(/^Gaon Ka Swad - /i, '').toUpperCase()}`,
-      heroHeader: o.heroHeader || `Crafting Authentic Culinary Memories in ${o.city}`,
-      heroDescription: o.heroDescription || `Born out of a deep reverence for forgotten village recipes and slow-cooking traditions, our ${o.name} kitchen brings soulful tastes straight to dining tables.`,
-      storyLine: `WHO WE ARE • ${o.name.replace(/^Gaon Ka Swad - /i, '').toUpperCase()}`,
-      storyTitle: 'A Modern Cloud Kitchen with Heirloom Roots',
-      storyDescription: 'Gaon Ka Swad was founded with a singular conviction: genuine taste cannot be rushed. In a world of 10-minute industrial microwave prep, we chose the path of slow-simmered handis, 24-hour charcoal embers, whole stone-ground spices, and pure cow desi ghee.\n\nEvery recipe in our menu traces back to traditional culinary masters. We do not use chemical preservatives, artificial food coloring, or pre-packaged spice pastes.',
-      storyHighlight1Title: '100% Pure Desi Ghee',
-      storyHighlight1Description: 'Pure Desi Ghee & Raw Spices',
-      storyHighlight2Title: '24 Hrs Slow-Simmered',
-      storyHighlight2Description: 'Slow-Simmered Dal Bukhara',
-      outletImage: 'https://images.unsplash.com/photo-1556910103-1c02745aae4d?q=80&w=1000&auto=format&fit=crop',
-      expLine: 'THE GAON KA SWAD EXPERIENCE',
-      expHeader: 'Food That Feels Like Home',
-      expDescription: 'From the way we cook to the way we serve, every detail is designed to make your meal feel a little more special.',
-      expCard1Title: '🏠 Familiar Flavours',
-      expCard1Header: 'Taste That Feels Like Home',
-      expCard1Description: 'Comforting Indian flavours inspired by the food we know, love, and grew up sharing.',
-      expCard2Title: '🍽️ Made With Care',
-      expCard2Header: 'Every Order Matters',
-      expCard2Description: 'We prepare each order with attention to freshness, consistency, and the little details that make a meal memorable.',
-      expCard3Title: '❤️ Your Experience',
-      expCard3Header: 'We Listen & Improve',
-      expCard3Description: 'Your feedback helps us get better. Every rating, review, and suggestion helps shape the Gaon Ka Swad experience.',
-    }));
-
-    const activeOutletIds = this.outlets.map((o) => o.id);
-    this.products = INITIAL_PRODUCTS.map((p: any) => {
-      let outlets: any[] = [];
-      if (Array.isArray(p.outlets)) {
-        outlets = p.outlets.map((o: any) =>
-          typeof o === 'string'
-            ? { outletId: o, inStock: p.inStock !== false, isFeatured: !!p.featured, isBestseller: !!p.bestseller }
-            : {
-                outletId: o.outletId || o.id,
-                inStock: o.inStock !== false,
-                isFeatured: !!o.isFeatured,
-                isBestseller: !!o.isBestseller,
-              }
-        );
-      } else {
-        outlets = activeOutletIds.map((oid) => ({
-          outletId: oid,
-          inStock: p.inStock !== false,
-          isFeatured: !!p.featured,
-          isBestseller: !!p.bestseller,
-        }));
-      }
-      return {
-        ...p,
-        active: p.active !== false,
-        inStock: p.inStock !== false,
-        outlets,
-        outletIds: outlets.map((o) => o.outletId),
-      };
-    });
-
+    this.outlets = [];
+    this.zones = [];
+    this.abouts = [];
+    this.products = [];
     this.orders = [];
     this.customers = [];
     this.customerAddresses = [];
@@ -249,6 +207,7 @@ class AppStorage {
     // Initialize Server Coupons & Redemptions
     this.coupons = safeReadJson<Coupon[]>(COUPONS_FILE, []);
     this.couponRedemptions = safeReadJson<CouponRedemption[]>(COUPON_REDEMPTIONS_FILE, []);
+    this.productReviews = safeReadJson<ProductReview[]>(PRODUCT_REVIEWS_FILE, []);
 
     this.isInitialized = true;
   }
@@ -259,6 +218,17 @@ class AppStorage {
   private saveOutlets() {}
   private saveZones() {}
   private saveOrders() {}
+
+  private saveProductReviews() {
+    try {
+      if (!fs.existsSync(DATA_DIR)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+      }
+      fs.writeFileSync(PRODUCT_REVIEWS_FILE, JSON.stringify(this.productReviews, null, 2), 'utf-8');
+    } catch (e) {
+      console.warn('Warning: Could not save product reviews to disk.', e);
+    }
+  }
 
   private saveCoupons() {
     try {
@@ -286,6 +256,38 @@ class AppStorage {
   // PRODUCTS METHODS
   // =====================
 
+  private attachDynamicReviews(product: Product): Product {
+    const pIdStr = String(product.id);
+    const reviews = this.productReviews.filter(
+      (r) => String(r.productId) === pIdStr && r.isPublished !== false
+    );
+    const reviewsCount = reviews.length;
+    const rating = reviewsCount > 0
+      ? Number((reviews.reduce((sum, r) => sum + (Number(r.rating) || 5), 0) / reviewsCount).toFixed(1))
+      : undefined;
+
+    return {
+      ...product,
+      reviewsList: reviews.map((r) => ({
+        id: r.id,
+        userName: r.customerDisplayName || 'Verified Foodie',
+        userLocation: 'Verified Foodie',
+        rating: Number(r.rating || 5),
+        comment: r.reviewText || '',
+        date: r.reviewedAt
+          ? new Date(r.reviewedAt).toLocaleDateString('en-IN', {
+              day: 'numeric',
+              month: 'short',
+              year: 'numeric',
+            })
+          : 'Recent',
+        verified: r.isVerifiedPurchase !== false,
+      })),
+      reviewsCount,
+      rating,
+    };
+  }
+
   public getAllProducts(includeInactive = false, outletId?: string): Product[] {
     this.init();
     let list = this.products;
@@ -303,20 +305,22 @@ class AppStorage {
         return true;
       });
     }
-    return list;
+    return list.map((p) => this.attachDynamicReviews(p));
   }
 
   public getProductById(id: string | number): Product | undefined {
     this.init();
     const idStr = String(id);
-    return this.products.find((p) => String(p.id) === idStr);
+    const product = this.products.find((p) => String(p.id) === idStr);
+    return product ? this.attachDynamicReviews(product) : undefined;
   }
 
   public getProductBySlug(slug?: string): Product | undefined {
     this.init();
     if (!slug) return undefined;
     const cleanSlug = slug.toLowerCase().trim();
-    return this.products.find((p) => (p?.slug || '').toLowerCase() === cleanSlug);
+    const product = this.products.find((p) => (p?.slug || '').toLowerCase() === cleanSlug);
+    return product ? this.attachDynamicReviews(product) : undefined;
   }
 
   public createProduct(data: Partial<Product>): Product {
@@ -406,8 +410,6 @@ class AppStorage {
       price: Number(data.price),
       originalPrice: data.originalPrice ? Number(data.originalPrice) : undefined,
       category: data.category,
-      rating: data.rating !== undefined && data.rating !== null ? Number(data.rating) : 4.8,
-      reviewsCount: data.reviewsCount !== undefined && data.reviewsCount !== null ? Number(data.reviewsCount) : (Array.isArray(data.reviewsList) ? data.reviewsList.length : 0),
       image: data.image?.trim() || 'https://images.unsplash.com/photo-1546833999-b9f581a1996d?q=80&w=800&auto=format&fit=crop',
       galleryImages: data.galleryImages && data.galleryImages.length > 0 ? data.galleryImages : [data.image || 'https://images.unsplash.com/photo-1546833999-b9f581a1996d?q=80&w=800&auto=format&fit=crop'],
       isVeg: data.isVeg !== false,
@@ -430,12 +432,12 @@ class AppStorage {
       allergens: data.allergens || [],
       variants: data.variants || [],
       addons: data.addons || [],
-      reviewsList: data.reviewsList || [],
+      reviewsList: [],
     };
 
     this.products.unshift(newProduct);
     this.saveProducts();
-    return newProduct;
+    return this.attachDynamicReviews(newProduct);
   }
 
   public updateProduct(id: string | number, data: Partial<Product>): Product | null {
@@ -508,7 +510,7 @@ class AppStorage {
 
     this.products[index] = updated;
     this.saveProducts();
-    return updated;
+    return this.attachDynamicReviews(updated);
   }
 
   public updateOutletProductConfig(
@@ -1118,14 +1120,18 @@ class AppStorage {
     let customerId = orderData.customerId;
     const isGuest = !orderData.customerDetails?.createAccount && !customerId;
 
-    // Address snapshot object
-    const addressSnapshot = {
-      fullAddress: orderData.customerDetails?.address || '',
-      landmark: orderData.customerDetails?.landmark || '',
-      city: orderData.customerDetails?.city || outlet?.city || 'Bhubaneswar',
-      state: orderData.customerDetails?.state || outlet?.state || 'Odisha',
-      pincode: orderData.deliveryPinCode || orderData.customerDetails?.pincode || '',
-    };
+    const isPickup = !!(orderData.isSelfPickup || orderData.orderType === 'pickup');
+
+    // Address snapshot object (only for delivery orders)
+    const addressSnapshot = isPickup
+      ? undefined
+      : {
+          fullAddress: orderData.customerDetails?.address || '',
+          landmark: orderData.customerDetails?.landmark || '',
+          city: orderData.customerDetails?.city || outlet?.city || 'Bhubaneswar',
+          state: orderData.customerDetails?.state || outlet?.state || 'Odisha',
+          pincode: orderData.deliveryPinCode || orderData.customerDetails?.pincode || '',
+        };
 
     // If customer account requested or customer already exists
     let customer: Customer | null = null;
@@ -1152,18 +1158,20 @@ class AppStorage {
             : customer.marketingConsent,
         });
 
-        // Save / update default address for future prefill
-        const savedAddr = this.saveCustomerAddress(customer.id, {
-          fullAddress: addressSnapshot.fullAddress,
-          landmark: addressSnapshot.landmark,
-          city: addressSnapshot.city,
-          state: addressSnapshot.state,
-          pincode: addressSnapshot.pincode,
-          isDefault: true,
-        });
+        // Save / update default address for future prefill (delivery orders only)
+        if (!isPickup && addressSnapshot && addressSnapshot.fullAddress) {
+          const savedAddr = this.saveCustomerAddress(customer.id, {
+            fullAddress: addressSnapshot.fullAddress,
+            landmark: addressSnapshot.landmark,
+            city: addressSnapshot.city,
+            state: addressSnapshot.state,
+            pincode: addressSnapshot.pincode,
+            isDefault: true,
+          });
 
-        if (savedAddr) {
-          orderData.addressId = savedAddr.id;
+          if (savedAddr) {
+            orderData.addressId = savedAddr.id;
+          }
         }
 
         // If welcome discount was used in this order, mark it used on the customer
@@ -1254,16 +1262,16 @@ class AppStorage {
         fullName: 'Customer',
         email: '',
         phone: normPhone,
-        address: addressSnapshot.fullAddress,
-        city: addressSnapshot.city,
-        state: addressSnapshot.state,
-        pincode: addressSnapshot.pincode,
+        address: isPickup ? '' : (addressSnapshot?.fullAddress || ''),
+        city: isPickup ? '' : (addressSnapshot?.city || 'Bhubaneswar'),
+        state: isPickup ? '' : (addressSnapshot?.state || 'Odisha'),
+        pincode: isPickup ? '' : (addressSnapshot?.pincode || ''),
         deliveryType: orderData.deliveryType || 'immediate',
         scheduledAt: orderData.scheduledAt,
         paymentMethod: 'cod',
         includeCutlery: true,
       },
-      deliveryAddressSnapshot: addressSnapshot,
+      deliveryAddressSnapshot: isPickup ? undefined : addressSnapshot,
       status: orderData.status || 'Received',
       orderStatus: 'received',
       placedAt: orderData.placedAt || orderData.createdAt || new Date().toISOString(),
@@ -1466,88 +1474,396 @@ class AppStorage {
   }
 
   // =====================
-  // REVIEWS & VERIFIED PURCHASE ELIGIBILITY
+  // VERIFIED FOOD RATING & REVIEW SYSTEM
   // =====================
 
-  public checkProductReviewEligibility(phoneOrCustomerId: string, productId: string | number): {
-    eligible: boolean;
-    orderId?: string;
-    deliveredAt?: string;
-    message?: string;
-  } {
+  public getReviewableItemsForOrder(orderId: string, customerIdOrPhone?: string): OrderReviewableDetails | null {
     this.init();
-    const norm = normalizePhone(phoneOrCustomerId);
-    const prodIdStr = String(productId);
+    const order = this.getOrderById(orderId);
+    if (!order) return null;
 
-    // Find any delivered order belonging to this customer/phone that contains the product
-    const deliveredOrder = this.orders.find((ord) => {
-      const isMatchUser =
-        (ord.customerId && ord.customerId === phoneOrCustomerId) ||
-        (ord.customerDetails?.phone && normalizePhone(ord.customerDetails.phone) === norm);
+    const normPhone = customerIdOrPhone ? normalizePhone(customerIdOrPhone) : '';
 
-      if (!isMatchUser) return false;
+    // Verify customer ownership if customer identifier is provided
+    if (customerIdOrPhone) {
+      const orderCustPhone = normalizePhone(order.customerDetails?.phone || (order as any).customer_phone);
+      const isOwner =
+        (order.customerId && order.customerId === customerIdOrPhone) ||
+        (normPhone && orderCustPhone && orderCustPhone === normPhone);
 
-      // Status check: delivered
-      const statusLower = (ord.status || '').toLowerCase();
-      const isDelivered = statusLower === 'delivered';
-      if (!isDelivered) return false;
+      if (!isOwner) {
+        return null;
+      }
+    }
 
-      // Check items
-      return ord.items && ord.items.some((it) => String(it.id) === prodIdStr);
+    const rawStatus = (order.orderStatus || order.status || '').toLowerCase().trim();
+    const isDelivered = rawStatus === 'delivered';
+    const deliveredAt = order.deliveredAt || (isDelivered ? (order.placedAt || order.createdAt) : undefined);
+
+    let isEligible = false;
+    let isExpired = false;
+    let remainingDays = 0;
+    let deadlineIso: string | undefined = undefined;
+
+    if (isDelivered && deliveredAt) {
+      const deliveredTime = new Date(deliveredAt).getTime();
+      const deadline = deliveredTime + 7 * 24 * 60 * 60 * 1000;
+      deadlineIso = new Date(deadline).toISOString();
+      const now = Date.now();
+
+      if (now <= deadline) {
+        isEligible = true;
+        isExpired = false;
+        remainingDays = Math.max(1, Math.ceil((deadline - now) / (24 * 60 * 60 * 1000)));
+      } else {
+        isEligible = false;
+        isExpired = true;
+        remainingDays = 0;
+      }
+    }
+
+    const effectiveCustomerId = order.customerId || normPhone || 'guest-customer';
+
+    const items: ReviewableItem[] = (order.items || []).map((it: any, index: number) => {
+      const productId = String(it.productId || it.product?.id || it.id || '');
+      const orderItemId = String(it.id || `${order.orderId || order.id}-${productId}-${index}`);
+      const productName = String(it.name || it.product?.name || 'Authentic Delicacy');
+      const productImage = String(it.image || it.product?.image || '');
+      const variantName = it.selectedVariant?.name || it.variantName || undefined;
+      const quantity = Math.max(1, Number(it.quantity) || 1);
+
+      // Check existing review
+      const existingReview = this.productReviews.find((r) => {
+        const itemMatch = r.orderItemId && r.orderItemId === orderItemId;
+        const fallbackMatch =
+          (r.orderId === order.id || r.orderId === order.orderId) &&
+          String(r.productId) === productId &&
+          (r.customerId === effectiveCustomerId || (normPhone && r.customerPhone && normalizePhone(r.customerPhone) === normPhone));
+        return itemMatch || fallbackMatch;
+      });
+
+      return {
+        orderItemId,
+        productId,
+        productName,
+        productImage,
+        variantName,
+        quantity,
+        reviewed: !!existingReview,
+        reviewId: existingReview?.id,
+        rating: existingReview?.rating,
+        reviewText: existingReview?.reviewText,
+        reviewedAt: existingReview?.reviewedAt,
+        isVerifiedPurchase: existingReview ? existingReview.isVerifiedPurchase : true,
+      };
     });
 
-    if (deliveredOrder) {
-      return {
-        eligible: true,
-        orderId: deliveredOrder.orderId,
-        deliveredAt: deliveredOrder.createdAt,
-        message: 'Verified Purchase: You are eligible to review this authentic delicacy.',
+    const isFullyReviewed = items.length > 0 && items.every((it) => it.reviewed);
+
+    let eligibilityMessage = '';
+    if (!isDelivered) {
+      eligibilityMessage = 'Rating will be unlocked once your order is delivered.';
+    } else if (isExpired) {
+      eligibilityMessage = 'The 7-day review window for this order has ended.';
+    } else if (isFullyReviewed) {
+      eligibilityMessage = 'You have shared feedback for all items in this order. You can edit your review anytime within the 7-day window.';
+    } else {
+      eligibilityMessage = `Verified Purchase: Rate your dishes (${remainingDays} ${remainingDays === 1 ? 'day' : 'days'} left).`;
+    }
+
+    return {
+      orderId: order.orderId || order.id,
+      orderStatus: rawStatus,
+      isDelivered,
+      deliveredAt,
+      isEligible,
+      isExpired,
+      deadline: deadlineIso,
+      remainingDays,
+      isFullyReviewed,
+      eligibilityMessage,
+      items,
+    };
+  }
+
+  public createProductReview(payload: {
+    orderItemId: string;
+    rating: number;
+    reviewText?: string;
+    customerId: string;
+    customerDisplayName?: string;
+    customerPhone?: string;
+  }): ProductReview {
+    this.init();
+    const rating = Math.min(5, Math.max(1, Math.round(Number(payload.rating) || 5)));
+    const reviewText = (payload.reviewText || '').trim().slice(0, 500);
+
+    if (!payload.orderItemId) {
+      throw new Error('Order item ID is required to submit a verified review');
+    }
+
+    // Find the associated order & item
+    let targetOrder: Order | undefined;
+    let targetItem: any;
+    let derivedProductId = '';
+
+    for (const ord of this.orders) {
+      if (ord.items && Array.isArray(ord.items)) {
+        for (let idx = 0; idx < ord.items.length; idx++) {
+          const it: any = ord.items[idx];
+          const itProdId = String(it.productId || it.product?.id || it.id || '');
+          const syntheticId = String(it.id || `${ord.orderId || ord.id}-${itProdId}-${idx}`);
+          if (syntheticId === payload.orderItemId || String(it.id) === payload.orderItemId) {
+            targetOrder = ord;
+            targetItem = it;
+            derivedProductId = itProdId;
+            break;
+          }
+        }
+      }
+      if (targetOrder) break;
+    }
+
+    if (!targetOrder || !targetItem) {
+      // If order not found in local memory (e.g., direct DB flow), check if item has productId directly
+      derivedProductId = payload.orderItemId.split('-')[1] || payload.orderItemId;
+    }
+
+    if (targetOrder) {
+      // Check customer ownership
+      const orderCustPhone = normalizePhone(targetOrder.customerDetails?.phone || (targetOrder as any).customer_phone);
+      const reqPhone = normalizePhone(payload.customerPhone || payload.customerId);
+      const isOwner =
+        (targetOrder.customerId && targetOrder.customerId === payload.customerId) ||
+        (reqPhone && orderCustPhone && orderCustPhone === reqPhone);
+
+      if (!isOwner) {
+        throw new Error('Unauthorized: You can only review items from your own verified orders.');
+      }
+
+      // Check delivery status and 7-day window
+      const statusLower = (targetOrder.orderStatus || targetOrder.status || '').toLowerCase().trim();
+      if (statusLower !== 'delivered') {
+        throw new Error('You can only review items from delivered orders.');
+      }
+
+      const deliveredAt = targetOrder.deliveredAt || targetOrder.placedAt || targetOrder.createdAt;
+      if (deliveredAt) {
+        const deliveredTime = new Date(deliveredAt).getTime();
+        const deadline = deliveredTime + 7 * 24 * 60 * 60 * 1000;
+        if (Date.now() > deadline) {
+          throw new Error('The 7-day review period for this order has expired.');
+        }
+      }
+    }
+
+    // Check duplicate and update if already exists
+    const existingIndex = this.productReviews.findIndex(
+      (r) =>
+        r.orderItemId === payload.orderItemId ||
+        (targetOrder &&
+          (r.orderId === targetOrder.id || r.orderId === targetOrder.orderId) &&
+          String(r.productId) === String(derivedProductId) &&
+          (r.customerId === payload.customerId ||
+            (payload.customerPhone && r.customerPhone && normalizePhone(r.customerPhone) === normalizePhone(payload.customerPhone))))
+    );
+    if (existingIndex !== -1) {
+      const updated = {
+        ...this.productReviews[existingIndex],
+        rating,
+        reviewText: reviewText || this.productReviews[existingIndex].reviewText,
+        updatedAt: new Date().toISOString(),
       };
+      this.productReviews[existingIndex] = updated;
+      this.saveProductReviews();
+      return updated;
+    }
+
+    const rawCustName = payload.customerDisplayName || targetOrder?.customerDetails?.fullName || 'Valued Patron';
+    const maskedName = maskCustomerName(rawCustName);
+
+    const newReview: ProductReview = {
+      id: `rev-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+      orderItemId: payload.orderItemId,
+      orderId: targetOrder?.orderId || targetOrder?.id || 'order-verified',
+      productId: derivedProductId || '1',
+      outletId: targetOrder?.outletId || 'bbsr-kendriyavihar',
+      customerId: payload.customerId,
+      customerDisplayName: maskedName,
+      customerPhone: payload.customerPhone ? normalizePhone(payload.customerPhone) : undefined,
+      rating,
+      reviewText: reviewText || undefined,
+      isVerifiedPurchase: true,
+      isPublished: true,
+      reviewedAt: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    this.productReviews.unshift(newReview);
+    this.saveProductReviews();
+
+    return newReview;
+  }
+
+  public updateProductReview(
+    reviewId: string,
+    payload: {
+      rating: number;
+      reviewText?: string;
+      customerId: string;
+    }
+  ): ProductReview {
+    this.init();
+    const review = this.productReviews.find((r) => r.id === reviewId);
+    if (!review) {
+      throw new Error('Review not found');
+    }
+
+    // Verify ownership
+    if (review.customerId !== payload.customerId) {
+      throw new Error('Unauthorized: You can only edit your own reviews.');
+    }
+
+    // Verify 7-day window from associated order
+    const order = this.getOrderById(review.orderId);
+    if (order) {
+      const deliveredAt = order.deliveredAt || order.placedAt || order.createdAt;
+      if (deliveredAt) {
+        const deadline = new Date(deliveredAt).getTime() + 7 * 24 * 60 * 60 * 1000;
+        if (Date.now() > deadline) {
+          throw new Error('The 7-day review period for this order has expired.');
+        }
+      }
+    }
+
+    const rating = Math.min(5, Math.max(1, Math.round(Number(payload.rating) || review.rating)));
+    const reviewText = payload.reviewText !== undefined ? payload.reviewText.trim().slice(0, 500) : review.reviewText;
+
+    review.rating = rating;
+    review.reviewText = reviewText || undefined;
+    review.updatedAt = new Date().toISOString();
+
+    this.saveProductReviews();
+    return review;
+  }
+
+  public getProductReviews(productId?: string | number): ProductReview[] {
+    this.init();
+    if (!productId) {
+      return [...this.productReviews].sort(
+        (a, b) => new Date(b.reviewedAt).getTime() - new Date(a.reviewedAt).getTime()
+      );
+    }
+    const pIdStr = String(productId);
+    return this.productReviews
+      .filter((r) => String(r.productId) === pIdStr && r.isPublished !== false)
+      .sort((a, b) => new Date(b.reviewedAt).getTime() - new Date(a.reviewedAt).getTime());
+  }
+
+  public getProductRatingSummary(productId: string | number): ProductRatingSummary {
+    this.init();
+    const pIdStr = String(productId);
+    const reviews = this.productReviews.filter((r) => String(r.productId) === pIdStr && r.isPublished !== false);
+
+    const breakdown: Record<1 | 2 | 3 | 4 | 5, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+    for (const r of reviews) {
+      const star = (Math.min(5, Math.max(1, Math.round(r.rating))) as 1 | 2 | 3 | 4 | 5);
+      breakdown[star] = (breakdown[star] || 0) + 1;
+    }
+
+    const totalReviews = reviews.length;
+    const totalVerifiedRatings = reviews.filter((r) => r.isVerifiedPurchase).length;
+    const sum = reviews.reduce((acc, r) => acc + r.rating, 0);
+    const averageRating = totalReviews > 0 ? Number((sum / totalReviews).toFixed(1)) : 0;
+
+    return {
+      productId: pIdStr,
+      averageRating,
+      totalReviews,
+      totalVerifiedRatings,
+      breakdown,
+    };
+  }
+
+  // Legacy Adapter Methods for Backward Compatibility
+  public checkProductReviewEligibility(
+    customerIdentifier: string,
+    productId: string | number
+  ): { eligible: boolean; orderId?: string; message: string; verified?: boolean } {
+    this.init();
+    const pIdStr = String(productId);
+    const normPhone = normalizePhone(customerIdentifier);
+
+    // Find delivered orders containing this item
+    const deliveredOrders = this.orders.filter((ord) => {
+      const statusLower = (ord.orderStatus || ord.status || '').toLowerCase().trim();
+      const isDelivered = statusLower === 'delivered';
+      const ordCustPhone = normalizePhone(ord.customerDetails?.phone || (ord as any).customer_phone);
+      const isCustomer =
+        (ord.customerId && ord.customerId === customerIdentifier) ||
+        (normPhone && ordCustPhone && ordCustPhone === normPhone);
+
+      return isDelivered && isCustomer;
+    });
+
+    for (const ord of deliveredOrders) {
+      const deliveredAt = ord.deliveredAt || ord.placedAt || ord.createdAt;
+      const isWithin7Days = deliveredAt
+        ? Date.now() <= new Date(deliveredAt).getTime() + 7 * 24 * 60 * 60 * 1000
+        : true;
+
+      if (!isWithin7Days) continue;
+
+      const hasItem = (ord.items || []).some((it: any) => {
+        const itProdId = String(it.productId || it.product?.id || it.id || '');
+        return itProdId === pIdStr;
+      });
+
+      if (hasItem) {
+        return {
+          eligible: true,
+          verified: true,
+          orderId: ord.orderId || ord.id,
+          message: 'Eligible for verified rating! You ordered and received this authentic dish.',
+        };
+      }
     }
 
     return {
       eligible: false,
-      message: 'Review eligibility requires at least one delivered order containing this dish.',
+      verified: false,
+      message: 'Verified reviews are available for customers with delivered orders within 7 days.',
     };
   }
 
-  public addVerifiedProductReview(productId: string | number, reviewData: {
-    userName: string;
-    userLocation?: string;
-    rating: number;
-    comment: string;
-    customerId?: string;
-    phone?: string;
-    orderId?: string;
-  }): { product: Product; review: any } {
+  public addVerifiedProductReview(
+    productId: string | number,
+    review: {
+      userName: string;
+      userLocation?: string;
+      rating: number;
+      comment: string;
+      phone?: string;
+      customerId?: string;
+      orderId?: string;
+    }
+  ): { product: Product; review: any } {
     this.init();
-    const prod = this.getProductById(productId);
-    if (!prod) throw new Error(`Product ${productId} not found`);
+    const pIdStr = String(productId);
+    const prod = this.getProductById(pIdStr);
+    if (!prod) throw new Error('Product not found');
 
-    const newReview = {
-      id: `rev-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`,
-      userName: reviewData.userName.trim(),
-      userLocation: reviewData.userLocation?.trim() || 'Verified Customer',
-      rating: Math.min(5, Math.max(1, Number(reviewData.rating) || 5)),
-      comment: reviewData.comment.trim(),
-      date: new Date().toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
-      verified: true,
-      orderId: reviewData.orderId,
-    };
-
-    const currentReviews = Array.isArray(prod.reviewsList) ? [...prod.reviewsList] : [];
-    currentReviews.unshift(newReview);
-
-    const totalRatings = currentReviews.reduce((sum, r) => sum + (Number(r.rating) || 5), 0);
-    const avgRating = Number((totalRatings / currentReviews.length).toFixed(1));
-
-    const updated = this.updateProduct(prod.id, {
-      reviewsList: currentReviews,
-      reviewsCount: currentReviews.length,
-      rating: avgRating,
+    const newReview = this.createProductReview({
+      orderItemId: `${review.orderId || 'ord'}-${pIdStr}-0`,
+      rating: review.rating,
+      reviewText: review.comment,
+      customerId: review.customerId || review.phone || 'customer',
+      customerDisplayName: review.userName,
+      customerPhone: review.phone,
     });
 
-    return { product: updated || prod, review: newReview };
+    return { product: prod, review: newReview };
   }
 
   // =====================

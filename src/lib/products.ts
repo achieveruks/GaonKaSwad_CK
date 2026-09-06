@@ -1,8 +1,8 @@
-import { Product, DashboardStats } from '../types';
-import { PRODUCTS as FALLBACK_PRODUCTS } from '../data/products';
+import { Product, Category, DashboardStats } from '../types';
 import {
   fetchSupabaseProducts,
   fetchSupabaseProductBySlug,
+  fetchSupabaseCategories,
   createSupabaseProduct,
   updateSupabaseProduct,
   deleteSupabaseProduct,
@@ -29,7 +29,37 @@ function getAuthHeaders(token?: string): HeadersInit {
 }
 
 /**
- * Fetch all products from Supabase PostgreSQL (with fallback to API / initial data)
+ * Fetch all categories from Supabase PostgreSQL or API
+ */
+export async function getCategories(): Promise<Category[]> {
+  if (isSupabaseConfigured()) {
+    try {
+      const supaCategories = await fetchSupabaseCategories();
+      if (Array.isArray(supaCategories) && supaCategories.length > 0) {
+        return supaCategories;
+      }
+    } catch (err) {
+      console.warn('Supabase categories fetch notice:', err);
+    }
+  }
+
+  try {
+    const res = await fetch(`${API_BASE}/categories`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && Array.isArray(data.categories)) {
+        return data.categories;
+      }
+    }
+  } catch (err) {
+    console.warn('API categories fetch notice:', err);
+  }
+
+  return [];
+}
+
+/**
+ * Fetch all products from Supabase PostgreSQL (with fallback to API)
  */
 export async function getProducts(includeInactive = false, token?: string): Promise<Product[]> {
   // 1. Try Supabase PostgreSQL first
@@ -40,7 +70,7 @@ export async function getProducts(includeInactive = false, token?: string): Prom
         return supaProducts;
       }
     } catch (err) {
-      console.warn('Supabase products fetch failed or empty, trying fallback API:', err);
+      console.warn('Supabase products fetch failed or empty, trying API:', err);
     }
   }
 
@@ -59,14 +89,10 @@ export async function getProducts(includeInactive = false, token?: string): Prom
     if (data.success && Array.isArray(data.products)) {
       return data.products;
     }
-    return FALLBACK_PRODUCTS;
+    return [];
   } catch (err) {
-    console.warn('Error fetching products from API, using fallback data:', err);
-    return FALLBACK_PRODUCTS.map((p) => ({
-      ...p,
-      active: p.active !== false,
-      inStock: p.inStock !== false,
-    }));
+    console.warn('Error fetching products from API:', err);
+    return [];
   }
 }
 
@@ -80,7 +106,7 @@ export async function getProductBySlug(slug: string): Promise<Product | null> {
       const product = await fetchSupabaseProductBySlug(slug);
       if (product) return product;
     } catch (err) {
-      console.warn('Supabase fetch product by slug failed, trying fallback API:', err);
+      console.warn('Supabase fetch product by slug failed, trying API:', err);
     }
   }
 
@@ -98,10 +124,8 @@ export async function getProductBySlug(slug: string): Promise<Product | null> {
     }
     return null;
   } catch (err) {
-    console.warn('Error fetching product by slug, using fallback search:', err);
-    const cleanSlug = (slug || '').toLowerCase().trim();
-    const found = FALLBACK_PRODUCTS.find((p) => (p?.slug || '').toLowerCase() === cleanSlug);
-    return found || null;
+    console.warn('Error fetching product by slug:', err);
+    return null;
   }
 }
 
@@ -380,13 +404,24 @@ export async function getDashboardStats(token: string): Promise<DashboardStats> 
     console.warn('API getDashboardStats failed, calculating from client catalog:', err);
   }
 
-  // Graceful fallback computed stats if API unavailable
-  return {
-    totalProducts: FALLBACK_PRODUCTS.length,
-    activeProducts: FALLBACK_PRODUCTS.filter((p) => p.active !== false).length,
-    outOfStockProducts: FALLBACK_PRODUCTS.filter((p) => p.inStock === false).length,
-    featuredProducts: FALLBACK_PRODUCTS.filter((p) => p.featured && p.active !== false).length,
-    bestsellerProducts: FALLBACK_PRODUCTS.filter((p) => p.bestseller && p.active !== false).length,
-  };
+  // Fallback computed stats if API unavailable
+  try {
+    const products = await getProducts(true, token);
+    return {
+      totalProducts: products.length,
+      activeProducts: products.filter((p) => p.active !== false).length,
+      outOfStockProducts: products.filter((p) => p.inStock === false).length,
+      featuredProducts: products.filter((p) => p.featured && p.active !== false).length,
+      bestsellerProducts: products.filter((p) => p.bestseller && p.active !== false).length,
+    };
+  } catch {
+    return {
+      totalProducts: 0,
+      activeProducts: 0,
+      outOfStockProducts: 0,
+      featuredProducts: 0,
+      bestsellerProducts: 0,
+    };
+  }
 }
 

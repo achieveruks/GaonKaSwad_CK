@@ -3,7 +3,6 @@ import { useAuth } from '../../context/AuthContext';
 import { useNavigation } from '../../context/NavigationContext';
 import { useProducts } from '../../context/ProductContext';
 import { Outlet, DeliveryZone, Product } from '../../types';
-import { CATEGORIES } from '../../data/products';
 import {
   getOutlets,
   getDeliveryZones,
@@ -71,6 +70,7 @@ export const ManagerDashboardPage: React.FC = () => {
     updateOutletProduct,
     batchUpdateOutletProducts,
     refreshProducts,
+    categories,
   } = useProducts();
 
   // Active Tab: 'orders' (Received orders & live kitchen queue), 'kitchen' (Menu & branch settings), or 'delivery-zones'
@@ -553,7 +553,7 @@ export const ManagerDashboardPage: React.FC = () => {
     return allProducts.filter((product) => {
       let matchesCategory = modalMenuCategory === 'all';
       if (!matchesCategory) {
-        const catObj = CATEGORIES.find(
+        const catObj = categories.find(
           (c) => c.slug === modalMenuCategory || c.id === modalMenuCategory
         );
         const matchSlugs = catObj ? [catObj.slug, catObj.id] : [modalMenuCategory];
@@ -569,17 +569,17 @@ export const ManagerDashboardPage: React.FC = () => {
 
       return matchesCategory && matchesSearch;
     });
-  }, [allProducts, modalMenuCategory, modalMenuSearch]);
+  }, [allProducts, modalMenuCategory, modalMenuSearch, categories]);
 
   const availableCategories = useMemo(() => {
     const categoriesFromProducts = Array.from(new Set(allProducts.map((p) => p.category)));
-    return CATEGORIES.filter(
+    return categories.filter(
       (c) => categoriesFromProducts.includes(c.slug) || categoriesFromProducts.includes(c.id)
     );
-  }, [allProducts]);
+  }, [allProducts, categories]);
 
   const getCategoryLabel = (cat: string) => {
-    const found = CATEGORIES.find((c) => c.slug === cat || c.id === cat);
+    const found = categories.find((c) => c.slug === cat || c.id === cat);
     return found ? found.name : cat.replace(/-/g, ' ');
   };
 
@@ -1225,7 +1225,7 @@ export const ManagerDashboardPage: React.FC = () => {
                     <option value="all">All Categories ({allProducts.length})</option>
                     {availableCategories.map((cat) => {
                       const count = allProducts.filter((p) => {
-                        const catObj = CATEGORIES.find(
+                        const catObj = categories.find(
                           (c) => c.slug === cat.slug || c.id === cat.slug
                         );
                         const matchSlugs = catObj ? [catObj.slug, catObj.id] : [cat.slug];
