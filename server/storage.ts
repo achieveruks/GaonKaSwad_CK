@@ -18,6 +18,10 @@ import {
   ReviewableItem,
   OrderReviewableDetails,
   ProductRatingSummary,
+  SwadCoinReward,
+  SwadCoinTransaction,
+  SwadCoinRewardStatus,
+  SwadCoinTransactionType,
 } from '../src/types';
 
 /**
@@ -144,6 +148,37 @@ const CUSTOMER_ADDRESSES_FILE = path.join(DATA_DIR, 'customer_addresses_store.js
 const COUPONS_FILE = path.join(DATA_DIR, 'coupons_store.json');
 const COUPON_REDEMPTIONS_FILE = path.join(DATA_DIR, 'coupon_redemptions_store.json');
 const PRODUCT_REVIEWS_FILE = path.join(DATA_DIR, 'product_reviews_store.json');
+const SWAD_COIN_REWARDS_FILE = path.join(DATA_DIR, 'swad_coin_rewards_store.json');
+const SWAD_COIN_TRANSACTIONS_FILE = path.join(DATA_DIR, 'swad_coin_transactions_store.json');
+
+/**
+ * Weighted probability distribution for daily reward generation:
+ * - 1.00%  -> 30% probability
+ * - 1.25%  -> 25% probability
+ * - 1.50%  -> 20% probability
+ * - 1.75%  -> 15% probability
+ * - 2.00%  -> 10% probability
+ */
+export function pickWeightedRewardPercentage(): number {
+  const rand = Math.random() * 100;
+  if (rand < 30) return 1.0;
+  if (rand < 55) return 1.25;
+  if (rand < 75) return 1.5;
+  if (rand < 90) return 1.75;
+  return 2.0;
+}
+
+/**
+ * Calculates Swad Coin reward amount:
+ * - Eligible Food/Item value Z = Math.max(0, subtotal - discount)
+ * - Raw coins = Math.floor((Z * percentage) / 100)
+ * - Enforces minimum 5 and maximum 100 Swad Coins
+ */
+export function calculateSwadCoinsForValue(eligibleOrderValue: number, percentage: number): number {
+  if (eligibleOrderValue <= 0) return 5;
+  const rawCoins = Math.floor((eligibleOrderValue * percentage) / 100);
+  return Math.min(Math.max(rawCoins, 5), 100);
+}
 
 export function normalizePhone(rawPhone?: string): string {
   if (!rawPhone) return '';
@@ -187,6 +222,8 @@ class AppStorage {
   private coupons: Coupon[] = [];
   private couponRedemptions: CouponRedemption[] = [];
   private productReviews: ProductReview[] = [];
+  private swadCoinRewards: SwadCoinReward[] = [];
+  private swadCoinTransactions: SwadCoinTransaction[] = [];
   private isInitialized = false;
 
   constructor() {
@@ -200,24 +237,70 @@ class AppStorage {
     this.zones = [];
     this.abouts = [];
     this.products = [];
-    this.orders = [];
-    this.customers = [];
-    this.customerAddresses = [];
+    this.orders = safeReadJson<Order[]>(ORDERS_FILE, []);
+    this.customers = safeReadJson<Customer[]>(CUSTOMERS_FILE, []);
+    this.customerAddresses = safeReadJson<CustomerAddress[]>(CUSTOMER_ADDRESSES_FILE, []);
 
     // Initialize Server Coupons & Redemptions
     this.coupons = safeReadJson<Coupon[]>(COUPONS_FILE, []);
     this.couponRedemptions = safeReadJson<CouponRedemption[]>(COUPON_REDEMPTIONS_FILE, []);
     this.productReviews = safeReadJson<ProductReview[]>(PRODUCT_REVIEWS_FILE, []);
 
+    // Initialize Swad Coins & Transactions
+    this.swadCoinRewards = safeReadJson<SwadCoinReward[]>(SWAD_COIN_REWARDS_FILE, []);
+    this.swadCoinTransactions = safeReadJson<SwadCoinTransaction[]>(SWAD_COIN_TRANSACTIONS_FILE, []);
+
     this.isInitialized = true;
   }
 
-  private saveCustomers() {}
-  private saveCustomerAddresses() {}
+  private saveCustomers() {
+    try {
+      if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+      fs.writeFileSync(CUSTOMERS_FILE, JSON.stringify(this.customers, null, 2), 'utf-8');
+    } catch (e) {
+      console.warn('Warning: Could not save customers to disk.', e);
+    }
+  }
+
+  private saveCustomerAddresses() {
+    try {
+      if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+      fs.writeFileSync(CUSTOMER_ADDRESSES_FILE, JSON.stringify(this.customerAddresses, null, 2), 'utf-8');
+    } catch (e) {
+      console.warn('Warning: Could not save customer addresses to disk.', e);
+    }
+  }
+
   private saveProducts() {}
   private saveOutlets() {}
   private saveZones() {}
-  private saveOrders() {}
+
+  private saveOrders() {
+    try {
+      if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+      fs.writeFileSync(ORDERS_FILE, JSON.stringify(this.orders, null, 2), 'utf-8');
+    } catch (e) {
+      console.warn('Warning: Could not save orders to disk.', e);
+    }
+  }
+
+  private saveSwadCoinRewards() {
+    try {
+      if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+      fs.writeFileSync(SWAD_COIN_REWARDS_FILE, JSON.stringify(this.swadCoinRewards, null, 2), 'utf-8');
+    } catch (e) {
+      console.warn('Warning: Could not save swad coin rewards to disk.', e);
+    }
+  }
+
+  private saveSwadCoinTransactions() {
+    try {
+      if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+      fs.writeFileSync(SWAD_COIN_TRANSACTIONS_FILE, JSON.stringify(this.swadCoinTransactions, null, 2), 'utf-8');
+    } catch (e) {
+      console.warn('Warning: Could not save swad coin transactions to disk.', e);
+    }
+  }
 
   private saveProductReviews() {
     try {
@@ -1471,6 +1554,574 @@ class AppStorage {
     this.customerAddresses.push(newAddress);
     this.saveCustomerAddresses();
     return newAddress;
+  }
+
+  // =====================
+  // SWAD COIN REWARD & LEDGER SYSTEM
+  // =====================
+
+  public getCustomerSwadCoinBalance(customerIdOrPhone: string): number {
+    this.init();
+    if (!customerIdOrPhone) return 0;
+    const norm = normalizePhone(customerIdOrPhone);
+    const customer = this.customers.find((c) => c.id === customerIdOrPhone || (norm && normalizePhone(c.phone) === norm));
+    if (!customer) return 0;
+    return Number(customer.swadCoinBalance ?? customer.swad_coin_balance ?? 0);
+  }
+
+  public setCustomerSwadCoinBalance(customerIdOrPhone: string, newBalance: number): Customer | null {
+    this.init();
+    const norm = normalizePhone(customerIdOrPhone);
+    const balance = Math.max(0, Math.floor(newBalance));
+    let customer = this.customers.find((c) => c.id === customerIdOrPhone || (norm && normalizePhone(c.phone) === norm));
+    if (!customer) {
+      customer = {
+        id: customerIdOrPhone,
+        phone: norm || customerIdOrPhone,
+        fullName: 'Customer',
+        isActive: true,
+        marketingConsent: true,
+        welcomeDiscountUsed: false,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        swadCoinBalance: balance,
+        swad_coin_balance: balance,
+      };
+      this.customers.push(customer);
+    } else {
+      customer.swadCoinBalance = balance;
+      customer.swad_coin_balance = balance;
+      customer.updatedAt = new Date().toISOString();
+    }
+    this.saveCustomers();
+    return customer;
+  }
+
+  public getPendingRewardsForCustomer(customerIdOrPhone: string): SwadCoinReward[] {
+    this.init();
+    if (!customerIdOrPhone) return [];
+    const norm = normalizePhone(customerIdOrPhone);
+    const customer = this.customers.find((c) => c.id === customerIdOrPhone || (norm && normalizePhone(c.phone) === norm));
+    if (!customer) return [];
+
+    const now = Date.now();
+    let hasChanges = false;
+
+    // Filter rewards for this customer
+    const customerRewards = this.swadCoinRewards.filter((r) => {
+      return r.customerId === customer.id || (norm && r.customerId === norm);
+    });
+
+    const pending: SwadCoinReward[] = [];
+
+    for (const r of customerRewards) {
+      if (r.status === 'PENDING') {
+        const expTime = new Date(r.expiresAt).getTime();
+        if (expTime < now) {
+          r.status = 'EXPIRED';
+          r.updatedAt = new Date().toISOString();
+          hasChanges = true;
+        } else {
+          pending.push(r);
+        }
+      }
+    }
+
+    if (hasChanges) {
+      this.saveSwadCoinRewards();
+    }
+
+    return pending;
+  }
+
+  public getAllRewardsForCustomer(customerIdOrPhone: string): SwadCoinReward[] {
+    this.init();
+    if (!customerIdOrPhone) return [];
+    const norm = normalizePhone(customerIdOrPhone);
+    const customer = this.customers.find((c) => c.id === customerIdOrPhone || (norm && normalizePhone(c.phone) === norm));
+    if (!customer) {
+      return this.swadCoinRewards.filter((r) => r.customerId === customerIdOrPhone || (norm && r.customerId === norm));
+    }
+    return this.swadCoinRewards.filter((r) => r.customerId === customer.id || (norm && r.customerId === norm));
+  }
+
+  public creditSwadCoins(customerIdOrPhone: string, amount: number, reason: string): number {
+    this.init();
+    const cleanAmount = Math.floor(Number(amount));
+    if (cleanAmount <= 0) return this.getCustomerSwadCoinBalance(customerIdOrPhone);
+    const norm = normalizePhone(customerIdOrPhone);
+    let customer = this.customers.find((c) => c.id === customerIdOrPhone || (norm && normalizePhone(c.phone) === norm));
+    if (!customer && norm) {
+      customer = this.getOrCreateCustomer({ phone: norm, fullName: 'Valued Customer' });
+    }
+    if (!customer) return 0;
+    const currentBalance = Number(customer.swadCoinBalance ?? customer.swad_coin_balance ?? 0);
+    const newBalance = currentBalance + cleanAmount;
+    customer.swadCoinBalance = newBalance;
+    customer.swad_coin_balance = newBalance;
+    customer.updatedAt = new Date().toISOString();
+    this.saveCustomers();
+    return newBalance;
+  }
+
+  public claimReward(
+    rewardId: string,
+    customerIdOrPhone: string
+  ): { success: boolean; reward?: SwadCoinReward; coinsEarned?: number; newBalance?: number; transaction?: SwadCoinTransaction; error?: string } {
+    this.init();
+    const reward = this.swadCoinRewards.find((r) => r.id === rewardId);
+    if (!reward) {
+      return { success: false, error: 'Reward not found.' };
+    }
+
+    if (reward.status === 'CLAIMED') {
+      return { success: false, error: 'This reward has already been claimed.' };
+    }
+
+    const now = Date.now();
+    if (reward.status === 'EXPIRED' || new Date(reward.expiresAt).getTime() < now) {
+      reward.status = 'EXPIRED';
+      reward.updatedAt = new Date().toISOString();
+      this.saveSwadCoinRewards();
+      return { success: false, error: 'This reward has expired.' };
+    }
+
+    const norm = normalizePhone(customerIdOrPhone);
+    let customer = this.customers.find((c) => c.id === reward.customerId || (norm && normalizePhone(c.phone) === norm));
+
+    if (!customer) {
+      if (norm) {
+        customer = this.getOrCreateCustomer({ phone: norm, fullName: 'Valued Customer' });
+      } else {
+        return { success: false, error: 'Customer not found.' };
+      }
+    }
+
+    // Atomic claim transition
+    reward.status = 'CLAIMED';
+    reward.claimedAt = new Date().toISOString();
+    reward.updatedAt = new Date().toISOString();
+    this.saveSwadCoinRewards();
+
+    // Atomically increment customer balance
+    const currentBalance = Number(customer.swadCoinBalance ?? customer.swad_coin_balance ?? 0);
+    const newBalance = currentBalance + reward.coinAmount;
+    customer.swadCoinBalance = newBalance;
+    customer.swad_coin_balance = newBalance;
+    customer.updatedAt = new Date().toISOString();
+    this.saveCustomers();
+
+    // Insert immutable transaction ledger record
+    const tx: SwadCoinTransaction = {
+      id: `tx-earn-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+      customerId: customer.id,
+      type: 'EARN',
+      amount: reward.coinAmount,
+      balanceBefore: currentBalance,
+      balanceAfter: newBalance,
+      rewardId: reward.id,
+      orderId: reward.orderId,
+      description: `Surprise Reward claimed: +${reward.coinAmount} Swad Coins`,
+      createdAt: new Date().toISOString(),
+    };
+
+    this.swadCoinTransactions.unshift(tx);
+    this.saveSwadCoinTransactions();
+
+    return {
+      success: true,
+      reward,
+      coinsEarned: reward.coinAmount,
+      newBalance,
+      transaction: tx,
+    };
+  }
+
+  public getAllSwadCoinRewards(): SwadCoinReward[] {
+    this.init();
+    return [...this.swadCoinRewards];
+  }
+
+  public getAllSwadCoinTransactions(): SwadCoinTransaction[] {
+    this.init();
+    return [...this.swadCoinTransactions];
+  }
+
+  public redeemSwadCoins(
+    customerIdOrPhone: string,
+    orderId: string,
+    requestedCoins: number,
+    eligibleFoodValue: number
+  ): { success: boolean; coinsUsed: number; discountAmount: number; newBalance: number; error?: string } {
+    this.init();
+    if (requestedCoins <= 0) {
+      return { success: true, coinsUsed: 0, discountAmount: 0, newBalance: this.getCustomerSwadCoinBalance(customerIdOrPhone) };
+    }
+
+    const norm = normalizePhone(customerIdOrPhone);
+    const customer = this.customers.find((c) => c.id === customerIdOrPhone || (norm && normalizePhone(c.phone) === norm));
+    if (!customer) {
+      return { success: false, coinsUsed: 0, discountAmount: 0, newBalance: 0, error: 'Customer not found.' };
+    }
+
+    const currentBalance = Number(customer.swadCoinBalance ?? customer.swad_coin_balance ?? 0);
+
+    // Prevent duplicate redemption for the same order
+    if (orderId) {
+      const existingRedeem = this.swadCoinTransactions.find(
+        (tx) => tx.orderId === orderId && tx.type === 'REDEEM'
+      );
+      if (existingRedeem) {
+        return {
+          success: false,
+          coinsUsed: 0,
+          discountAmount: 0,
+          newBalance: currentBalance,
+          error: `Swad Coins already redeemed on order ${orderId}`,
+        };
+      }
+    }
+
+    // Up to 10% of eligible food value (1 Swad Coin = ₹1)
+    const maxCoinsAllowed = Math.floor(Math.max(0, eligibleFoodValue) * 0.10);
+    const coinsToDeduct = Math.min(Math.max(0, Math.floor(requestedCoins)), currentBalance, maxCoinsAllowed);
+
+    if (coinsToDeduct <= 0) {
+      return { success: true, coinsUsed: 0, discountAmount: 0, newBalance: currentBalance };
+    }
+
+    const newBalance = currentBalance - coinsToDeduct;
+    customer.swadCoinBalance = newBalance;
+    customer.swad_coin_balance = newBalance;
+    customer.updatedAt = new Date().toISOString();
+    this.saveCustomers();
+
+    const tx: SwadCoinTransaction = {
+      id: `tx-red-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+      customerId: customer.id,
+      type: 'REDEEM',
+      amount: -coinsToDeduct,
+      balanceBefore: currentBalance,
+      balanceAfter: newBalance,
+      orderId,
+      description: `Redeemed ${coinsToDeduct} Swad Coins on order ${orderId}`,
+      createdAt: new Date().toISOString(),
+    };
+
+    this.swadCoinTransactions.unshift(tx);
+    this.saveSwadCoinTransactions();
+
+    return {
+      success: true,
+      coinsUsed: coinsToDeduct,
+      discountAmount: coinsToDeduct, // 1 Coin = ₹1
+      newBalance,
+    };
+  }
+
+  public refundSwadCoins(
+    orderId: string,
+    reason: string = 'Order cancelled'
+  ): { refundedCoins: number; newBalance?: number } {
+    this.init();
+    if (!orderId) return { refundedCoins: 0 };
+
+    // Check if order had REDEEM transaction
+    const redeemTx = this.swadCoinTransactions.find((t) => t.orderId === orderId && t.type === 'REDEEM');
+    if (!redeemTx || Math.abs(redeemTx.amount) <= 0) {
+      return { refundedCoins: 0 };
+    }
+
+    // Check if refund was already issued for this order (prevent duplicate refund)
+    const existingRefund = this.swadCoinTransactions.find((t) => t.orderId === orderId && t.type === 'REFUND');
+    if (existingRefund) {
+      return { refundedCoins: 0 };
+    }
+
+    const coinsToRefund = Math.abs(redeemTx.amount);
+    const customer = this.customers.find((c) => c.id === redeemTx.customerId);
+    if (!customer) return { refundedCoins: 0 };
+
+    const currentBalance = Number(customer.swadCoinBalance ?? customer.swad_coin_balance ?? 0);
+    const newBalance = currentBalance + coinsToRefund;
+    customer.swadCoinBalance = newBalance;
+    customer.swad_coin_balance = newBalance;
+    customer.updatedAt = new Date().toISOString();
+    this.saveCustomers();
+
+    const refundTx: SwadCoinTransaction = {
+      id: `tx-ref-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+      customerId: customer.id,
+      type: 'REFUND',
+      amount: coinsToRefund,
+      balanceBefore: currentBalance,
+      balanceAfter: newBalance,
+      orderId,
+      description: `Refunded ${coinsToRefund} Swad Coins for order ${orderId} (${reason})`,
+      createdAt: new Date().toISOString(),
+    };
+
+    this.swadCoinTransactions.unshift(refundTx);
+    this.saveSwadCoinTransactions();
+
+    return {
+      refundedCoins: coinsToRefund,
+      newBalance,
+    };
+  }
+
+  public adminCreditCoins(
+    customerIdOrPhone: string,
+    amount: number,
+    reason: string,
+    adminId?: string
+  ): { success: boolean; newBalance: number; transaction?: SwadCoinTransaction; error?: string } {
+    this.init();
+    const cleanAmount = Math.floor(Number(amount));
+    if (cleanAmount <= 0) {
+      return { success: false, newBalance: 0, error: 'Amount must be greater than 0.' };
+    }
+    if (!reason || !reason.trim()) {
+      return { success: false, newBalance: 0, error: 'A valid reason is required for administrative coin operations.' };
+    }
+
+    const norm = normalizePhone(customerIdOrPhone);
+    let customer = this.customers.find((c) => c.id === customerIdOrPhone || (norm && normalizePhone(c.phone) === norm));
+    if (!customer && norm) {
+      customer = this.getOrCreateCustomer({ phone: norm, fullName: 'Valued Customer' });
+    }
+    if (!customer) {
+      return { success: false, newBalance: 0, error: 'Customer not found.' };
+    }
+
+    const currentBalance = Number(customer.swadCoinBalance ?? customer.swad_coin_balance ?? 0);
+    const newBalance = currentBalance + cleanAmount;
+    customer.swadCoinBalance = newBalance;
+    customer.swad_coin_balance = newBalance;
+    customer.updatedAt = new Date().toISOString();
+    this.saveCustomers();
+
+    const tx: SwadCoinTransaction = {
+      id: `tx-adm-cred-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+      customerId: customer.id,
+      type: 'ADMIN_CREDIT',
+      amount: cleanAmount,
+      balanceBefore: currentBalance,
+      balanceAfter: newBalance,
+      adminId,
+      description: reason.trim(),
+      createdAt: new Date().toISOString(),
+    };
+
+    this.swadCoinTransactions.unshift(tx);
+    this.saveSwadCoinTransactions();
+
+    return {
+      success: true,
+      newBalance,
+      transaction: tx,
+    };
+  }
+
+  public adminDebitCoins(
+    customerIdOrPhone: string,
+    amount: number,
+    reason: string,
+    adminId?: string
+  ): { success: boolean; newBalance: number; transaction?: SwadCoinTransaction; error?: string } {
+    this.init();
+    const cleanAmount = Math.floor(Number(amount));
+    if (cleanAmount <= 0) {
+      return { success: false, newBalance: 0, error: 'Amount must be greater than 0.' };
+    }
+    if (!reason || !reason.trim()) {
+      return { success: false, newBalance: 0, error: 'A valid reason is required for administrative coin operations.' };
+    }
+
+    const norm = normalizePhone(customerIdOrPhone);
+    const customer = this.customers.find((c) => c.id === customerIdOrPhone || (norm && normalizePhone(c.phone) === norm));
+    if (!customer) {
+      return { success: false, newBalance: 0, error: 'Customer not found.' };
+    }
+
+    const currentBalance = Number(customer.swadCoinBalance ?? customer.swad_coin_balance ?? 0);
+    if (currentBalance < cleanAmount) {
+      return { success: false, newBalance: currentBalance, error: `Customer only has ${currentBalance} Swad Coins.` };
+    }
+
+    const newBalance = currentBalance - cleanAmount;
+    customer.swadCoinBalance = newBalance;
+    customer.swad_coin_balance = newBalance;
+    customer.updatedAt = new Date().toISOString();
+    this.saveCustomers();
+
+    const tx: SwadCoinTransaction = {
+      id: `tx-adm-deb-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+      customerId: customer.id,
+      type: 'ADMIN_DEBIT',
+      amount: -cleanAmount,
+      balanceBefore: currentBalance,
+      balanceAfter: newBalance,
+      adminId,
+      description: reason.trim(),
+      createdAt: new Date().toISOString(),
+    };
+
+    this.swadCoinTransactions.unshift(tx);
+    this.saveSwadCoinTransactions();
+
+    return {
+      success: true,
+      newBalance,
+      transaction: tx,
+    };
+  }
+
+  public getCustomerTransactions(customerIdOrPhone: string): SwadCoinTransaction[] {
+    this.init();
+    const norm = normalizePhone(customerIdOrPhone);
+    const customer = this.customers.find((c) => c.id === customerIdOrPhone || (norm && normalizePhone(c.phone) === norm));
+    if (!customer) return [];
+
+    return this.swadCoinTransactions.filter((t) => t.customerId === customer.id);
+  }
+
+  public getAllCustomersWithCoins(): any[] {
+    this.init();
+    return this.customers.map((c) => {
+      const balance = Number(c.swadCoinBalance ?? c.swad_coin_balance ?? 0);
+      const customerTxs = this.swadCoinTransactions.filter((t) => t.customerId === c.id);
+      const totalEarned = customerTxs
+        .filter((t) => t.type === 'EARN' || t.type === 'ADMIN_CREDIT' || t.type === 'REFUND')
+        .reduce((sum, t) => sum + Math.max(0, t.amount), 0);
+      const totalRedeemed = customerTxs
+        .filter((t) => t.type === 'REDEEM' || t.type === 'ADMIN_DEBIT')
+        .reduce((sum, t) => sum + Math.abs(t.amount), 0);
+
+      return {
+        id: c.id,
+        fullName: c.fullName || 'Customer',
+        phone: c.phone,
+        email: c.email || '',
+        balance,
+        totalEarned,
+        totalRedeemed,
+        transactionsCount: customerTxs.length,
+        lastTransaction: customerTxs[0] || null,
+      };
+    });
+  }
+
+  public generateDailySwadCoinRewards(externalDeliveredOrders?: any[]): {
+    totalEligible: number;
+    created: number;
+    skippedAlreadyRewarded: number;
+    failed: number;
+    rewards: SwadCoinReward[];
+  } {
+    this.init();
+    let created = 0;
+    let skippedAlreadyRewarded = 0;
+    let failed = 0;
+    const createdRewards: SwadCoinReward[] = [];
+
+    // Combine storage orders with external orders (e.g. from Supabase)
+    const combinedOrders: any[] = [...this.orders];
+    if (Array.isArray(externalDeliveredOrders)) {
+      for (const ext of externalDeliveredOrders) {
+        const extId = ext.orderId || ext.order_id || ext.order_number || ext.id;
+        if (extId && !combinedOrders.some((o) => (o.orderId || o.id) === extId)) {
+          combinedOrders.push(ext);
+        }
+      }
+    }
+
+    const eligibleOrders = combinedOrders.filter((o) => {
+      const rawStatus = String(o.orderStatus || o.order_status || o.status || '').toLowerCase().trim();
+      const isDelivered = rawStatus === 'delivered' || rawStatus === 'picked_up' || rawStatus === 'picked up';
+      const isCancelled = rawStatus === 'cancelled';
+      return isDelivered && !isCancelled;
+    });
+
+    for (const order of eligibleOrders) {
+      try {
+        const orderIdentifier = String(order.orderId || order.order_id || order.order_number || order.id || '');
+        if (!orderIdentifier) continue;
+
+        // Check if reward was already generated for this order (UNIQUE rule)
+        const alreadyExists = this.swadCoinRewards.some((r) => r.orderId === orderIdentifier);
+        if (alreadyExists) {
+          skippedAlreadyRewarded++;
+          continue;
+        }
+
+        // Determine customer
+        const rawPhone = order.customerDetails?.phone || order.customer_phone || (order.deliveryAddressSnapshot as any)?.phone || '';
+        const normPhone = normalizePhone(rawPhone);
+        let customer = this.customers.find(
+          (c) => (order.customerId && c.id === order.customerId) || (normPhone && normalizePhone(c.phone) === normPhone)
+        );
+
+        if (!customer && normPhone) {
+          customer = this.getOrCreateCustomer({
+            phone: normPhone,
+            fullName: order.customerDetails?.fullName || order.customer_name || 'Valued Customer',
+          });
+        }
+
+        if (!customer) {
+          failed++;
+          continue;
+        }
+
+        // Calculate Z = Math.max(0, X - Y)
+        const subtotal = Number(order.subtotal || 0);
+        const couponDiscount = Number(order.discount || order.discount_amount || 0);
+        const Z = Math.max(0, subtotal - couponDiscount);
+
+        if (Z <= 0) {
+          continue;
+        }
+
+        const percentage = pickWeightedRewardPercentage();
+        const coinAmount = calculateSwadCoinsForValue(Z, percentage);
+
+        // 100-day expiry
+        const expiresAt = new Date(Date.now() + 100 * 24 * 60 * 60 * 1000).toISOString();
+
+        const reward: SwadCoinReward = {
+          id: `rew-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+          customerId: customer.id,
+          orderId: orderIdentifier,
+          eligibleOrderValue: Z,
+          rewardPercentage: percentage,
+          coinAmount,
+          status: 'PENDING',
+          expiresAt,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+
+        this.swadCoinRewards.push(reward);
+        createdRewards.push(reward);
+        created++;
+      } catch (err) {
+        console.warn('Error creating reward for order:', err);
+        failed++;
+      }
+    }
+
+    if (created > 0) {
+      this.saveSwadCoinRewards();
+    }
+
+    return {
+      totalEligible: eligibleOrders.length,
+      created,
+      skippedAlreadyRewarded,
+      failed,
+      rewards: createdRewards,
+    };
   }
 
   // =====================

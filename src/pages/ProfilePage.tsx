@@ -46,6 +46,9 @@ import { OrderCard } from '../components/profile/OrderCard';
 import { OrderDetailsModal } from '../components/profile/OrderDetailsModal';
 import { OrderReviewModal } from '../components/profile/OrderReviewModal';
 import { OrderSkeleton } from '../components/profile/OrderSkeleton';
+import { SwadCoinBalanceCard } from '../components/profile/SwadCoinBalanceCard';
+import { AllMyOrdersOptionsCard } from '../components/profile/AllMyOrdersOptionsCard';
+import { ActiveOrdersBanner } from '../components/profile/ActiveOrdersBanner';
 
 export const ProfilePage: React.FC = () => {
   const {
@@ -937,143 +940,35 @@ export const ProfilePage: React.FC = () => {
           </div>
         </div>
 
-        {/* Right Column: Order History & Loyalty (5 cols) */}
+        {/* Right Column: Loyalty Coins & All Orders Hub (5 cols) */}
         <div className="lg:col-span-5 space-y-6">
-          {/* Welcome Discount & Account Status */}
-          <div className="bg-gradient-to-br from-amber-800 to-amber-950 text-white rounded-3xl p-6 shadow-md relative overflow-hidden">
-            <div className="absolute -right-6 -bottom-6 w-32 h-32 rounded-full bg-white/5 pointer-events-none" />
-            <div className="relative space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-amber-200 bg-amber-900/60 px-2.5 py-1 rounded-full">
-                  Royal Member
-                </span>
-                <Sparkles className="w-4 h-4 text-amber-300" />
-              </div>
-              <div>
-                <h3 className="text-lg font-black font-heading">
-                  Nizami Biryani Club
-                </h3>
-                <p className="text-xs text-amber-100/90 mt-0.5">
-                  Exclusive culinary offers, 1-click reordering, and authenticated reviews.
-                </p>
-              </div>
-              <div className="pt-2 border-t border-amber-700/50 flex items-center justify-between text-xs">
-                <span className="text-amber-200">Registered Phone</span>
-                <span className="font-mono font-bold">+91 {customer.phone}</span>
-              </div>
-            </div>
-          </div>
+          {/* 1. Swad Coins Loyalty Wallet & Balance UI */}
+          <SwadCoinBalanceCard
+            customerPhone={customer.phone}
+            customerId={customer.id}
+          />
 
-          {/* ACTIVE ORDERS & ALL ORDERS LINK */}
-          <div className="space-y-4">
-            {/* Active Orders Section */}
-            <div className="bg-white rounded-3xl border border-stone-200 p-5 shadow-xs space-y-4">
-              <div className="flex items-center justify-between pb-3 border-b border-stone-100">
-                <h3 className="font-bold text-base text-stone-900 flex items-center gap-2">
-                  <Clock className="w-4 h-4 text-amber-800" />
-                  <span>Active Orders</span>
-                </h3>
-                {activeOrders.length > 0 ? (
-                  <span className="text-xs font-bold text-amber-800 bg-amber-50 border border-amber-200 px-2.5 py-0.5 rounded-full flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-amber-500 animate-ping" />
-                    {activeOrders.length} In Progress
-                  </span>
-                ) : (
-                  <span className="text-xs font-semibold text-stone-400 bg-stone-100 px-2.5 py-0.5 rounded-full">
-                    0 Active
-                  </span>
-                )}
-              </div>
-
-              {/* Error State */}
-              {ordersError && (
-                <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 text-center space-y-2">
-                  <AlertCircle className="w-6 h-6 text-rose-600 mx-auto" />
-                  <p className="text-xs text-rose-700">{ordersError}</p>
-                  <button
-                    type="button"
-                    onClick={fetchOrders}
-                    className="px-3 py-1 bg-rose-700 text-white text-xs font-bold rounded-lg hover:bg-rose-800 transition-colors inline-flex items-center gap-1 cursor-pointer"
-                  >
-                    <RefreshCw className="w-3 h-3" /> Retry
-                  </button>
-                </div>
-              )}
-
-              {/* Loading Skeleton */}
-              {isLoadingOrders && !ordersError && <OrderSkeleton />}
-
-              {/* Has Active Orders */}
-              {!isLoadingOrders && !ordersError && activeOrders.length > 0 && (
-                <div className="space-y-3">
-                  {activeOrders.map((ord) => (
-                    <OrderCard
-                      key={ord.orderId || ord.id}
-                      order={ord}
-                      isActiveOrder={true}
-                      onViewDetails={(o) => setSelectedOrderForDetails(o)}
-                      onReorder={handleReorder}
-                    />
-                  ))}
-                </div>
-              )}
-
-              {/* No Active Orders */}
-              {!isLoadingOrders && !ordersError && activeOrders.length === 0 && (
-                <div className="py-6 text-center space-y-2 bg-stone-50/70 rounded-2xl border border-stone-100 p-4">
-                  <ShoppingBag className="w-8 h-8 text-stone-300 mx-auto" />
-                  <h4 className="text-xs font-bold text-stone-800">No active orders in progress</h4>
-                  <p className="text-[11px] text-stone-500 max-w-xs mx-auto">
-                    Craving delicious slow-cooked biryani or clay pot curries?
-                  </p>
-                  <div className="pt-1">
-                    <button
-                      type="button"
-                      onClick={() => goToShop()}
-                      className="text-xs font-bold text-amber-800 hover:text-amber-900 underline inline-flex items-center gap-1 cursor-pointer"
-                    >
-                      <span>Explore Menu</span>
-                      <ArrowRight className="w-3 h-3" />
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* "All My Orders" Hyperlink Card */}
-            <div
-              onClick={goToOrders}
-              className="bg-gradient-to-r from-amber-50/80 via-white to-amber-50/40 rounded-3xl border border-amber-200/80 p-5 shadow-xs hover:border-amber-400 hover:shadow-sm transition-all cursor-pointer group flex items-center justify-between gap-3"
-            >
-              <div className="flex items-center gap-3.5 min-w-0">
-                <div className="w-11 h-11 rounded-2xl bg-amber-800 text-white flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform shadow-xs">
-                  <ShoppingBag className="w-5 h-5" />
-                </div>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <h4 className="font-serif font-bold text-sm sm:text-base text-stone-900 group-hover:text-amber-900 transition-colors">
-                      All My Orders
-                    </h4>
-                    {orders.length > 0 && (
-                      <span className="text-[11px] font-bold bg-amber-100 text-amber-900 px-2 py-0.5 rounded-full">
-                        {orders.length}
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-xs text-stone-500 truncate mt-0.5">
-                    View order history, receipts, ratings & 1-click reordering
-                  </p>
-                </div>
-              </div>
-
-              <div className="shrink-0 flex items-center gap-1 text-xs font-bold text-amber-800 group-hover:translate-x-1 transition-transform">
-                <span className="hidden sm:inline">View All</span>
-                <ArrowRight className="w-4 h-4" />
-              </div>
-            </div>
-          </div>
+          {/* 2. All My Orders Options */}
+          <AllMyOrdersOptionsCard
+            orders={orders}
+            activeOrders={activeOrders}
+            pastOrders={pastOrders}
+            onGoToOrders={goToOrders}
+          />
         </div>
       </div>
+
+      {/* FULL-WIDTH HORIZONTAL ROW BELOW ADDRESS & PROFILE SECTION: ACTIVE ORDERS BANNER */}
+      <ActiveOrdersBanner
+        activeOrders={activeOrders}
+        isLoading={isLoadingOrders}
+        ordersError={ordersError}
+        onRefreshOrders={fetchOrders}
+        onViewDetails={(o) => setSelectedOrderForDetails(o)}
+        onReorder={handleReorder}
+        onGoToShop={goToShop}
+        onGoToOrders={goToOrders}
+      />
 
       {/* Add / Edit Address Modal */}
       <AnimatePresence>

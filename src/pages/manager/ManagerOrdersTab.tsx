@@ -34,6 +34,7 @@ import {
   Zap,
   Wallet,
   EyeOff,
+  Coins,
 } from 'lucide-react';
 import { Order, Outlet } from '../../types';
 import {
@@ -1483,6 +1484,14 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
                             Discount: <strong className="font-mono">-₹{order.discount}</strong>
                           </span>
                         )}
+                        <span className={`inline-flex items-center gap-1 ${Number(order.swadCoinsUsed || order.swadCoinDiscountAmount || 0) > 0 ? 'text-amber-700 font-medium' : ''}`}>
+                          Swad-coins: <strong className={`font-mono inline-flex items-center gap-0.5 ${Number(order.swadCoinsUsed || order.swadCoinDiscountAmount || 0) > 0 ? 'text-amber-800' : 'text-stone-900'}`}>
+                            <Coins className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                            {Number(order.swadCoinsUsed || order.swadCoinDiscountAmount || 0) > 0
+                              ? `-${Number(order.swadCoinsUsed || order.swadCoinDiscountAmount)}`
+                              : 0}
+                          </strong>
+                        </span>
                         <span>Pack: <strong className="text-stone-900 font-mono">₹{order.packagingFee || 0}</strong></span>
                         {!isPickup && (
                           <span>Delivery: <strong className="text-stone-900 font-mono">₹{order.deliveryFee || 0}</strong></span>

@@ -30,19 +30,31 @@ import { OrderSkeleton } from '../components/profile/OrderSkeleton';
 
 export const MyOrdersPage: React.FC = () => {
   const { customer, isCustomerLoggedIn, openOtpModal } = useCustomer();
-  const { goToHome, goToShop, goToProfile } = useNavigation();
+  const { currentRoute, goToHome, goToShop, goToProfile } = useNavigation();
   const { addToCart, showToast, setIsCartDrawerOpen } = useCart();
   const { currentOutlet } = useLocation();
   const { allProducts } = useProducts();
+
+  // Initial tab from route if specified
+  const initialTab =
+    currentRoute.path === '/orders' && currentRoute.tab ? currentRoute.tab : 'all';
 
   // Orders State
   const [orders, setOrders] = useState<Order[]>([]);
   const [isLoadingOrders, setIsLoadingOrders] = useState(false);
   const [ordersError, setOrdersError] = useState<string | null>(null);
-  const [orderFilter, setOrderFilter] = useState<'all' | 'active' | 'delivered' | 'cancelled'>('all');
+  const [orderFilter, setOrderFilter] = useState<'all' | 'active' | 'delivered' | 'cancelled'>(initialTab);
   const [searchQuery, setSearchQuery] = useState('');
   const [currentPage, setCurrentPage] = useState<number>(1);
   const ordersPerPage = 6;
+
+  // Sync filter when navigating with tab parameter
+  useEffect(() => {
+    if (currentRoute.path === '/orders' && currentRoute.tab) {
+      setOrderFilter(currentRoute.tab);
+      setCurrentPage(1);
+    }
+  }, [currentRoute]);
 
   // Selected Order Modals
   const [selectedOrderForDetails, setSelectedOrderForDetails] = useState<Order | null>(null);

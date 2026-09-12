@@ -14,6 +14,15 @@ import {
   getProductPortionsLeftAtOutlet,
 } from '../lib/locationService';
 import {
+  fetchOutletBestsellerSales,
+  OutletProductSale,
+  fetchAvailableCouponsForCustomer,
+  fetchFeaturedReviews,
+  FeaturedReview,
+} from '../lib/supabaseService';
+import { getAboutByOutletId } from '../lib/aboutService';
+import { OutletAbout, Coupon } from '../types';
+import {
   Flame,
   ChefHat,
   ArrowRight,
@@ -36,7 +45,7 @@ export const HomePage: React.FC = () => {
   const { goToShop, goToProduct, goToCategories, goToAbout } = useNavigation();
   const { addToCart } = useCart();
   const { activeProducts, outletProducts, bestsellerProducts, chefSignatures, categories } = useProducts();
-  const { currentZone, currentOutlet, selectedLocation } = useLocation();
+  const { currentZone, currentOutlet, selectedLocation, outlets } = useLocation();
 
   const deliveryTime =
     currentZone?.estimatedDeliveryTime ||
@@ -76,6 +85,95 @@ export const HomePage: React.FC = () => {
   // Outlet-scoped products for the carousel
   const outletId = selectedLocation?.outletId || currentOutlet?.id;
 
+  // Live 30-day historical sales volume data for this specific outlet
+  const [outletSalesMap, setOutletSalesMap] = useState<Record<string, OutletProductSale>>({});
+
+  // Outlet About information (story_title, story_description, etc.)
+  const [outletAbout, setOutletAbout] = useState<OutletAbout | null>(null);
+
+  // Available coupon code for this outlet
+  const [availableCoupon, setAvailableCoupon] = useState<Coupon | null>(null);
+
+  // Database-driven verified customer reviews from product_reviews table
+  const [featuredReviews, setFeaturedReviews] = useState<FeaturedReview[]>([]);
+  const [reviewsStats, setReviewsStats] = useState<{ averageRating: number; totalCount: number }>({
+    averageRating: 4.8,
+    totalCount: 0,
+  });
+  const [isReviewsLoading, setIsReviewsLoading] = useState<boolean>(true);
+
+  useEffect(() => {
+    let isMounted = true;
+    if (!outletId) {
+      setOutletSalesMap({});
+      setOutletAbout(null);
+      setAvailableCoupon(null);
+      setFeaturedReviews([]);
+      setIsReviewsLoading(false);
+      return;
+    }
+
+    // 1. 30-day sales ranking
+    fetchOutletBestsellerSales(outletId, 30)
+      .then((map) => {
+        if (isMounted) {
+          setOutletSalesMap(map);
+        }
+      })
+      .catch((err) => {
+        console.warn('Failed to load outlet sales ranking:', err);
+      });
+
+    // 2. Fetch About content for this outlet from database
+    getAboutByOutletId(outletId)
+      .then((about) => {
+        if (isMounted) {
+          setOutletAbout(about);
+        }
+      })
+      .catch((err) => {
+        console.warn('Failed to load outlet about data:', err);
+      });
+
+    // 3. Fetch available coupons for this outlet
+    fetchAvailableCouponsForCustomer(null, null, undefined, outletId)
+      .then((coupons) => {
+        if (!isMounted) return;
+        if (coupons && coupons.length > 0) {
+          // Rank coupons: percentage first, then higher discount value
+          const sorted = coupons.slice().sort((a, b) => {
+            if (a.discountType === 'percentage' && b.discountType !== 'percentage') return -1;
+            if (b.discountType === 'percentage' && a.discountType !== 'percentage') return 1;
+            return (b.discountValue || 0) - (a.discountValue || 0);
+          });
+          setAvailableCoupon(sorted[0]);
+        } else {
+          setAvailableCoupon(null);
+        }
+      })
+      .catch((err) => {
+        console.warn('Failed to fetch available coupons for outlet:', err);
+      });
+
+    // 4. Fetch verified customer reviews from Supabase product_reviews table
+    setIsReviewsLoading(true);
+    fetchFeaturedReviews(outletId, 3)
+      .then((res) => {
+        if (!isMounted) return;
+        setFeaturedReviews(res.reviews || []);
+        setReviewsStats(res.stats || { averageRating: 4.8, totalCount: 0 });
+        setIsReviewsLoading(false);
+      })
+      .catch((err) => {
+        console.warn('Failed to load featured reviews from database:', err);
+        if (isMounted) setIsReviewsLoading(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [outletId]);
+
   const outletAvailableProducts = useMemo(() => {
     return activeProducts.filter((p) => {
       if (!outletId) return p.inStock !== false;
@@ -84,17 +182,18 @@ export const HomePage: React.FC = () => {
   }, [activeProducts, outletId]);
 
   // Composition rules for Hero Carousel:
-  // Primary Selection: Up to 3 bestsellers + up to 2 featured (Max 5)
-  // If carousel count < 3, pad with other in-stock items available at this outlet (up to 3, or whatever total in-stock items the outlet actually has)
+  // Primary Selection: Up to 3 bestsellers (sorted by 30-day sales) + up to 2 featured (Max 5)
+  // If carousel count < 3, pad with other in-stock items available at this outlet
   const carouselItems = useMemo(() => {
-    const bestsellers = outletAvailableProducts.filter((p) =>
-      outletId ? isProductBestsellerAtOutlet(p, outletId) : !!p.bestseller
-    );
+    const bestsellers = outletAvailableProducts
+      .filter((p) => (outletId ? isProductBestsellerAtOutlet(p, outletId) : !!p.bestseller) || (outletSalesMap[String(p.id)]?.totalSold || 0) > 0)
+      .sort((a, b) => (outletSalesMap[String(b.id)]?.totalSold || 0) - (outletSalesMap[String(a.id)]?.totalSold || 0));
 
     const featured = outletAvailableProducts.filter((p) => {
       const isBs = outletId ? isProductBestsellerAtOutlet(p, outletId) : !!p.bestseller;
       const isFt = outletId ? isProductFeaturedAtOutlet(p, outletId) : !!p.featured;
-      return isFt && !isBs;
+      const hasSales = (outletSalesMap[String(p.id)]?.totalSold || 0) > 0;
+      return isFt && !isBs && !hasSales;
     });
 
     const chosenBestsellers = bestsellers.slice(0, 3);
@@ -114,7 +213,7 @@ export const HomePage: React.FC = () => {
     }
 
     return items;
-  }, [outletAvailableProducts, outletId]);
+  }, [outletAvailableProducts, outletId, outletSalesMap]);
 
   // Carousel state and rotation
   const [currentSlide, setCurrentSlide] = useState(0);
@@ -136,8 +235,127 @@ export const HomePage: React.FC = () => {
 
   const activeItem = carouselItems[currentSlide] || carouselItems[0];
 
-  const bestsellers = bestsellerProducts.slice(0, 4);
+  // Dynamically rank dishes based on actual historical sales volume for this outlet only (last 30 days)
+  const bestsellers = useMemo(() => {
+    // Only consider products that are active, served, and in-stock at this specific outlet
+    const candidates = outletAvailableProducts.slice();
+
+    // Sort by:
+    // 1. Total quantity ordered at this outlet in the last 30 days (highest first)
+    // 2. Total order frequency at this outlet in the last 30 days (highest first)
+    // 3. Fallback for un-ordered items: outlet-curated bestseller flag or featured flag
+    candidates.sort((a, b) => {
+      const soldA = outletSalesMap[String(a.id)]?.totalSold || 0;
+      const soldB = outletSalesMap[String(b.id)]?.totalSold || 0;
+
+      if (soldA !== soldB) {
+        return soldB - soldA; // higher sales volume first
+      }
+
+      const countA = outletSalesMap[String(a.id)]?.orderCount || 0;
+      const countB = outletSalesMap[String(b.id)]?.orderCount || 0;
+      if (countA !== countB) {
+        return countB - countA;
+      }
+
+      // Tie breaker / fallback: check outlet bestseller override
+      const bsA = outletId ? isProductBestsellerAtOutlet(a, outletId) : !!a.bestseller;
+      const bsB = outletId ? isProductBestsellerAtOutlet(b, outletId) : !!b.bestseller;
+      if (bsA !== bsB) {
+        return bsA ? -1 : 1;
+      }
+
+      return 0;
+    });
+
+    return candidates.slice(0, 4);
+  }, [outletAvailableProducts, outletSalesMap, outletId]);
+
   const chefSpecialItems = chefSignatures.slice(0, 4);
+
+  // Dynamic Heirloom Special banner values from abouts table
+  const bannerHeading = outletAbout?.storyTitle || 'Champaran Ahuna & Nizami Dum Handis';
+
+  const bannerDescription = useMemo(() => {
+    if (!outletAbout?.storyDescription) {
+      return 'Sealed with whole wheat dough and cooked over slow charcoal embers. No artificial enhancers — only cold-pressed mustard oil, whole garlic bulbs, and raw spices.';
+    }
+    // Take the first concise paragraph for the banner layout
+    const firstPara = outletAbout.storyDescription
+      .split(/\r?\n\r?\n/)[0]
+      .replace(/\r?\n/g, ' ')
+      .trim();
+    return firstPara || outletAbout.storyDescription;
+  }, [outletAbout]);
+
+  // Determine the #1 bestselling category at this outlet based on 30-day historical order sales
+  const topBestsellerCategory = useMemo(() => {
+    if (!categories || categories.length === 0) return null;
+
+    // Aggregate 30-day sales per category
+    const salesByCat: Record<string, number> = {};
+    for (const product of outletAvailableProducts) {
+      const sold = outletSalesMap[String(product.id)]?.totalSold || 0;
+      const cat = product.category;
+      if (cat) {
+        salesByCat[cat] = (salesByCat[cat] || 0) + sold;
+      }
+    }
+
+    // Find the category with maximum volume
+    let highestCat = null;
+    let maxVolume = 0;
+    for (const cat of categories) {
+      const count = (salesByCat[cat.id] || 0) + (salesByCat[cat.slug] || 0);
+      if (count > maxVolume) {
+        maxVolume = count;
+        highestCat = cat;
+      }
+    }
+
+    // Fallback 1: Category of the #1 bestseller dish at this outlet
+    if (!highestCat && bestsellers.length > 0) {
+      const firstBsCat = categories.find(
+        (c) => c.id === bestsellers[0].category || c.slug === bestsellers[0].category
+      );
+      if (firstBsCat) return firstBsCat;
+    }
+
+    // Fallback 2: Dum Biryanis or the first category
+    return (
+      highestCat ||
+      categories.find((c) => c.slug === 'dum-biryanis' || c.id === 'biryani') ||
+      categories[0]
+    );
+  }, [categories, outletAvailableProducts, outletSalesMap, bestsellers]);
+
+  // Lookups for reviews mapping (dish thumbnail, dish name, outlet name)
+  const productLookup = useMemo(() => {
+    const map = new Map<string, any>();
+    for (const p of activeProducts) {
+      map.set(String(p.id), p);
+    }
+    return map;
+  }, [activeProducts]);
+
+  const outletLookup = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const o of (outlets || [])) {
+      map.set(o.id, o.name);
+    }
+    return map;
+  }, [outlets]);
+
+  const formatReviewDate = (dateStr?: string) => {
+    if (!dateStr) return 'Recent';
+    try {
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return 'Recent';
+      return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+    } catch {
+      return 'Recent';
+    }
+  };
 
   return (
     <div className="space-y-12 sm:space-y-16 pb-16">
@@ -434,8 +652,11 @@ export const HomePage: React.FC = () => {
               <span>Customer Favorites</span>
             </div>
             <h2 className="font-extrabold text-xl sm:text-2xl text-gray-900">
-              Most Ordered Dum Delicacies
+              Most Ordered Delicacies
             </h2>
+            <p className="text-xs text-stone-500 mt-0.5">
+              Dynamically ranked by actual orders at this kitchen over the past 30 days
+            </p>
           </div>
           <button
             type="button"
@@ -449,43 +670,59 @@ export const HomePage: React.FC = () => {
 
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
           {bestsellers.map((product) => (
-            <ProductCard key={product.id} product={product} />
+            <ProductCard
+              key={product.id}
+              product={product}
+              soldCount={outletSalesMap[String(product.id)]?.totalSold}
+            />
           ))}
         </div>
       </section>
 
-      {/* 4. CHEF'S SPECIAL BANNER / SPOTLIGHT */}
+      {/* 4. HEIRLOOM SPECIAL BANNER / SPOTLIGHT */}
       <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="relative rounded-2xl overflow-hidden bg-gray-900 text-white p-6 sm:p-10 border border-gray-800 shadow-md">
           <div className="relative z-10 grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
             <div className="lg:col-span-7 space-y-3 text-center lg:text-left">
               <div className="inline-flex items-center gap-1.5 bg-orange-500/20 text-orange-400 border border-orange-500/30 px-2.5 py-0.5 rounded-full text-[11px] font-bold uppercase tracking-wider">
                 <Flame className="w-3 h-3" />
-                Heirloom Clay Pot Special
+                Heirloom Special
               </div>
 
               <h2 className="font-extrabold text-xl sm:text-3xl text-white leading-tight">
-                Champaran Ahuna & Nizami Dum Handis
+                {bannerHeading}
               </h2>
 
               <p className="text-xs text-gray-300 leading-relaxed max-w-xl">
-                Sealed with whole wheat dough and cooked over slow charcoal embers. No artificial enhancers — only cold-pressed mustard oil, whole garlic bulbs, and raw spices.
+                {bannerDescription}
               </p>
 
               <div className="pt-1 flex flex-wrap items-center justify-center lg:justify-start gap-3">
                 <button
                   type="button"
-                  onClick={() => goToShop('slow-cooked-curries')}
-                  className="px-5 py-2.5 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-xs font-bold shadow-xs transition-colors flex items-center gap-1.5"
+                  onClick={() => goToShop(topBestsellerCategory?.slug || topBestsellerCategory?.id)}
+                  className="px-5 py-2.5 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-xs font-bold shadow-xs transition-colors flex items-center gap-1.5 cursor-pointer"
                 >
-                  <span>Order Handi Curries</span>
+                  <span>Order {topBestsellerCategory?.name || 'Delicacies'}</span>
                   <ArrowRight className="w-3.5 h-3.5" />
                 </button>
 
-                <div className="flex items-center gap-1.5 text-xs text-orange-400 font-semibold">
-                  <Tag className="w-3.5 h-3.5" />
-                  <span>Use code <strong>GAON15</strong> for 15% OFF</span>
-                </div>
+                {availableCoupon ? (
+                  <div className="flex items-center gap-1.5 text-xs text-orange-400 font-semibold bg-orange-500/10 px-3 py-1.5 rounded-lg border border-orange-500/20">
+                    <Tag className="w-3.5 h-3.5 shrink-0" />
+                    <span>
+                      Use code <strong className="font-mono text-white tracking-wide">{availableCoupon.code}</strong> for{' '}
+                      {availableCoupon.discountType === 'percentage'
+                        ? `${availableCoupon.discountValue}% OFF`
+                        : `₹${availableCoupon.discountValue} OFF`}
+                    </span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1.5 text-xs text-orange-400 font-semibold">
+                    <Tag className="w-3.5 h-3.5 shrink-0" />
+                    <span>Use code <strong className="font-mono text-white tracking-wide">SWAD15</strong> for 15% OFF</span>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -573,108 +810,163 @@ export const HomePage: React.FC = () => {
         </div>
       </section>
 
-      {/* 7. CUSTOMER REVIEWS */}
+      {/* 7. CUSTOMER REVIEWS (DATABASE DRIVEN ONLY) */}
       <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="text-center max-w-2xl mx-auto mb-8">
-          <div className="inline-flex items-center gap-1.5 text-orange-600 font-bold text-xs uppercase tracking-wider mb-1">
-            <Quote className="w-3.5 h-3.5" />
-            <span>Verified Taste Tests</span>
+        <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-8">
+          <div className="text-center sm:text-left">
+            <div className="inline-flex items-center gap-1.5 text-orange-600 font-bold text-xs uppercase tracking-wider mb-1">
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>Verified Taste Tests</span>
+            </div>
+            <h2 className="font-extrabold text-xl sm:text-3xl text-gray-900 tracking-tight">
+              Loved by Food Connoisseurs
+            </h2>
           </div>
-          <h2 className="font-extrabold text-xl sm:text-2xl text-gray-900">
-            Loved by 10,000+ Food Connoisseurs
-          </h2>
+          {reviewsStats.totalCount > 0 && (
+            <div className="flex items-center gap-2 bg-amber-50/80 border border-amber-200/80 px-3.5 py-1.5 rounded-full text-xs text-amber-900 font-semibold self-center sm:self-auto">
+              <span className="flex items-center gap-1 text-amber-600 font-bold">
+                <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
+                {reviewsStats.averageRating} / 5
+              </span>
+              <span className="text-amber-300">•</span>
+              <span className="text-amber-800 font-medium">
+                {reviewsStats.totalCount} verified food reviews
+              </span>
+            </div>
+          )}
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="bg-white rounded-xl p-5 border border-gray-200 shadow-xs flex flex-col justify-between">
-            <div className="space-y-2.5">
-              <div className="flex text-amber-400 gap-0.5">
-                {[...Array(5)].map((_, i) => (
-                  <Star key={i} className="w-3.5 h-3.5 fill-amber-400" />
-                ))}
+        {isReviewsLoading ? (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6">
+            {[1, 2, 3].map((n) => (
+              <div
+                key={n}
+                className="bg-white rounded-2xl p-6 border border-stone-200/80 shadow-xs animate-pulse space-y-4"
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-full bg-stone-200" />
+                  <div className="space-y-1.5 flex-1">
+                    <div className="h-3 w-24 bg-stone-200 rounded" />
+                    <div className="h-2.5 w-16 bg-stone-100 rounded" />
+                  </div>
+                </div>
+                <div className="h-16 bg-stone-100 rounded-lg" />
+                <div className="h-8 bg-stone-100 rounded-lg" />
               </div>
-              <p className="text-xs text-gray-600 leading-relaxed italic">
-                &quot;The Nizami Mutton Dum Biryani was incredible. You could actually smell the saffron and cardamom when cracking the dough seal. Unmatched taste!&quot;
-              </p>
-            </div>
-            <div className="pt-3 border-t border-gray-100 flex items-center justify-between mt-3">
-              <div>
-                <p className="font-bold text-xs text-gray-900">Rohit Malhotra</p>
-                <p className="text-[10px] text-gray-400">Bandra, Mumbai</p>
-              </div>
-              <span className="text-[10px] bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded font-semibold border border-emerald-200">
-                Verified Order
-              </span>
-            </div>
+            ))}
           </div>
+        ) : featuredReviews.length > 0 ? (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6">
+            {featuredReviews.map((rev) => {
+              const matchedProduct = productLookup.get(String(rev.productId));
+              const outletName =
+                (rev.outletId && outletLookup.get(rev.outletId)) ||
+                currentOutlet?.name ||
+                'Artisanal Cloud Kitchen';
+              const initials = (rev.customerDisplayName || 'Customer')
+                .trim()
+                .slice(0, 2)
+                .toUpperCase();
 
-          <div className="bg-white rounded-xl p-5 border border-gray-200 shadow-xs flex flex-col justify-between">
-            <div className="space-y-2.5">
-              <div className="flex text-amber-400 gap-0.5">
-                {[...Array(5)].map((_, i) => (
-                  <Star key={i} className="w-3.5 h-3.5 fill-amber-400" />
-                ))}
-              </div>
-              <p className="text-xs text-gray-600 leading-relaxed italic">
-                &quot;As a vegetarian, finding rich authentic Dal Makhani without excessive creaminess is rare. Gaon Ka Swad slow-cooked dal is 10/10 perfection.&quot;
-              </p>
-            </div>
-            <div className="pt-3 border-t border-gray-100 flex items-center justify-between mt-3">
-              <div>
-                <p className="font-bold text-xs text-gray-900">Pooja Hegde</p>
-                <p className="text-[10px] text-gray-400">Indiranagar, Bengaluru</p>
-              </div>
-              <span className="text-[10px] bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded font-semibold border border-emerald-200">
-                Verified Order
-              </span>
-            </div>
+              return (
+                <div
+                  key={rev.id}
+                  className="bg-white rounded-2xl p-6 border border-stone-200/80 shadow-xs hover:shadow-md transition-shadow flex flex-col justify-between"
+                >
+                  <div className="space-y-3">
+                    {/* Header: User Avatar, Name, and Verified Badge */}
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div className="w-9 h-9 rounded-full bg-amber-100 text-amber-900 font-bold text-xs flex items-center justify-center shrink-0 ring-2 ring-amber-500/20">
+                          {initials}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="font-bold text-xs text-gray-900 truncate">
+                            {rev.customerDisplayName || 'Verified Foodie'}
+                          </p>
+                          <p className="text-[11px] text-stone-500 truncate">
+                            {outletName}
+                          </p>
+                        </div>
+                      </div>
+
+                      {rev.isVerifiedPurchase !== false && (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200/60 shrink-0">
+                          <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                          Verified Order
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Star Rating & Relative Time */}
+                    <div className="flex items-center justify-between pt-1">
+                      <div className="flex text-amber-400 gap-0.5">
+                        {[...Array(5)].map((_, i) => (
+                          <Star
+                            key={i}
+                            className={`w-3.5 h-3.5 ${
+                              i < rev.rating
+                                ? 'fill-amber-400 text-amber-400'
+                                : 'fill-stone-200 text-stone-200'
+                            }`}
+                          />
+                        ))}
+                      </div>
+                      <span className="text-[11px] text-stone-400">
+                        {formatReviewDate(rev.reviewedAt || rev.createdAt)}
+                      </span>
+                    </div>
+
+                    {/* Customer Review Quote */}
+                    <p className="text-xs text-stone-600 leading-relaxed italic line-clamp-4">
+                      &quot;{rev.reviewText}&quot;
+                    </p>
+                  </div>
+
+                  {/* Associated Dish Footer Link */}
+                  {matchedProduct && (
+                    <button
+                      type="button"
+                      onClick={() => goToProduct(matchedProduct.slug)}
+                      className="mt-4 pt-3.5 border-t border-stone-100 flex items-center justify-between gap-2 w-full text-left hover:text-orange-600 transition-colors group cursor-pointer"
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <img
+                          src={matchedProduct.image}
+                          alt={matchedProduct.name}
+                          className="w-7 h-7 rounded-md object-cover shrink-0 border border-stone-200"
+                        />
+                        <span className="text-[11px] font-semibold text-stone-700 truncate group-hover:text-orange-600">
+                          {matchedProduct.name}
+                        </span>
+                      </div>
+                      <span className="text-[10px] font-bold text-orange-600 shrink-0 flex items-center gap-0.5">
+                        <span>View Dish</span>
+                        <ChevronRight className="w-3 h-3 group-hover:translate-x-0.5 transition-transform" />
+                      </span>
+                    </button>
+                  )}
+                </div>
+              );
+            })}
           </div>
-
-          <div className="bg-white rounded-xl p-5 border border-gray-200 shadow-xs flex flex-col justify-between">
-            <div className="space-y-2.5">
-              <div className="flex text-amber-400 gap-0.5">
-                {[...Array(5)].map((_, i) => (
-                  <Star key={i} className="w-3.5 h-3.5 fill-amber-400" />
-                ))}
-              </div>
-              <p className="text-xs text-gray-600 leading-relaxed italic">
-                &quot;Hot delivery in under 35 minutes! The garlic naan stayed soft and the butter chicken had real clay oven char. Will order every weekend.&quot;
-              </p>
-            </div>
-            <div className="pt-3 border-t border-gray-100 flex items-center justify-between mt-3">
-              <div>
-                <p className="font-bold text-xs text-gray-900">Vikram Seth</p>
-                <p className="text-[10px] text-gray-400">Connaught Place, Delhi</p>
-              </div>
-              <span className="text-[10px] bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded font-semibold border border-emerald-200">
-                Verified Order
-              </span>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* 8. PROMO CALLOUT / QUICK ORDER BANNER */}
-      <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="bg-orange-600 rounded-2xl p-6 sm:p-10 text-white shadow-md flex flex-col sm:flex-row items-center justify-between gap-5">
-          <div className="space-y-1.5 text-center sm:text-left">
-            <h3 className="font-extrabold text-xl sm:text-2xl">
-              Ready to Taste Authentic Royal Recipes?
-            </h3>
-            <p className="text-xs text-orange-100 max-w-md">
-              Order now and get 15% off with code <strong>GAON15</strong> + Free insulated express delivery.
+        ) : (
+          <div className="text-center py-10 px-4 bg-white rounded-2xl border border-stone-200/80 shadow-xs max-w-xl mx-auto">
+            <Sparkles className="w-7 h-7 text-orange-500 mx-auto mb-2.5" />
+            <h3 className="text-stone-800 font-bold text-sm">Be the first to leave a review!</h3>
+            <p className="text-xs text-stone-500 mt-1 max-w-sm mx-auto">
+              Place an order and share your honest taste feedback to see your review showcased here.
             </p>
+            <button
+              type="button"
+              onClick={() => goToShop()}
+              className="mt-4 px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white text-xs font-bold rounded-xl shadow-xs transition-colors inline-flex items-center gap-1.5 cursor-pointer"
+            >
+              <span>Explore Menu</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </button>
           </div>
-
-          <button
-            type="button"
-            onClick={() => goToShop()}
-            className="px-6 py-3 bg-gray-900 hover:bg-black text-white rounded-xl font-bold text-xs sm:text-sm shadow-md transition-all flex items-center gap-2 shrink-0 hover:scale-102"
-          >
-            <span>Order Delicacies Now</span>
-            <ArrowRight className="w-4 h-4" />
-          </button>
-        </div>
+        )}
       </section>
     </div>
   );

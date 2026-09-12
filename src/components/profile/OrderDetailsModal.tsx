@@ -15,6 +15,7 @@ import {
   RotateCcw,
   Star,
   Store,
+  Coins,
 } from 'lucide-react';
 import { Order } from '../../types';
 import { resolveOrderOutletInfo } from '../../lib/locationService';
@@ -494,6 +495,16 @@ export const OrderDetailsModal: React.FC<OrderDetailsModalProps> = ({
               </div>
             )}
 
+            {Number(order.swadCoinDiscountAmount || 0) > 0 && (
+              <div className="flex justify-between text-amber-700 font-medium">
+                <span className="flex items-center gap-1">
+                  <Coins className="w-3.5 h-3.5 text-amber-600" />
+                  Swad Coins ({order.swadCoinsUsed || order.swadCoinDiscountAmount} coins)
+                </span>
+                <span>-₹{Number(order.swadCoinDiscountAmount).toFixed(0)}</span>
+              </div>
+            )}
+
             {Number(order.deliveryFee || 0) > 0 && (
               <div className="flex justify-between text-stone-600">
                 <span>Delivery Fee</span>
@@ -522,29 +533,83 @@ export const OrderDetailsModal: React.FC<OrderDetailsModalProps> = ({
           </div>
 
           {/* Payment Details */}
-          <div className="bg-stone-50/70 rounded-xl p-4 border border-stone-200 flex items-center justify-between text-xs">
-            <div className="flex items-center gap-2.5">
-              <CreditCard className="w-4 h-4 text-stone-500" />
-              <div>
-                <p className="text-stone-500 uppercase tracking-wider font-semibold text-[10px]">Payment Method</p>
-                <p className="font-bold text-stone-900">
-                  {order.payment_method?.toUpperCase() || (order as any).paymentMethod?.toUpperCase() || (order.customerDetails?.paymentMethod ? order.customerDetails.paymentMethod.toUpperCase() : 'CASH ON DELIVERY')}
-                </p>
+          {(() => {
+            const rawMethod = (
+              order.payment_method ||
+              order.paymentMethod ||
+              order.customerDetails?.paymentMethod ||
+              'cod'
+            ).toLowerCase().trim();
+            const isCOD = rawMethod === 'cod' || rawMethod === 'cash on delivery';
+            const methodLabel = isCOD
+              ? 'Cash on Delivery'
+              : rawMethod === 'upi'
+              ? 'UPI'
+              : rawMethod === 'card'
+              ? 'Credit/Debit Card'
+              : rawMethod.toUpperCase();
+
+            const rawPayStatus = (
+              order.payment_status ||
+              order.paymentStatus ||
+              ''
+            ).toLowerCase().trim();
+
+            let statusLabel = 'PAID';
+            let statusBadge = 'bg-emerald-100 text-emerald-800';
+
+            if (rawPayStatus === 'paid') {
+              statusLabel = 'PAID';
+              statusBadge = 'bg-emerald-100 text-emerald-800';
+            } else if (rawPayStatus === 'pending') {
+              if (isDelivered) {
+                statusLabel = 'PAID ON DELIVERY';
+                statusBadge = 'bg-emerald-100 text-emerald-800';
+              } else if (isCOD) {
+                statusLabel = 'PENDING ON DELIVERY';
+                statusBadge = 'bg-amber-100 text-amber-800';
+              } else {
+                statusLabel = 'PENDING';
+                statusBadge = 'bg-amber-100 text-amber-800';
+              }
+            } else if (rawPayStatus === 'refunded') {
+              statusLabel = 'REFUNDED';
+              statusBadge = 'bg-purple-100 text-purple-800';
+            } else if (rawPayStatus === 'failed') {
+              statusLabel = 'FAILED';
+              statusBadge = 'bg-rose-100 text-rose-800';
+            } else {
+              // Fallback based on delivery & payment method
+              if (isDelivered) {
+                statusLabel = 'PAID';
+                statusBadge = 'bg-emerald-100 text-emerald-800';
+              } else if (isCOD) {
+                statusLabel = 'PENDING ON DELIVERY';
+                statusBadge = 'bg-amber-100 text-amber-800';
+              } else {
+                statusLabel = 'PENDING';
+                statusBadge = 'bg-amber-100 text-amber-800';
+              }
+            }
+
+            return (
+              <div className="bg-stone-50/70 rounded-xl p-4 border border-stone-200 flex items-center justify-between text-xs">
+                <div className="flex items-center gap-2.5">
+                  <CreditCard className="w-4 h-4 text-stone-500" />
+                  <div>
+                    <p className="text-stone-500 uppercase tracking-wider font-semibold text-[10px]">Payment Method</p>
+                    <p className="font-bold text-stone-900">{methodLabel}</p>
+                  </div>
+                </div>
+                <div>
+                  <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full font-bold text-[11px] ${statusBadge}`}>
+                    <CheckCircle2 className="w-3 h-3" />
+                    {statusLabel}
+                  </span>
+                </div>
               </div>
-            </div>
-            <div>
-              <span
-                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full font-bold text-[11px] ${
-                  order.payment_status === 'paid' || (order as any).paymentStatus === 'paid' || isDelivered
-                    ? 'bg-emerald-100 text-emerald-800'
-                    : 'bg-amber-100 text-amber-800'
-                }`}
-              >
-                <CheckCircle2 className="w-3 h-3" />
-                {order.payment_status?.toUpperCase() || (order as any).paymentStatus?.toUpperCase() || (order.customerDetails?.paymentMethod === 'cod' ? 'PENDING ON DELIVERY' : 'PAID')}
-              </span>
-            </div>
-          </div>
+            );
+          })()}
         </div>
 
         {/* Modal Footer Actions */}

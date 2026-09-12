@@ -8,7 +8,7 @@ export type AppRoute =
   | { path: '/cart' }
   | { path: '/checkout' }
   | { path: '/profile' }
-  | { path: '/orders' }
+  | { path: '/orders'; tab?: 'all' | 'active' | 'delivered' | 'cancelled' }
   | { path: '/about' }
   | { path: '/contact' }
   | { path: '/order-success'; orderId: string }
@@ -33,7 +33,7 @@ interface NavigationContextType {
   goToCart: () => void;
   goToCheckout: () => void;
   goToProfile: () => void;
-  goToOrders: () => void;
+  goToOrders: (tab?: 'all' | 'active' | 'delivered' | 'cancelled') => void;
   goToAbout: () => void;
   goToContact: () => void;
   goToCategories: () => void;
@@ -128,7 +128,12 @@ function parseHash(hash: string): AppRoute {
   if (main === 'cart') return { path: '/cart' };
   if (main === 'checkout') return { path: '/checkout' };
   if (main === 'profile') return { path: '/profile' };
-  if (main === 'orders' || main === 'my-orders' || main === 'all-orders') return { path: '/orders' };
+  if (main === 'orders' || main === 'my-orders' || main === 'all-orders') {
+    const tabParam = params.get('tab');
+    const validTabs: Array<'all' | 'active' | 'delivered' | 'cancelled'> = ['all', 'active', 'delivered', 'cancelled'];
+    const tab = validTabs.includes(tabParam as any) ? (tabParam as 'all' | 'active' | 'delivered' | 'cancelled') : undefined;
+    return { path: '/orders', tab };
+  }
   if (main === 'about') return { path: '/about' };
   if (main === 'contact') return { path: '/contact' };
 
@@ -162,7 +167,7 @@ function routeToHash(route: AppRoute): string {
     case '/profile':
       return '#/profile';
     case '/orders':
-      return '#/orders';
+      return route.tab ? `#/orders?tab=${encodeURIComponent(route.tab)}` : '#/orders';
     case '/about':
       return '#/about';
     case '/contact':
@@ -231,7 +236,8 @@ export const NavigationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   const goToCart = () => navigate({ path: '/cart' });
   const goToCheckout = () => navigate({ path: '/checkout' });
   const goToProfile = () => navigate({ path: '/profile' });
-  const goToOrders = () => navigate({ path: '/orders' });
+  const goToOrders = (tab?: 'all' | 'active' | 'delivered' | 'cancelled') =>
+    navigate({ path: '/orders', tab });
   const goToAbout = () => navigate({ path: '/about' });
   const goToContact = () => navigate({ path: '/contact' });
   const goToCategories = () => navigate({ path: '/categories' });

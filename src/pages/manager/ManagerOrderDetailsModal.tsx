@@ -17,6 +17,7 @@ import {
   FileText,
   Calendar,
   Sparkles,
+  Coins,
 } from 'lucide-react';
 import { Order } from '../../types';
 import { formatScheduledAt } from '../../utils/dateUtils';
@@ -408,6 +409,17 @@ export const ManagerOrderDetailsModal: React.FC<ManagerOrderDetailsModalProps> =
                 <span className="font-mono">-₹{order.discount}</span>
               </div>
             )}
+            <div className={`flex justify-between text-xs ${Number(order.swadCoinsUsed || order.swadCoinDiscountAmount || 0) > 0 ? 'text-amber-700 font-medium' : 'text-stone-600'}`}>
+              <span className="flex items-center gap-1">
+                <Coins className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                Swad-coins:
+              </span>
+              <span className={`font-mono font-bold ${Number(order.swadCoinsUsed || order.swadCoinDiscountAmount || 0) > 0 ? 'text-amber-800' : 'text-stone-900'}`}>
+                {Number(order.swadCoinsUsed || order.swadCoinDiscountAmount || 0) > 0
+                  ? `-${Number(order.swadCoinsUsed || order.swadCoinDiscountAmount)}`
+                  : '0'}
+              </span>
+            </div>
             <div className="flex justify-between text-xs text-stone-600">
               <span>Packaging Charge:</span>
               <span className="font-mono">₹{order.packagingFee || 0}</span>

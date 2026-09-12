@@ -212,7 +212,7 @@ export const OwnerLayout: React.FC<OwnerLayoutProps> = ({
                 }`}
               >
                 <TicketPercent className="w-3.5 h-3.5" />
-                <span>Coupons & Offers</span>
+                <span>Promotional Offers</span>
               </button>
             </nav>
 
@@ -333,7 +333,7 @@ export const OwnerLayout: React.FC<OwnerLayoutProps> = ({
                 }`}
               >
                 <TicketPercent className="w-4 h-4" />
-                <span>Coupons & Offers</span>
+                <span>Promotional Offers</span>
               </button>
 
               <button

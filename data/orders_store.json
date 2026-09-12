@@ -1,0 +1,91 @@
+[
+  {
+    "orderId": "GKSWAD-#00045",
+    "customerId": "cust-mtrdfcb7-5ibe",
+    "addressId": "addr-mtvlv93k-ug8j",
+    "isGuestCheckout": false,
+    "outletId": "bbsr-kendriyavihar",
+    "outletName": "Gaon Ka Swad Kitchen",
+    "deliveryPinCode": "751028",
+    "createdAt": "19:41",
+    "items": [
+      {
+        "productId": "15",
+        "name": "Royal Kesariya Thandai & Sweet Lassi Combo",
+        "image": "https://images.unsplash.com/photo-1528735602780-2552fd46c7af?q=80&w=800&auto=format&fit=crop",
+        "isVeg": true,
+        "quantity": 3,
+        "unitPrice": 179,
+        "totalPrice": 537,
+        "hindiName": "शाही केसरिया ठंडाई और लस्सी",
+        "selectedSpiceLevel": "Mild",
+        "selectedAddons": []
+      },
+      {
+        "productId": "1",
+        "name": "Nizami Royal Dum Mutton Biryani",
+        "image": "https://images.unsplash.com/photo-1563379091339-03b21ab4a4f8?q=80&w=800&auto=format&fit=crop",
+        "isVeg": false,
+        "quantity": 1,
+        "unitPrice": 499,
+        "totalPrice": 499,
+        "hindiName": "निज़ामी दम मटन बिरयानी",
+        "selectedVariant": {
+          "id": "v1-regular",
+          "name": "Regular (Serves 1-2)",
+          "weight": "650g",
+          "serves": "1-2 Persons",
+          "price": 499
+        },
+        "selectedSpiceLevel": "Medium",
+        "selectedAddons": []
+      }
+    ],
+    "subtotal": 1036,
+    "discount": 100,
+    "welcomeDiscountAmount": 0,
+    "isWelcomeDiscountApplied": false,
+    "deliveryFee": 0,
+    "packagingFee": 29,
+    "gst": 47,
+    "total": 997,
+    "couponCode": "FEAST100",
+    "deliveryType": "immediate",
+    "customerDetails": {
+      "fullName": "Customer",
+      "email": "",
+      "phone": "9999900000",
+      "address": "New Address",
+      "landmark": "",
+      "city": "Bhubaneswar",
+      "state": "Odisha",
+      "pincode": "751028",
+      "deliveryType": "immediate",
+      "scheduledDate": "Thu, 10 Sep",
+      "scheduledTimeSlot": "8:00 PM – 9:00 PM",
+      "scheduledSlotCategory": "evening delivery",
+      "scheduledSlotLabel": "Scheduled for evening delivery (Delivery between 8:00 PM – 9:00 PM on Thu, 10 Sep)",
+      "deliveryNotes": "",
+      "paymentMethod": "upi",
+      "includeCutlery": true,
+      "createAccount": false,
+      "marketingConsent": true,
+      "isPhoneVerified": true,
+      "orderType": "delivery",
+      "isSelfPickup": false
+    },
+    "deliveryAddressSnapshot": {
+      "fullAddress": "New Address",
+      "landmark": "",
+      "city": "Bhubaneswar",
+      "state": "Odisha",
+      "pincode": "751028"
+    },
+    "status": "Received",
+    "orderStatus": "received",
+    "placedAt": "19:41",
+    "estimatedDeliveryMinutes": 35,
+    "swadCoinsUsed": 15,
+    "swadCoinDiscountAmount": 15
+  }
+]

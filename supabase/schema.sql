@@ -242,6 +242,8 @@ CREATE TABLE IF NOT EXISTS public.orders (
   discount_description TEXT,                                             -- Descriptive discount text
   welcome_discount_applied BOOLEAN DEFAULT false,                        -- Welcome discount boolean flag
   welcome_discount_amount NUMERIC NOT NULL DEFAULT 0,                    -- Welcome discount in INR
+  swad_coins_used INTEGER NOT NULL DEFAULT 0,                            -- Swad Coins redeemed on this order
+  swad_coin_discount_amount NUMERIC NOT NULL DEFAULT 0,                   -- Swad Coin discount in INR (1 Coin = ₹1)
 
   -- Historical Customer Snapshot (Permanent record)
   customer_name TEXT,                                                    -- Customer name at time of order

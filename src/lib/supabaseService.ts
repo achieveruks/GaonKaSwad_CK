@@ -1586,6 +1586,13 @@ export function mapDbOrderToOrder(row: any): Order {
       includeCutlery: true,
     },
     deliveryAddressSnapshot: isPickup ? undefined : (row.delivery_address_snapshot || undefined),
+    paymentMethod: row.payment_method || row.customer_details?.paymentMethod || 'cod',
+    payment_method: row.payment_method || row.customer_details?.paymentMethod || 'cod',
+    paymentStatus: row.payment_status || undefined,
+    payment_status: row.payment_status || undefined,
+    swadCoinsUsed: Number(row.swad_coins_used || 0),
+    swadCoinDiscountAmount: Number(row.swad_coin_discount_amount || 0),
+    isRated: typeof row.is_rated === 'boolean' ? row.is_rated : undefined,
     status: displayStatus as Order['status'],
     orderStatus: rawStatus,
     placedAt: row.placed_at || row.created_at,
@@ -1704,6 +1711,18 @@ export async function updateSupabaseOrderStatus(
       .from('orders')
       .update(updateFields)
       .or(`order_id.eq.${orderId},id.eq.${orderId}`);
+
+    if (!error && norm === 'cancelled') {
+      try {
+        fetch(`/api/orders/${encodeURIComponent(orderId)}/refund-coins`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cancellationReason: cancellationReason || 'Order cancelled' }),
+        }).catch(() => {});
+      } catch {
+        // Non-blocking
+      }
+    }
 
     return !error;
   } catch {
@@ -2666,5 +2685,191 @@ export async function fetchRatedOrderIds(orderIds: string[]): Promise<string[]> 
 
   return [];
 }
+
+export interface OutletProductSale {
+  productId: string;
+  totalSold: number;
+  orderCount: number;
+  name?: string;
+}
+
+/**
+ * Fetch top-selling products by historical sales volume for a specific outlet (last N days, default 30)
+ */
+export async function fetchOutletBestsellerSales(
+  outletId: string,
+  days: number = 30
+): Promise<Record<string, OutletProductSale>> {
+  if (!outletId) return {};
+
+  const salesMap: Record<string, OutletProductSale> = {};
+
+  // 1. Try server endpoint first (which aggregates Supabase + local orders)
+  try {
+    const res = await fetch(`/api/analytics/outlet-bestsellers?outletId=${encodeURIComponent(outletId)}&days=${days}`);
+    if (res.ok) {
+      const json = await res.json();
+      if (json.success && Array.isArray(json.sales)) {
+        for (const item of json.sales) {
+          salesMap[String(item.productId)] = item;
+        }
+        return salesMap;
+      }
+    }
+  } catch (err) {
+    console.warn('API fetchOutletBestsellerSales notice:', err);
+  }
+
+  // 2. Direct client-side Supabase query fallback
+  if (isSupabaseConfigured()) {
+    try {
+      const cutoffDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+      const { data, error } = await supabase
+        .from('orders')
+        .select('id, outlet_id, order_status, items, created_at')
+        .eq('outlet_id', outletId)
+        .gte('created_at', cutoffDate)
+        .neq('order_status', 'cancelled');
+
+      if (!error && Array.isArray(data)) {
+        for (const order of data) {
+          const rawItems = Array.isArray(order.items)
+            ? order.items
+            : typeof order.items === 'string'
+            ? JSON.parse(order.items)
+            : [];
+
+          for (const item of rawItems) {
+            const pid = String(item.productId || item.id || '').trim();
+            if (!pid) continue;
+            const qty = Math.max(1, Number(item.quantity) || 1);
+
+            if (!salesMap[pid]) {
+              salesMap[pid] = {
+                productId: pid,
+                totalSold: 0,
+                orderCount: 0,
+                name: item.name,
+              };
+            }
+            salesMap[pid].totalSold += qty;
+            salesMap[pid].orderCount += 1;
+          }
+        }
+      }
+    } catch (fallbackErr) {
+      console.warn('Supabase fetchOutletBestsellerSales fallback error:', fallbackErr);
+    }
+  }
+
+  return salesMap;
+}
+
+// ============================================================================
+// FEATURED REVIEWS (DATABASE DRIVEN ONLY)
+// ============================================================================
+
+export interface FeaturedReview {
+  id: string;
+  orderItemId?: string;
+  orderId?: string;
+  productId: string;
+  outletId?: string;
+  customerId?: string;
+  customerDisplayName: string;
+  rating: number;
+  reviewText: string;
+  isVerifiedPurchase: boolean;
+  reviewedAt?: string;
+  createdAt: string;
+}
+
+export interface FeaturedReviewsResult {
+  reviews: FeaturedReview[];
+  stats: {
+    averageRating: number;
+    totalCount: number;
+  };
+}
+
+export async function fetchFeaturedReviews(outletId?: string, limit = 3): Promise<FeaturedReviewsResult> {
+  const fallbackStats = { averageRating: 4.8, totalCount: 0 };
+  try {
+    const params = new URLSearchParams();
+    if (outletId) params.set('outletId', outletId);
+    if (limit) params.set('limit', String(limit));
+
+    const res = await fetch(`/api/reviews/featured?${params.toString()}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && Array.isArray(data.reviews)) {
+        return {
+          reviews: data.reviews,
+          stats: data.stats || fallbackStats,
+        };
+      }
+    }
+  } catch (apiErr) {
+    console.warn('fetchFeaturedReviews server API error, trying direct Supabase:', apiErr);
+  }
+
+  // Direct Supabase fallback
+  if (isSupabaseConfigured()) {
+    try {
+      const { data, error } = await supabase
+        .from('product_reviews')
+        .select('*')
+        .eq('is_published', true)
+        .order('created_at', { ascending: false });
+
+      if (!error && Array.isArray(data)) {
+        const valid = data
+          .filter((r: any) => r.review_text && typeof r.review_text === 'string' && r.review_text.trim().length > 0)
+          .map((r: any) => ({
+            id: r.id,
+            orderItemId: r.order_item_id,
+            orderId: r.order_id,
+            productId: String(r.product_id),
+            outletId: r.outlet_id,
+            customerId: r.customer_id,
+            customerDisplayName: r.customer_display_name || 'Verified Customer',
+            rating: Number(r.rating || 5),
+            reviewText: r.review_text,
+            isVerifiedPurchase: r.is_verified_purchase !== false,
+            reviewedAt: r.reviewed_at || r.created_at,
+            createdAt: r.created_at,
+          }));
+
+        let sum = 0;
+        for (const r of data) {
+          sum += Number(r.rating || 5);
+        }
+        const totalCount = data.length;
+        const averageRating = totalCount > 0 ? Number((sum / totalCount).toFixed(1)) : 4.8;
+
+        const outletRevs = outletId ? valid.filter((r: any) => r.outletId === outletId) : [];
+        const otherRevs = outletId ? valid.filter((r: any) => r.outletId !== outletId) : valid;
+
+        const sortFn = (a: any, b: any) => {
+          if (b.rating !== a.rating) return b.rating - a.rating;
+          return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+        };
+
+        outletRevs.sort(sortFn);
+        otherRevs.sort(sortFn);
+
+        return {
+          reviews: [...outletRevs, ...otherRevs].slice(0, limit),
+          stats: { averageRating, totalCount },
+        };
+      }
+    } catch (dbErr) {
+      console.warn('fetchFeaturedReviews direct Supabase error:', dbErr);
+    }
+  }
+
+  return { reviews: [], stats: fallbackStats };
+}
+
 
 

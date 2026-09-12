@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import cron from 'node-cron';
 import { createServer as createViteServer } from 'vite';
 import { createClient } from '@supabase/supabase-js';
 import { productStorage, sanitizeOrderItem, deserializeOrderItem, maskCustomerName, normalizePhone } from './server/storage';
@@ -15,6 +16,12 @@ import {
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || 'https://ifthfunawntmqjupafxp.supabase.co';
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlmdGhmdW5hd250bXFqdXBhZnhwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODcyMjc4NTQsImV4cCI6MjEwMjgwMzg1NH0.xS74LsNci-I_v-p13O3rzzhflOuOZaHLDcVLgEi9Yzw';
 const serverSupabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// UUID validation helper
+const isUUID = (str?: string | null): boolean => {
+  if (!str || typeof str !== 'string') return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str.trim());
+};
 
 async function startServer() {
   const app = express();
@@ -2231,6 +2238,914 @@ async function startServer() {
   });
 
   // =====================
+  // SWAD COIN REWARD & TRANSACTION LEDGER ENDPOINTS
+  // =====================
+
+  // 1. Get Customer Swad Coin Balance
+  app.get('/api/swad-coins/balance', async (req, res) => {
+    try {
+      const rawPhone = String(req.query.phone || req.headers['x-customer-phone'] || '');
+      const customerId = String(req.query.customerId || '');
+      const identifier = customerId || rawPhone;
+
+      if (!identifier) {
+        return res.status(400).json({ success: false, error: 'Customer identifier or phone number is required.' });
+      }
+
+      let balance = 0;
+
+      // 1. Authoritative check in Supabase
+      let supaCust: any = null;
+      try {
+        if (customerId && isUUID(customerId)) {
+          const { data } = await serverSupabase
+            .from('customers')
+            .select('id, phone, swad_coin_balance')
+            .eq('id', customerId)
+            .maybeSingle();
+          supaCust = data;
+        }
+        if (!supaCust && rawPhone) {
+          const norm = normalizePhone(rawPhone);
+          if (norm) {
+            const { data } = await serverSupabase
+              .from('customers')
+              .select('id, phone, swad_coin_balance')
+              .or(`phone.eq.${norm},phone.eq.+91${norm}`)
+              .maybeSingle();
+            supaCust = data;
+          }
+        }
+      } catch (supaErr) {
+        console.warn('Supabase balance lookup notice:', supaErr);
+      }
+
+      if (supaCust && supaCust.swad_coin_balance !== undefined && supaCust.swad_coin_balance !== null) {
+        // Supabase is the single source of truth
+        balance = Math.max(0, Number(supaCust.swad_coin_balance));
+      } else {
+        // Fallback to local storage only if customer is not found in Supabase
+        let localBalance = 0;
+        if (rawPhone) {
+          localBalance = productStorage.getCustomerSwadCoinBalance(rawPhone);
+        }
+        if (localBalance === 0 && customerId) {
+          localBalance = productStorage.getCustomerSwadCoinBalance(customerId);
+        }
+        balance = Math.max(0, localBalance);
+      }
+
+      // Synchronize in-memory store under phone and customerId to match authoritative balance
+      if (rawPhone) productStorage.setCustomerSwadCoinBalance(rawPhone, balance);
+      if (supaCust?.phone) productStorage.setCustomerSwadCoinBalance(supaCust.phone, balance);
+      if (customerId) productStorage.setCustomerSwadCoinBalance(customerId, balance);
+      if (supaCust?.id) productStorage.setCustomerSwadCoinBalance(supaCust.id, balance);
+
+      return res.json({ success: true, balance });
+    } catch (err: any) {
+      console.error('Get Swad Coin balance error:', err);
+      return res.status(500).json({ success: false, error: 'Failed to retrieve balance.' });
+    }
+  });
+
+  // 2. Get Pending Rewards for Customer (From Supabase swad_coin_rewards & local storage)
+  app.get('/api/swad-coins/rewards/pending', async (req, res) => {
+    try {
+      const rawPhone = String(req.query.phone || req.headers['x-customer-phone'] || '');
+      const customerId = String(req.query.customerId || '');
+      const identifier = customerId || rawPhone;
+
+      if (!identifier) {
+        return res.status(400).json({ success: false, error: 'Customer identifier or phone number is required.' });
+      }
+
+      // Check Supabase swad_coin_rewards
+      let supaRewards: any[] = [];
+      try {
+        let supaCustId = customerId;
+        if (!supaCustId && rawPhone) {
+          const norm = normalizePhone(rawPhone);
+          const { data: c } = await serverSupabase.from('customers').select('id').eq('phone', norm).maybeSingle();
+          if (c?.id) supaCustId = c.id;
+        }
+
+        if (supaCustId) {
+          const { data: rows, error } = await serverSupabase
+            .from('swad_coin_rewards')
+            .select('*')
+            .eq('customer_id', supaCustId)
+            .eq('status', 'PENDING')
+            .order('created_at', { ascending: false });
+
+          if (!error && Array.isArray(rows)) {
+            supaRewards = rows.map((r) => ({
+              id: r.id,
+              orderId: r.order_id,
+              coinAmount: Number(r.coin_amount) || 0,
+              status: r.status,
+              expiresAt: r.expires_at,
+              createdAt: r.created_at,
+            }));
+          }
+        }
+      } catch (err) {
+        console.warn('Error fetching Supabase pending rewards:', err);
+      }
+
+      // Also get any pending rewards from local storage
+      const localPending = productStorage.getPendingRewardsForCustomer(identifier);
+      const localFormatted = localPending.map((r) => ({
+        id: r.id,
+        orderId: r.orderId,
+        coinAmount: r.coinAmount,
+        status: r.status,
+        expiresAt: r.expiresAt,
+        createdAt: r.createdAt,
+      }));
+
+      // Combine and deduplicate
+      const seen = new Set<string>();
+      const combined: any[] = [];
+
+      for (const r of [...supaRewards, ...localFormatted]) {
+        const key = r.orderId ? `${r.orderId}` : r.id;
+        if (!seen.has(key)) {
+          seen.add(key);
+          combined.push(r);
+        }
+      }
+
+      return res.json({ success: true, rewards: combined });
+    } catch (err: any) {
+      console.error('Get pending rewards error:', err);
+      return res.status(500).json({ success: false, error: 'Failed to fetch pending rewards.' });
+    }
+  });
+
+  // 2b. Get Full Reward Vault (Both PENDING and CLAIMED cards from Supabase swad_coin_rewards)
+  app.get('/api/swad-coins/rewards/vault', async (req, res) => {
+    try {
+      const rawPhone = String(req.query.phone || req.headers['x-customer-phone'] || '');
+      const customerId = String(req.query.customerId || '');
+      const identifier = customerId || rawPhone;
+
+      if (!identifier) {
+        return res.status(400).json({ success: false, error: 'Customer identifier or phone number is required.' });
+      }
+
+      let supaCustId = customerId;
+      if (!supaCustId && rawPhone) {
+        const norm = normalizePhone(rawPhone);
+        const { data: c } = await serverSupabase.from('customers').select('id').eq('phone', norm).maybeSingle();
+        if (c?.id) supaCustId = c.id;
+      }
+
+      let allRewards: any[] = [];
+
+      if (supaCustId) {
+        try {
+          const { data: rows, error } = await serverSupabase
+            .from('swad_coin_rewards')
+            .select('*')
+            .eq('customer_id', supaCustId)
+            .order('created_at', { ascending: false });
+
+          if (!error && Array.isArray(rows)) {
+            allRewards = rows.map((r) => ({
+              id: r.id,
+              orderId: r.order_id,
+              coinAmount: Number(r.coin_amount) || 0,
+              status: r.status,
+              expiresAt: r.expires_at,
+              claimedAt: r.claimed_at,
+              createdAt: r.created_at,
+            }));
+          }
+        } catch (err) {
+          console.warn('Supabase vault query error:', err);
+        }
+      }
+
+      // Merge local storage rewards if not present
+      const localStore = productStorage.getAllRewardsForCustomer ? productStorage.getAllRewardsForCustomer(identifier) : [];
+      const seen = new Set<string>();
+      const combined: any[] = [];
+
+      for (const r of [...allRewards, ...localStore]) {
+        const key = r.orderId ? `${r.orderId}` : r.id;
+        if (!seen.has(key)) {
+          seen.add(key);
+          combined.push(r);
+        }
+      }
+
+      const pendingRewards = combined.filter((r) => r.status === 'PENDING');
+      const claimedRewards = combined.filter((r) => r.status === 'CLAIMED');
+
+      return res.json({
+        success: true,
+        cards: combined,
+        pendingRewards,
+        claimedRewards,
+        totalCards: combined.length,
+      });
+    } catch (err: any) {
+      console.error('Get rewards vault error:', err);
+      return res.status(500).json({ success: false, error: 'Failed to retrieve card vault.' });
+    }
+  });
+
+  // In-flight mutex locks for active reward claims to prevent concurrent double-claim race conditions
+  const inFlightClaimLocks = new Set<string>();
+
+  // 3. Claim Pending Reward (Atomic Single Claim & Balance Credit across Supabase & Local)
+  app.post('/api/swad-coins/rewards/:rewardId/claim', async (req, res) => {
+    const { rewardId } = req.params;
+
+    // Mutex Lock: If this reward is currently in the middle of being processed, reject simultaneous requests immediately
+    if (inFlightClaimLocks.has(rewardId)) {
+      return res.status(409).json({
+        success: false,
+        error: 'Claim operation is already in progress. Please wait a moment.'
+      });
+    }
+
+    inFlightClaimLocks.add(rewardId);
+
+    try {
+      const rawPhone = String(req.body.phone || req.query.phone || req.headers['x-customer-phone'] || '');
+      const customerId = String(req.body.customerId || req.query.customerId || '');
+      const identifier = customerId || rawPhone;
+
+      if (!identifier) {
+        return res.status(400).json({ success: false, error: 'Customer identifier or phone number is required.' });
+      }
+
+      const nowIso = new Date().toISOString();
+
+      // 1. First check if reward is in Supabase swad_coin_rewards
+      try {
+        const { data: supaReward } = await serverSupabase
+          .from('swad_coin_rewards')
+          .select('*')
+          .eq('id', rewardId)
+          .maybeSingle();
+
+        if (supaReward) {
+          if (supaReward.status === 'CLAIMED') {
+            return res.status(400).json({ success: false, error: 'This surprise card has already been claimed.' });
+          }
+
+          if (supaReward.status === 'EXPIRED' || (supaReward.expires_at && new Date(supaReward.expires_at).getTime() < Date.now())) {
+            return res.status(400).json({ success: false, error: 'This reward has expired.' });
+          }
+
+          const earned = Number(supaReward.coin_amount) || 0;
+
+          // ATOMIC CONDITIONAL UPDATE:
+          // Only one request can successfully update from 'PENDING' to 'CLAIMED'.
+          // Any simultaneous or concurrent request will match 0 rows and return null!
+          const { data: atomicUpdatedReward, error: updateError } = await serverSupabase
+            .from('swad_coin_rewards')
+            .update({
+              status: 'CLAIMED',
+              claimed_at: nowIso,
+              updated_at: nowIso,
+            })
+            .eq('id', rewardId)
+            .eq('status', 'PENDING')
+            .select('*')
+            .maybeSingle();
+
+          if (updateError || !atomicUpdatedReward) {
+            return res.status(400).json({
+              success: false,
+              error: 'This surprise card has already been claimed or is being processed.'
+            });
+          }
+
+          // Get customer record
+          const { data: supaCust } = await serverSupabase
+            .from('customers')
+            .select('id, phone, swad_coin_balance')
+            .eq('id', supaReward.customer_id)
+            .maybeSingle();
+
+          const prevBal = Number(supaCust?.swad_coin_balance || 0);
+          const newBal = prevBal + earned;
+
+          if (supaCust?.id) {
+            // Update customer balance in Supabase
+            await serverSupabase
+              .from('customers')
+              .update({
+                swad_coin_balance: newBal,
+                updated_at: nowIso,
+              })
+              .eq('id', supaCust.id);
+
+            // Record transaction in Supabase
+            await serverSupabase
+              .from('swad_coin_transactions')
+              .insert({
+                customer_id: supaCust.id,
+                type: 'EARN',
+                amount: earned,
+                balance_before: prevBal,
+                balance_after: newBal,
+                reward_id: supaReward.id,
+                order_id: supaReward.order_id || null,
+                description: `Surprise cash-back reward unlocked (${supaReward.order_id || 'Order'})`,
+                created_at: nowIso,
+              });
+          }
+
+          // Also mirror to local storage
+          const phoneToSync = supaCust?.phone || rawPhone;
+          if (phoneToSync) {
+            productStorage.creditSwadCoins(phoneToSync, earned, `Surprise reward ${supaReward.order_id || rewardId}`);
+          }
+
+          return res.json({
+            success: true,
+            message: `Congratulations! You unlocked ${earned} Swad Coins!`,
+            claimedAmount: earned,
+            coinsEarned: earned,
+            newBalance: newBal,
+          });
+        }
+      } catch (supaErr) {
+        console.warn('Supabase claim attempt error:', supaErr);
+      }
+
+      // 2. Fallback to local storage claim
+      const result = productStorage.claimReward(rewardId, identifier);
+
+      if (!result.success) {
+        return res.status(400).json({ success: false, error: result.error || 'Failed to claim reward.' });
+      }
+
+      // Sync updated balance to Supabase if customer exists
+      const norm = normalizePhone(identifier);
+      if (norm) {
+        try {
+          const { data: cust } = await serverSupabase
+            .from('customers')
+            .update({
+              swad_coin_balance: result.newBalance,
+              updated_at: nowIso,
+            })
+            .eq('phone', norm)
+            .select('id')
+            .maybeSingle();
+
+          // Also update swad_coin_rewards in Supabase to CLAIMED
+          if (result.reward?.orderId) {
+            await serverSupabase
+              .from('swad_coin_rewards')
+              .update({
+                status: 'CLAIMED',
+                claimed_at: nowIso,
+                updated_at: nowIso,
+              })
+              .eq('order_id', result.reward.orderId)
+              .eq('status', 'PENDING');
+          }
+
+          // Insert immutable transaction record into swad_coin_transactions
+          if (cust?.id && result.transaction) {
+            await serverSupabase
+              .from('swad_coin_transactions')
+              .insert({
+                customer_id: cust.id,
+                type: 'EARN',
+                amount: result.coinsEarned || result.transaction.amount,
+                balance_before: result.transaction.balanceBefore,
+                balance_after: result.newBalance || result.transaction.balanceAfter,
+                reward_id: result.reward?.id || null,
+                order_id: result.reward?.orderId || null,
+                description: result.transaction.description || 'Surprise reward claimed',
+                created_at: nowIso,
+              });
+          }
+        } catch (supaErr) {
+          // Local storage is authoritative fallback
+        }
+      }
+
+      return res.json({
+        success: true,
+        message: `Congratulations! You unlocked ${result.coinsEarned} Swad Coins!`,
+        claimedAmount: result.coinsEarned,
+        coinsEarned: result.coinsEarned,
+        newBalance: result.newBalance,
+      });
+    } catch (err: any) {
+      console.error('Claim reward error:', err);
+      return res.status(500).json({ success: false, error: 'Failed to claim reward.' });
+    } finally {
+      // Release in-flight claim mutex lock
+      inFlightClaimLocks.delete(rewardId);
+    }
+  });
+
+  // 4. Get Customer Transaction Ledger
+  app.get('/api/swad-coins/transactions', async (req, res) => {
+    try {
+      const rawPhone = String(req.query.phone || req.headers['x-customer-phone'] || '');
+      const customerId = String(req.query.customerId || '');
+      const identifier = customerId || rawPhone;
+
+      if (!identifier) {
+        return res.status(400).json({ success: false, error: 'Customer identifier or phone number is required.' });
+      }
+
+      const txList: any[] = [];
+      const seenIds = new Set<string>();
+
+      // 1. Fetch from Supabase swad_coin_transactions
+      try {
+        let supaCustomerId = customerId;
+        if ((!supaCustomerId || !isUUID(supaCustomerId)) && rawPhone) {
+          const norm = normalizePhone(rawPhone);
+          if (norm) {
+            const { data: c } = await serverSupabase
+              .from('customers')
+              .select('id')
+              .or(`phone.eq.${norm},phone.eq.+91${norm}`)
+              .maybeSingle();
+            if (c?.id) supaCustomerId = c.id;
+          }
+        }
+
+        if (supaCustomerId && isUUID(supaCustomerId)) {
+          const { data: supaTxs } = await serverSupabase
+            .from('swad_coin_transactions')
+            .select('*')
+            .eq('customer_id', supaCustomerId)
+            .order('created_at', { ascending: false });
+
+          if (supaTxs && Array.isArray(supaTxs)) {
+            for (const tx of supaTxs) {
+              const txKey = `${tx.order_id || ''}-${tx.type}-${tx.amount}`;
+              seenIds.add(tx.id);
+              seenIds.add(txKey);
+              txList.push({
+                id: tx.id,
+                customerId: tx.customer_id,
+                type: tx.type,
+                amount: tx.amount,
+                balanceBefore: tx.balance_before,
+                balanceAfter: tx.balance_after,
+                orderId: tx.order_id,
+                description: tx.description,
+                createdAt: tx.created_at,
+              });
+            }
+          }
+        }
+      } catch (sErr) {
+        console.warn('Supabase transactions fetch notice:', sErr);
+      }
+
+      // 2. Fetch from local productStorage and merge
+      try {
+        let localTxs = productStorage.getCustomerTransactions(identifier);
+        if ((!localTxs || localTxs.length === 0) && rawPhone) {
+          localTxs = productStorage.getCustomerTransactions(rawPhone);
+        }
+        if (localTxs && Array.isArray(localTxs)) {
+          for (const tx of localTxs) {
+            const txKey = `${tx.orderId || ''}-${tx.type}-${tx.amount}`;
+            if (!seenIds.has(tx.id) && !seenIds.has(txKey)) {
+              seenIds.add(tx.id);
+              seenIds.add(txKey);
+              txList.push(tx);
+            }
+          }
+        }
+      } catch (lErr) {
+        console.warn('Local transactions fetch notice:', lErr);
+      }
+
+      // Sort by date descending
+      txList.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+
+      return res.json({ success: true, transactions: txList });
+    } catch (err: any) {
+      console.error('Get transactions error:', err);
+      return res.status(500).json({ success: false, error: 'Failed to retrieve transactions.' });
+    }
+  });
+
+  // 5. Admin: Credit Coins to Customer (Protected)
+  app.post('/api/admin/swad-coins/credit', requireOwnerAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { customerIdOrPhone, amount, reason } = req.body;
+      if (!customerIdOrPhone || !amount || !reason) {
+        return res.status(400).json({
+          success: false,
+          error: 'customerIdOrPhone, amount (> 0), and a clear reason are required.',
+        });
+      }
+
+      const cleanAmount = Math.floor(Number(amount));
+      if (isNaN(cleanAmount) || cleanAmount <= 0) {
+        return res.status(400).json({ success: false, error: 'Amount must be a positive integer.' });
+      }
+
+      const cleanReason = String(reason).trim();
+      if (!cleanReason) {
+        return res.status(400).json({ success: false, error: 'A valid reason is required.' });
+      }
+
+      const adminId = req.user?.email || 'owner';
+
+      // 1. Sync with local memory store
+      const localResult = productStorage.adminCreditCoins(
+        customerIdOrPhone,
+        cleanAmount,
+        cleanReason,
+        adminId
+      );
+
+      // 2. Query Supabase for customer
+      let supaCustomer: any = null;
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(customerIdOrPhone).trim());
+      if (isUuid) {
+        const { data } = await serverSupabase.from('customers').select('*').eq('id', customerIdOrPhone).maybeSingle();
+        supaCustomer = data;
+      }
+      if (!supaCustomer) {
+        const norm = normalizePhone(customerIdOrPhone);
+        if (norm) {
+          const { data } = await serverSupabase.from('customers').select('*').eq('phone', norm).maybeSingle();
+          supaCustomer = data;
+        }
+      }
+
+      let newBalance = localResult.newBalance;
+      let customerUuid = supaCustomer?.id || (isUuid ? customerIdOrPhone : null);
+      let customerName = supaCustomer?.full_name || '';
+      let customerPhone = supaCustomer?.phone || '';
+
+      if (supaCustomer) {
+        const currentBalance = Number(supaCustomer.swad_coin_balance || 0);
+        newBalance = currentBalance + cleanAmount;
+        customerUuid = supaCustomer.id;
+        customerName = supaCustomer.full_name;
+        customerPhone = supaCustomer.phone;
+
+        // Update customer balance in Supabase
+        await serverSupabase
+          .from('customers')
+          .update({
+            swad_coin_balance: newBalance,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', customerUuid);
+
+        // Directly insert transaction row into swad_coin_transactions
+        try {
+          await serverSupabase
+            .from('swad_coin_transactions')
+            .insert({
+              customer_id: customerUuid,
+              type: 'ADMIN_CREDIT',
+              amount: cleanAmount,
+              balance_before: currentBalance,
+              balance_after: newBalance,
+              admin_id: adminId,
+              description: cleanReason,
+              order_id: null,
+              reward_id: null,
+              created_at: new Date().toISOString(),
+            });
+        } catch (txInsertErr) {
+          console.warn('Supabase swad_coin_transactions insert warning:', txInsertErr);
+        }
+
+        if (customerPhone) productStorage.setCustomerSwadCoinBalance(customerPhone, newBalance);
+        if (customerUuid) productStorage.setCustomerSwadCoinBalance(customerUuid, newBalance);
+      }
+
+      return res.json({
+        success: true,
+        message: `Successfully credited ${cleanAmount} Swad Coins.`,
+        newBalance,
+        customerId: customerUuid,
+        customerName,
+        customerPhone,
+        transaction: {
+          type: 'ADMIN_CREDIT',
+          amount: cleanAmount,
+          description: cleanReason,
+          admin_id: adminId,
+          balance_after: newBalance,
+          created_at: new Date().toISOString(),
+        },
+      });
+    } catch (err: any) {
+      console.error('Admin credit coins error:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Failed to credit coins.' });
+    }
+  });
+
+  // 6. Admin: Debit Coins from Customer (Protected)
+  app.post('/api/admin/swad-coins/debit', requireOwnerAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const { customerIdOrPhone, amount, reason } = req.body;
+      if (!customerIdOrPhone || !amount || !reason) {
+        return res.status(400).json({
+          success: false,
+          error: 'customerIdOrPhone, amount (> 0), and a clear reason are required.',
+        });
+      }
+
+      const result = productStorage.adminDebitCoins(
+        customerIdOrPhone,
+        Number(amount),
+        String(reason),
+        req.user?.email || 'owner'
+      );
+
+      if (!result.success) {
+        return res.status(400).json({ success: false, error: result.error });
+      }
+
+      const norm = normalizePhone(customerIdOrPhone);
+      if (norm) {
+        try {
+          await serverSupabase
+            .from('customers')
+            .update({
+              swad_coin_balance: result.newBalance,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('phone', norm);
+        } catch (supaErr) {
+          // Log note
+        }
+      }
+
+      return res.json({
+        success: true,
+        message: `Successfully debited ${amount} Swad Coins.`,
+        newBalance: result.newBalance,
+        transaction: result.transaction,
+      });
+    } catch (err: any) {
+      console.error('Admin debit coins error:', err);
+      return res.status(500).json({ success: false, error: 'Failed to debit coins.' });
+    }
+  });
+
+  // 7. Admin: Get All Customers with Swad Coins Stats (Protected)
+  app.get('/api/admin/swad-coins/customers', requireOwnerAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      // Fetch directly and strictly from Supabase 'customers' table
+      const { data: supaCustomers, error } = await serverSupabase
+        .from('customers')
+        .select('id, phone, full_name, email, swad_coin_balance, created_at, updated_at')
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('Supabase customers query error:', error);
+        return res.status(500).json({ success: false, error: 'Failed to retrieve customers from database.' });
+      }
+
+      const customers = (supaCustomers || []).map((sc: any) => ({
+        id: sc.id,
+        phone: sc.phone || '',
+        fullName: sc.full_name || 'Customer',
+        email: sc.email || '',
+        swadCoinBalance: typeof sc.swad_coin_balance === 'number' ? sc.swad_coin_balance : 0,
+        createdAt: sc.created_at || new Date().toISOString(),
+      })).sort((a: any, b: any) => (b.swadCoinBalance || 0) - (a.swadCoinBalance || 0));
+
+      return res.json({ success: true, customers });
+    } catch (err: any) {
+      console.error('Admin get customers coins error:', err);
+      return res.status(500).json({ success: false, error: 'Failed to retrieve customers.' });
+    }
+  });
+
+  // 7b. Admin: Get Swad Coins Global Overview Stats (Protected)
+  app.get('/api/admin/swad-coins/stats', requireOwnerAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const [
+        { data: rewards, error: rErr },
+        { data: txs, error: tErr },
+        { data: custs, error: cErr }
+      ] = await Promise.all([
+        serverSupabase.from('swad_coin_rewards').select('status, coin_amount'),
+        serverSupabase.from('swad_coin_transactions').select('type, amount'),
+        serverSupabase.from('customers').select('swad_coin_balance'),
+      ]);
+
+      if (rErr) console.warn('Supabase rewards fetch warning for stats:', rErr);
+      if (tErr) console.warn('Supabase transactions fetch warning for stats:', tErr);
+      if (cErr) console.warn('Supabase customers fetch warning for stats:', cErr);
+
+      let pendingRewards = 0;
+      let claimedRewards = 0;
+      let expiredRewards = 0;
+
+      for (const r of rewards || []) {
+        const amt = Number(r.coin_amount) || 0;
+        const st = String(r.status || '').toUpperCase();
+        if (st === 'PENDING') pendingRewards += amt;
+        else if (st === 'CLAIMED') claimedRewards += amt;
+        else if (st === 'EXPIRED') expiredRewards += amt;
+      }
+
+      let earnTx = 0;
+      let adminCreditTx = 0;
+      let adminDebitTx = 0;
+      let redeemTx = 0;
+      let refundTx = 0;
+
+      for (const t of txs || []) {
+        const amt = Number(t.amount) || 0;
+        const type = String(t.type || '').toUpperCase();
+        if (type === 'EARN') earnTx += amt;
+        else if (type === 'ADMIN_CREDIT') adminCreditTx += amt;
+        else if (type === 'ADMIN_DEBIT') adminDebitTx += Math.abs(amt);
+        else if (type === 'REDEEM') redeemTx += Math.abs(amt);
+        else if (type === 'REFUND') refundTx += Math.abs(amt);
+      }
+
+      let inCirculation = 0;
+      for (const c of custs || []) {
+        inCirculation += Number(c.swad_coin_balance) || 0;
+      }
+
+      // Fallback calculation for circulation if custs table is empty
+      if (inCirculation === 0 && (earnTx > 0 || adminCreditTx > 0)) {
+        inCirculation = Math.max(0, (earnTx + adminCreditTx + refundTx) - (redeemTx + adminDebitTx));
+      }
+
+      // 1. TOTAL ISSUED: all coin_amount from swad_coin_rewards (PENDING + Claimed) + ADMIN_CREDIT from swad_coin_transactions
+      const totalIssued = (pendingRewards + claimedRewards) + adminCreditTx;
+
+      // 2. PENDING: from swad_coin_rewards (PENDING)
+      const pending = pendingRewards;
+
+      // 3. CLAIMED: from swad_coin_transactions (EARN + ADMIN_CREDIT) - ADMIN_DEBIT (per pt 2.2 recommendation)
+      const claimed = (earnTx + adminCreditTx) - adminDebitTx;
+
+      // 4. REDEEMED (NET): REDEEM minus REFUND from swad_coin_transactions
+      const netRedeemed = Math.max(0, redeemTx - refundTx);
+
+      // Derived/subtitle metrics:
+      const expired = expiredRewards;
+
+      return res.json({
+        success: true,
+        stats: {
+          totalIssued,
+          pending,
+          claimed,
+          redeemed: netRedeemed,
+          grossRedeemed: redeemTx,
+          refunded: refundTx,
+          expired,
+          inCirculation,
+        }
+      });
+    } catch (err: any) {
+      console.error('Admin get swad-coins stats error:', err);
+      return res.status(500).json({ success: false, error: 'Failed to compute Swad Coins statistics.' });
+    }
+  });
+
+  // 8. Admin/Cron: Trigger Daily Reward Generation (Protected)
+  app.post('/api/admin/swad-coins/generate-rewards', requireOwnerAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      let supaOrders: any[] = [];
+      try {
+        const { data } = await serverSupabase
+          .from('orders')
+          .select('*')
+          .in('order_status', ['delivered', 'picked_up']);
+        if (data) supaOrders = data;
+      } catch (e) {
+        console.warn('Supabase fetch note in generate-rewards endpoint:', e);
+      }
+
+      const summary = productStorage.generateDailySwadCoinRewards(supaOrders);
+
+      // Synchronize all pending/active rewards from local storage to Supabase swad_coin_rewards
+      let syncedToSupabase = 0;
+      let alreadyInSupabase = 0;
+      let rlsBlocked = false;
+      const syncErrors: string[] = [];
+
+      try {
+        const allRewards = productStorage.getAllSwadCoinRewards();
+        const [{ data: existingRewards }, { data: supaCusts }] = await Promise.all([
+          serverSupabase.from('swad_coin_rewards').select('order_id, id'),
+          serverSupabase.from('customers').select('id, phone'),
+        ]);
+
+        const existingOrderIds = new Set((existingRewards || []).map((r: any) => r.order_id));
+        const customersList = supaCusts || [];
+
+        for (const reward of allRewards) {
+          const orderId = reward.orderId;
+          if (!orderId) continue;
+
+          if (existingOrderIds.has(orderId)) {
+            alreadyInSupabase++;
+            continue;
+          }
+
+          // Resolve customer UUID in Supabase
+          let customerIdUuid: string | null = null;
+          const ord = supaOrders.find((o: any) => o.order_number === orderId || o.order_id === orderId || o.id === orderId);
+          if (ord?.customer_id && ord.customer_id.length > 20) {
+            customerIdUuid = ord.customer_id;
+          } else if (ord?.customer_phone) {
+            const norm = normalizePhone(ord.customer_phone);
+            const foundCust = customersList.find((c: any) => normalizePhone(c.phone) === norm);
+            if (foundCust?.id) customerIdUuid = foundCust.id;
+          }
+
+          if (!customerIdUuid) {
+            const storageCust = productStorage.getAllCustomersWithCoins().find((c) => c.id === reward.customerId);
+            if (storageCust?.phone) {
+              const norm = normalizePhone(storageCust.phone);
+              const foundCust = customersList.find((c: any) => normalizePhone(c.phone) === norm);
+              if (foundCust?.id) customerIdUuid = foundCust.id;
+            }
+          }
+
+          if (!customerIdUuid && customersList.length > 0) {
+            customerIdUuid = customersList[0].id;
+          }
+
+          if (!customerIdUuid) {
+            syncErrors.push(`Order ${orderId}: No customer UUID found in Supabase`);
+            continue;
+          }
+
+          const { error: insertErr } = await serverSupabase
+            .from('swad_coin_rewards')
+            .insert({
+              customer_id: customerIdUuid,
+              order_id: orderId,
+              eligible_order_value: Number(reward.eligibleOrderValue || 0),
+              reward_percentage: Number(reward.rewardPercentage || 1.0),
+              coin_amount: Number(reward.coinAmount || 5),
+              status: reward.status || 'PENDING',
+              expires_at: reward.expiresAt,
+              created_at: reward.createdAt || new Date().toISOString(),
+              updated_at: reward.updatedAt || new Date().toISOString(),
+            });
+
+          if (insertErr) {
+            if (insertErr.code === '42501' || insertErr.message?.includes('row-level security')) {
+              rlsBlocked = true;
+            }
+            syncErrors.push(`Order ${orderId}: ${insertErr.message}`);
+          } else {
+            syncedToSupabase++;
+            existingOrderIds.add(orderId);
+          }
+        }
+      } catch (syncErr: any) {
+        console.warn('Sync to Supabase swad_coin_rewards note:', syncErr.message);
+      }
+
+      let message = `Daily rewards processed: ${summary.created} new generated, ${summary.skippedAlreadyRewarded} skipped (already rewarded).`;
+      if (syncedToSupabase > 0) {
+        message += ` ${syncedToSupabase} reward row(s) successfully written to Supabase swad_coin_rewards.`;
+      }
+      if (alreadyInSupabase > 0) {
+        message += ` (${alreadyInSupabase} already exist in Supabase).`;
+      }
+      if (rlsBlocked) {
+        message += ` ⚠️ Note: Row-Level Security (RLS) is active on Supabase swad_coin_rewards. Please disable RLS or add a public policy in Supabase SQL Editor.`;
+      }
+
+      return res.json({
+        success: true,
+        message,
+        summary: {
+          ...summary,
+          syncedToSupabase,
+          alreadyInSupabase,
+          rlsBlocked,
+          syncErrors: syncErrors.slice(0, 3),
+        },
+      });
+    } catch (err: any) {
+      console.error('Generate rewards error:', err);
+      return res.status(500).json({ success: false, error: 'Failed to generate rewards.' });
+    }
+  });
+
+  // =====================
   // ORDERS ENDPOINTS & HELPERS
   // =====================
 
@@ -2311,6 +3226,8 @@ async function startServer() {
       deliveryFee: Number(data.delivery_fee || 0),
       packagingFee: Number(data.packaging_fee || 0),
       gst: Number(data.tax_amount || data.gst || 0),
+      swadCoinsUsed: Number(data.swad_coins_used || 0),
+      swadCoinDiscountAmount: Number(data.swad_coin_discount_amount || 0),
       total: Number(data.total_amount || data.total || 0),
       couponCode: data.discount_code || data.coupon_code || undefined,
       deliveryPinCode: data.delivery_pincode || '',
@@ -2372,6 +3289,116 @@ async function startServer() {
           });
         } catch (couponRedeemErr) {
           console.warn('Coupon redemption record error:', couponRedeemErr);
+        }
+      }
+
+      // Process Swad Coins redemption (1 Coin = ₹1, up to 10% of eligible food value)
+      const requestedCoins = Math.max(0, Math.floor(Number(payload.requestedSwadCoins || payload.swadCoinsUsed || 0)));
+      let swadCoinsUsed = 0;
+      let swadCoinDiscountAmount = 0;
+      let swadCoinRedemptionTx: any = null;
+
+      if (requestedCoins > 0 && normPhone) {
+        try {
+          // Verify customer balance against both Supabase and local storage
+          let currentCoinBalance = 0;
+          let supaCustForCoin: any = null;
+
+          try {
+            const { data: sCust } = await serverSupabase
+              .from('customers')
+              .select('id, phone, swad_coin_balance')
+              .or(`phone.eq.${normPhone},phone.eq.+91${normPhone}`)
+              .maybeSingle();
+            if (sCust) {
+              supaCustForCoin = sCust;
+              if (sCust.swad_coin_balance !== undefined && sCust.swad_coin_balance !== null) {
+                currentCoinBalance = Math.max(0, Number(sCust.swad_coin_balance));
+              }
+            }
+          } catch (fetchErr) {
+            console.warn('Supabase coin balance lookup notice:', fetchErr);
+          }
+
+          if (!supaCustForCoin) {
+            currentCoinBalance = Math.max(0, productStorage.getCustomerSwadCoinBalance(normPhone));
+          }
+
+          // Strict server-side verification:
+          // 1. eligibleOrderValue = food/item value after applicable coupon discount
+          const eligibleFoodValue = Math.max(0, Number(order.subtotal || 0) - Number(order.discount || 0));
+          // 2. maximumCoinDiscount = FLOOR(eligibleOrderValue * 10 / 100)
+          const maximumCoinDiscount = Math.floor(eligibleFoodValue * 0.10);
+          // 3. coinsToUse = MIN(requestedCoins, customerCurrentBalance, maximumCoinDiscount)
+          const coinsToDeduct = Math.min(requestedCoins, currentCoinBalance, maximumCoinDiscount);
+
+          if (coinsToDeduct > 0) {
+            const balanceAfterRedeem = Math.max(0, currentCoinBalance - coinsToDeduct);
+
+            // Deduct in productStorage
+            const redeemRes = productStorage.redeemSwadCoins(
+              normPhone,
+              order.orderId || order.id,
+              coinsToDeduct,
+              eligibleFoodValue
+            );
+            productStorage.setCustomerSwadCoinBalance(normPhone, balanceAfterRedeem);
+            if (supaCustForCoin?.id) {
+              productStorage.setCustomerSwadCoinBalance(supaCustForCoin.id, balanceAfterRedeem);
+            }
+
+            swadCoinsUsed = coinsToDeduct;
+            swadCoinDiscountAmount = coinsToDeduct;
+            order.swadCoinsUsed = swadCoinsUsed;
+            order.swadCoinDiscountAmount = swadCoinDiscountAmount;
+
+            // Authoritatively calculate order total from clean components:
+            // Subtotal - Coupon Discount - Swad Coin Discount + Packaging Fee + GST + Delivery Fee
+            const subtotalVal = Number(order.subtotal || 0);
+            const couponDiscountVal = Number(order.discount || 0);
+            const swadCoinDiscountVal = Number(swadCoinDiscountAmount || 0);
+            const packagingFeeVal = Number(order.packagingFee || 0);
+            const gstVal = Number(order.gst || 0);
+            const deliveryFeeVal = Number(order.deliveryFee || 0);
+
+            order.total = Math.max(
+              0,
+              subtotalVal - couponDiscountVal - swadCoinDiscountVal + packagingFeeVal + gstVal + deliveryFeeVal
+            );
+
+            // Prepare transaction record to sync with Supabase swad_coin_transactions
+            swadCoinRedemptionTx = {
+              amount: -swadCoinsUsed,
+              balanceBefore: currentCoinBalance,
+              balanceAfter: balanceAfterRedeem,
+              coinsUsed: swadCoinsUsed,
+            };
+
+            // Atomically update balance in Supabase customers table
+            try {
+              if (supaCustForCoin?.id) {
+                await serverSupabase
+                  .from('customers')
+                  .update({
+                    swad_coin_balance: balanceAfterRedeem,
+                    updated_at: new Date().toISOString(),
+                  })
+                  .eq('id', supaCustForCoin.id);
+              } else {
+                await serverSupabase
+                  .from('customers')
+                  .update({
+                    swad_coin_balance: balanceAfterRedeem,
+                    updated_at: new Date().toISOString(),
+                  })
+                  .or(`phone.eq.${normPhone},phone.eq.+91${normPhone}`);
+              }
+            } catch (e) {
+              console.warn('Supabase swad coin balance sync error:', e);
+            }
+          }
+        } catch (coinRedeemErr) {
+          console.warn('Swad Coin redemption error during order creation:', coinRedeemErr);
         }
       }
 
@@ -2636,6 +3663,8 @@ async function startServer() {
           discount_description: null,
           welcome_discount_applied: !!order.isWelcomeDiscountApplied,
           welcome_discount_amount: Number(order.welcomeDiscountAmount || 0),
+          swad_coins_used: Number(order.swadCoinsUsed || 0),
+          swad_coin_discount_amount: Number(order.swadCoinDiscountAmount || 0),
           payment_method: order.customerDetails?.paymentMethod || 'cod',
           payment_status: 'PENDING',
           delivery_type: deliveryType,
@@ -2756,6 +3785,46 @@ async function startServer() {
               console.warn('Coupon redemption error during order placement:', cRedeemErr);
             }
           }
+
+          // Insert Swad Coins REDEEM transaction into Supabase swad_coin_transactions
+          if (swadCoinRedemptionTx && isUUID(supaCustomerId)) {
+            try {
+              const { error: txErr } = await serverSupabase
+                .from('swad_coin_transactions')
+                .insert({
+                  customer_id: supaCustomerId,
+                  type: 'REDEEM',
+                  amount: swadCoinRedemptionTx.amount,
+                  balance_before: swadCoinRedemptionTx.balanceBefore,
+                  balance_after: swadCoinRedemptionTx.balanceAfter,
+                  order_id: res1.data.order_id || res1.data.id || order.orderId,
+                  description: `Redeemed ${swadCoinRedemptionTx.coinsUsed} Swad Coins on order ${res1.data.order_id || res1.data.id || order.orderId}`,
+                  created_at: new Date().toISOString(),
+                });
+
+              if (txErr) {
+                console.warn('Swad Coin REDEEM transaction Supabase insert notice:', txErr.message);
+              } else {
+                console.log(`Swad Coins REDEEM transaction for order ${res1.data.order_id || res1.data.id} logged in Supabase.`);
+              }
+
+              // Double-ensure customer's balance in Supabase is updated to balanceAfter
+              await serverSupabase
+                .from('customers')
+                .update({
+                  swad_coin_balance: swadCoinRedemptionTx.balanceAfter,
+                  updated_at: new Date().toISOString(),
+                })
+                .eq('id', supaCustomerId);
+
+              if (normPhone) {
+                productStorage.setCustomerSwadCoinBalance(normPhone, swadCoinRedemptionTx.balanceAfter);
+              }
+              productStorage.setCustomerSwadCoinBalance(supaCustomerId, swadCoinRedemptionTx.balanceAfter);
+            } catch (coinTxErr) {
+              console.warn('Swad Coin REDEEM transaction error:', coinTxErr);
+            }
+          }
         } else if (res1.error) {
           console.warn('Supabase orders table insert notice (table might be newly recreated):', res1.error.message);
         }
@@ -2823,6 +3892,160 @@ async function startServer() {
     }
   });
 
+  // Helper: Refund Swad Coins for Cancelled Order across both Supabase & local storage
+  async function refundOrderSwadCoins(
+    orderId: string,
+    cancellationReason: string = 'Order cancelled'
+  ): Promise<{ refundedCoins: number; newBalance?: number }> {
+    if (!orderId) return { refundedCoins: 0 };
+    const cleanReason = cancellationReason || 'Order cancelled';
+    let refundedCoins = 0;
+    let newBalance: number | undefined;
+
+    // 1. Sync with local productStorage first
+    try {
+      const localResult = productStorage.refundSwadCoins(orderId, cleanReason);
+      if (localResult && localResult.refundedCoins > 0) {
+        refundedCoins = localResult.refundedCoins;
+        newBalance = localResult.newBalance;
+      }
+    } catch (localErr) {
+      console.warn('Local storage refundSwadCoins notice:', localErr);
+    }
+
+    // 2. Authoritative Sync with Supabase
+    try {
+      // Find order in Supabase
+      const { data: supaOrder } = await serverSupabase
+        .from('orders')
+        .select('id, order_id, order_number, customer_id, customer_phone, swad_coins_used')
+        .or(`order_id.eq.${orderId},id.eq.${orderId},order_number.eq.${orderId}`)
+        .maybeSingle();
+
+      const canonicalOrderId = supaOrder?.order_id || supaOrder?.order_number || orderId;
+
+      // Check if refund was ALREADY recorded in Supabase swad_coin_transactions (idempotency guard)
+      const { data: existingRefunds } = await serverSupabase
+        .from('swad_coin_transactions')
+        .select('id')
+        .or(`order_id.eq.${canonicalOrderId},order_id.eq.${orderId}`)
+        .eq('type', 'REFUND');
+
+      if (!existingRefunds || existingRefunds.length === 0) {
+        // Determine coins to refund
+        let coinsToRefund = Number(supaOrder?.swad_coins_used || 0);
+        let supaCustomerId = supaOrder?.customer_id;
+
+        // Check if REDEEM transaction exists in Supabase
+        const { data: redeemTxs } = await serverSupabase
+          .from('swad_coin_transactions')
+          .select('*')
+          .or(`order_id.eq.${canonicalOrderId},order_id.eq.${orderId}`)
+          .eq('type', 'REDEEM');
+
+        if (redeemTxs && redeemTxs.length > 0) {
+          const rTx = redeemTxs[0];
+          if (Math.abs(rTx.amount) > 0) {
+            coinsToRefund = Math.abs(rTx.amount);
+          }
+          if (!supaCustomerId && rTx.customer_id) {
+            supaCustomerId = rTx.customer_id;
+          }
+        }
+
+        // Fallback to local storage order if Supabase coinsToRefund was 0
+        if (coinsToRefund === 0) {
+          const localOrder = productStorage.getOrderById(canonicalOrderId) || productStorage.getOrderById(orderId);
+          if (localOrder && localOrder.swadCoinsUsed && localOrder.swadCoinsUsed > 0) {
+            coinsToRefund = localOrder.swadCoinsUsed;
+          }
+        }
+
+        if (coinsToRefund > 0) {
+          // Find customer in Supabase
+          let supaCust: any = null;
+          if (supaCustomerId && isUUID(supaCustomerId)) {
+            const { data } = await serverSupabase.from('customers').select('*').eq('id', supaCustomerId).maybeSingle();
+            supaCust = data;
+          }
+          if (!supaCust && supaOrder?.customer_phone) {
+            const normPhone = normalizePhone(supaOrder.customer_phone);
+            if (normPhone) {
+              const { data } = await serverSupabase.from('customers').select('*').or(`phone.eq.${normPhone},phone.eq.+91${normPhone}`).maybeSingle();
+              supaCust = data;
+            }
+          }
+          if (!supaCust) {
+            const localOrder = productStorage.getOrderById(canonicalOrderId) || productStorage.getOrderById(orderId);
+            const phone = localOrder?.customerDetails?.phone;
+            if (phone) {
+              const normPhone = normalizePhone(phone);
+              if (normPhone) {
+                const { data } = await serverSupabase.from('customers').select('*').or(`phone.eq.${normPhone},phone.eq.+91${normPhone}`).maybeSingle();
+                supaCust = data;
+              }
+            }
+          }
+
+          if (supaCust && isUUID(supaCust.id)) {
+            const currentBal = Number(supaCust.swad_coin_balance || 0);
+            const targetBal = currentBal + coinsToRefund;
+
+            // 1. Update customer balance in Supabase
+            await serverSupabase
+              .from('customers')
+              .update({
+                swad_coin_balance: targetBal,
+                updated_at: new Date().toISOString(),
+              })
+              .eq('id', supaCust.id);
+
+            // 2. Insert immutable REFUND transaction into swad_coin_transactions
+            await serverSupabase
+              .from('swad_coin_transactions')
+              .insert({
+                customer_id: supaCust.id,
+                type: 'REFUND',
+                amount: coinsToRefund,
+                balance_before: currentBal,
+                balance_after: targetBal,
+                order_id: canonicalOrderId,
+                description: `Refunded ${coinsToRefund} Swad Coins for cancelled order ${canonicalOrderId} (${cleanReason})`,
+                created_at: new Date().toISOString(),
+              });
+
+            refundedCoins = coinsToRefund;
+            newBalance = targetBal;
+
+            // Sync with local productStorage
+            if (supaCust.phone) {
+              productStorage.setCustomerSwadCoinBalance(supaCust.phone, targetBal);
+            }
+            productStorage.setCustomerSwadCoinBalance(supaCust.id, targetBal);
+
+            console.log(`[Swad Coins] Refunded ${coinsToRefund} coins for order ${canonicalOrderId} to customer ${supaCust.phone || supaCust.id}. New balance: ${targetBal}`);
+          }
+        }
+      }
+    } catch (supaErr) {
+      console.warn('Supabase refundSwadCoins sync error:', supaErr);
+    }
+
+    return { refundedCoins, newBalance };
+  }
+
+  // Dedicated endpoint to refund Swad Coins on an order
+  app.post('/api/orders/:orderId/refund-coins', async (req, res) => {
+    try {
+      const reason = req.body?.cancellationReason || 'Order cancelled';
+      const result = await refundOrderSwadCoins(req.params.orderId, reason);
+      return res.json({ success: true, ...result });
+    } catch (err: any) {
+      console.error('Refund Swad Coins endpoint error:', err);
+      return res.status(500).json({ success: false, error: 'Failed to refund Swad Coins' });
+    }
+  });
+
   // 21b. Orders: Update Status
   app.patch('/api/orders/:orderId/status', async (req, res) => {
     try {
@@ -2845,24 +4068,25 @@ async function startServer() {
           supaUpdate.order_status = 'received';
         } else if (norm === 'confirmed') {
           supaUpdate.order_status = 'confirmed';
-          supaUpdate.confirmed_at = now;
         } else if (norm === 'preparing' || norm === 'in kitchen' || norm === 'preparing in kitchen') {
           supaUpdate.order_status = 'preparing';
-          supaUpdate.preparing_at = now;
         } else if (norm === 'ready' || norm === 'ready for pickup' || norm === 'ready for dispatch') {
           supaUpdate.order_status = 'ready';
-          supaUpdate.ready_at = now;
         } else if (norm === 'out_for_delivery' || norm === 'out for delivery') {
           supaUpdate.order_status = 'out_for_delivery';
-          supaUpdate.out_for_delivery_at = now;
         } else if (norm === 'delivered' || norm === 'picked up') {
           supaUpdate.order_status = 'delivered';
-          supaUpdate.delivered_at = now;
         } else if (norm === 'cancelled') {
           supaUpdate.order_status = 'cancelled';
           supaUpdate.cancelled_at = now;
           if (cancellationReason) {
             supaUpdate.cancellation_reason = cancellationReason;
+          }
+          // Automatic Swad Coin refund on cancellation across Supabase & local storage
+          try {
+            await refundOrderSwadCoins(req.params.orderId, cancellationReason || 'Order cancelled');
+          } catch (refErr) {
+            console.warn('Swad Coin refund warning on order cancel:', refErr);
           }
         } else {
           supaUpdate.order_status = norm || 'received';
@@ -2889,6 +4113,13 @@ async function startServer() {
   // 21c. Orders: Delete/Cancel Order
   app.delete('/api/orders/:orderId', async (req, res) => {
     try {
+      // Auto-refund Swad Coins on deletion if redeemed
+      try {
+        await refundOrderSwadCoins(req.params.orderId, 'Order deleted / cancelled');
+      } catch (rErr) {
+        console.warn('Refund on delete order notice:', rErr);
+      }
+
       const deleted = productStorage.deleteOrder(req.params.orderId);
       // Sync delete to Supabase
       try {
@@ -2981,6 +4212,104 @@ async function startServer() {
     } catch (err: any) {
       console.error('Fetch orders error:', err);
       return res.status(500).json({ success: false, error: 'Failed to retrieve orders' });
+    }
+  });
+
+  // 23a. Analytics: Top-selling products by outlet (last N days, default 30)
+  app.get('/api/analytics/outlet-bestsellers', async (req, res) => {
+    try {
+      const outletId = req.query.outletId as string | undefined;
+      const days = parseInt(req.query.days as string, 10) || 30;
+
+      if (!outletId) {
+        return res.status(400).json({ success: false, error: 'outletId is required' });
+      }
+
+      const cutoffDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+      const salesMap: Record<string, { productId: string; totalSold: number; orderCount: number; name?: string }> = {};
+
+      try {
+        const { data, error } = await serverSupabase
+          .from('orders')
+          .select('id, outlet_id, order_status, items, created_at')
+          .eq('outlet_id', outletId)
+          .gte('created_at', cutoffDate)
+          .neq('order_status', 'cancelled');
+
+        if (!error && Array.isArray(data)) {
+          for (const order of data) {
+            const rawItems = Array.isArray(order.items)
+              ? order.items
+              : typeof order.items === 'string'
+              ? JSON.parse(order.items)
+              : [];
+
+            for (const item of rawItems) {
+              const pid = String(item.productId || item.id || '').trim();
+              if (!pid) continue;
+              const qty = Math.max(1, Number(item.quantity) || 1);
+
+              if (!salesMap[pid]) {
+                salesMap[pid] = {
+                  productId: pid,
+                  totalSold: 0,
+                  orderCount: 0,
+                  name: item.name,
+                };
+              }
+              salesMap[pid].totalSold += qty;
+              salesMap[pid].orderCount += 1;
+            }
+          }
+        }
+      } catch (supaErr) {
+        console.warn('GET /api/analytics/outlet-bestsellers Supabase query error:', supaErr);
+      }
+
+      // Also incorporate any local in-memory storage orders for this outlet if present
+      try {
+        const localOrders = productStorage.getAllOrders(outletId);
+        const cutoffTime = Date.now() - days * 24 * 60 * 60 * 1000;
+        for (const order of localOrders) {
+          const orderTime = new Date(order.createdAt || (order as any).placedAt || 0).getTime();
+          const isCancelled = (order.orderStatus || (order as any).status || '').toLowerCase() === 'cancelled';
+          if (orderTime >= cutoffTime && !isCancelled && Array.isArray(order.items)) {
+            for (const item of order.items) {
+              const rawItem = item as any;
+              const pid = String(rawItem.productId || rawItem.product?.id || rawItem.id || '').trim();
+              if (!pid) continue;
+              const qty = Math.max(1, Number(rawItem.quantity) || 1);
+              if (!salesMap[pid]) {
+                salesMap[pid] = {
+                  productId: pid,
+                  totalSold: qty,
+                  orderCount: 1,
+                  name: rawItem.name || rawItem.product?.name,
+                };
+              } else {
+                salesMap[pid].totalSold += qty;
+                salesMap[pid].orderCount += 1;
+              }
+            }
+          }
+        }
+      } catch (localErr) {
+        // ignore
+      }
+
+      const sales = Object.values(salesMap).sort(
+        (a, b) => b.totalSold - a.totalSold || b.orderCount - a.orderCount
+      );
+
+      return res.json({
+        success: true,
+        outletId,
+        days,
+        sales,
+      });
+    } catch (err: any) {
+      console.error('Error fetching outlet bestsellers:', err);
+      return res.status(500).json({ success: false, error: 'Failed to calculate outlet bestsellers' });
     }
   });
 
@@ -3526,6 +4855,66 @@ async function startServer() {
     }
   });
 
+  // 24f. Get Featured Reviews from Database for Home Page
+  app.get('/api/reviews/featured', async (req, res) => {
+    try {
+      const outletId = typeof req.query.outletId === 'string' ? req.query.outletId.trim() : '';
+      const limit = Math.max(1, Math.min(12, Number(req.query.limit) || 3));
+
+      const { data, error } = await serverSupabase
+        .from('product_reviews')
+        .select('*')
+        .eq('is_published', true)
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('Fetch featured reviews error:', error.message);
+        return res.status(500).json({ success: false, error: error.message });
+      }
+
+      const rows = data || [];
+      const validReviews = rows
+        .filter((r) => r.review_text && typeof r.review_text === 'string' && r.review_text.trim().length > 0)
+        .map(mapDbReview)
+        .filter(Boolean);
+
+      // Calculate platform rating stats
+      let totalRatingSum = 0;
+      for (const r of rows) {
+        totalRatingSum += Number(r.rating || 5);
+      }
+      const totalCount = rows.length;
+      const averageRating = totalCount > 0 ? Number((totalRatingSum / totalCount).toFixed(1)) : 4.8;
+
+      // Prioritize reviews for the specified outlet, then 4★ & 5★ ratings, then recent
+      const outletReviews = outletId ? validReviews.filter((r: any) => r.outletId === outletId) : [];
+      const otherReviews = outletId ? validReviews.filter((r: any) => r.outletId !== outletId) : validReviews;
+
+      const sortFn = (a: any, b: any) => {
+        if (b.rating !== a.rating) return b.rating - a.rating;
+        return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+      };
+
+      outletReviews.sort(sortFn);
+      otherReviews.sort(sortFn);
+
+      const combined = [...outletReviews, ...otherReviews].slice(0, limit);
+
+      return res.json({
+        success: true,
+        reviews: combined,
+        stats: {
+          averageRating,
+          totalCount,
+        },
+        source: 'database',
+      });
+    } catch (err: any) {
+      console.error('Fetch featured reviews error:', err);
+      return res.status(500).json({ success: false, error: 'Failed to fetch featured reviews' });
+    }
+  });
+
   // 24f. Reviews & Database Diagnostics
   app.get('/api/database/reviews-diagnostics', async (req, res) => {
     try {
@@ -3586,6 +4975,29 @@ async function startServer() {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
+
+  // --- Automated Scheduled Jobs ---
+  // Daily Swad Coin Reward Generation at 04:00 AM server time
+  cron.schedule('0 4 * * *', async () => {
+    console.log('[Swad Coins] Executing daily 04:00 AM reward generation job...');
+    try {
+      let supaOrders: any[] = [];
+      try {
+        const { data } = await serverSupabase
+          .from('orders')
+          .select('*')
+          .in('order_status', ['delivered', 'picked_up']);
+        if (data) supaOrders = data;
+      } catch (e) {
+        console.warn('[Swad Coins Cron] Supabase delivered orders fetch note:', e);
+      }
+
+      const summary = productStorage.generateDailySwadCoinRewards(supaOrders);
+      console.log(`[Swad Coins] Daily job completed: generated ${summary.created} rewards, skipped ${summary.skippedAlreadyRewarded} already rewarded.`);
+    } catch (cronErr) {
+      console.error('[Swad Coins] Error during daily reward cron execution:', cronErr);
+    }
+  });
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Gaon Ka Swad server running on http://localhost:${PORT}`);

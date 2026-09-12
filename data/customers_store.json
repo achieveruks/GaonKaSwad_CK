@@ -1,0 +1,39 @@
+[
+  {
+    "id": "cust-mtrdfcb7-5ibe",
+    "phone": "9999900000",
+    "fullName": "Customer",
+    "isActive": true,
+    "marketingConsent": true,
+    "welcomeDiscountUsed": false,
+    "createdAt": "2026-09-07T15:03:55.411Z",
+    "updatedAt": "2026-09-12T07:50:23.717Z",
+    "swadCoinBalance": 0,
+    "swad_coin_balance": 0,
+    "lastOrderAt": "2026-09-10T14:11:19.375Z"
+  },
+  {
+    "id": "cust-mtrdfcb8-caqo",
+    "phone": "9987654321",
+    "fullName": "Test Customer",
+    "isActive": true,
+    "marketingConsent": false,
+    "welcomeDiscountUsed": false,
+    "createdAt": "2026-09-07T15:03:55.412Z",
+    "updatedAt": "2026-09-07T18:31:34.285Z",
+    "swadCoinBalance": 5,
+    "swad_coin_balance": 5
+  },
+  {
+    "id": "44024727-9aee-4613-9201-84bf33c5d427",
+    "phone": "0184335427",
+    "fullName": "Customer",
+    "isActive": true,
+    "marketingConsent": true,
+    "welcomeDiscountUsed": false,
+    "createdAt": "2026-09-12T07:50:23.717Z",
+    "updatedAt": "2026-09-12T07:50:23.717Z",
+    "swadCoinBalance": 0,
+    "swad_coin_balance": 0
+  }
+]

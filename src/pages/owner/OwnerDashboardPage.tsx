@@ -12,7 +12,6 @@ import {
   CheckCircle2,
   AlertTriangle,
   Sparkles,
-  Plus,
   ArrowRight,
   TrendingUp,
   Flame,
@@ -31,7 +30,6 @@ export const OwnerDashboardPage: React.FC = () => {
   const { token } = useAuth();
   const {
     goToOwnerProducts,
-    goToOwnerAddProduct,
     goToOwnerEditProduct,
     goToOwnerOutlets,
     goToOwnerDeliveryZones,
@@ -106,14 +104,6 @@ export const OwnerDashboardPage: React.FC = () => {
           >
             <RefreshCw className={`w-3.5 h-3.5 text-gray-500 ${loadingStats ? 'animate-spin' : ''}`} />
             <span>Sync Catalog</span>
-          </button>
-          <button
-            type="button"
-            onClick={goToOwnerAddProduct}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 bg-orange-600 hover:bg-orange-700 text-white text-xs font-bold rounded-xl shadow-xs transition-colors cursor-pointer"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span>Add Product</span>
           </button>
         </div>
       }

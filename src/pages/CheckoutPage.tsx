@@ -19,6 +19,7 @@ import {
   recordCouponRedemption,
   fetchSupabaseOrderById,
 } from '../lib/supabaseService';
+import { fetchSwadCoinBalance } from '../lib/swadCoinService';
 import { lookupPincode } from '../lib/pincodeService';
 import confetti from 'canvas-confetti';
 import {
@@ -59,6 +60,7 @@ import {
   Plus,
   RotateCcw,
   Zap,
+  Coins,
   Home,
   Briefcase,
   Bookmark,
@@ -359,6 +361,45 @@ export const CheckoutPage: React.FC = () => {
       isMounted = false;
     };
   }, [customer?.id, customer?.phone, formData.phone, subtotal, selectedLocation?.outletId, currentOutlet?.id]);
+
+  // Swad Coins Balance & Redemption State
+  const [swadCoinBalance, setSwadCoinBalance] = useState<number>(0);
+  const [isUseSwadCoinsChecked, setIsUseSwadCoinsChecked] = useState<boolean>(false);
+  const [isLoadingCoinBalance, setIsLoadingCoinBalance] = useState<boolean>(false);
+
+  // Fetch verified Swad Coin balance whenever customer or phone changes
+  useEffect(() => {
+    let isMounted = true;
+    const phone = customer?.phone || formData.phone;
+    const custId = customer?.id;
+
+    if (!phone && !custId) {
+      setSwadCoinBalance(0);
+      setIsUseSwadCoinsChecked(false);
+      return;
+    }
+
+    setIsLoadingCoinBalance(true);
+    fetchSwadCoinBalance(phone || '', custId)
+      .then((balance) => {
+        if (isMounted) {
+          setSwadCoinBalance(balance || 0);
+          if (!balance || balance <= 0) {
+            setIsUseSwadCoinsChecked(false);
+          }
+        }
+      })
+      .catch((err) => {
+        console.warn('Error fetching Swad Coin balance:', err);
+      })
+      .finally(() => {
+        if (isMounted) setIsLoadingCoinBalance(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [customer?.id, customer?.phone, formData.phone]);
 
   const handleApplyPromoCode = async (codeToApply?: string) => {
     const targetCode = (codeToApply || couponInputText || '').trim().toUpperCase();
@@ -807,9 +848,21 @@ export const CheckoutPage: React.FC = () => {
   // Delivery fee is ₹0 for Self-Pickup / Takeaway
   const effectiveDeliveryFee = isSelfPickup || orderType === 'pickup' ? 0 : deliveryFee;
 
+  // Swad Coin Redemption Calculations (Rules 17-18):
+  // 1 Swad Coin = ₹1.
+  // eligibleOrderValue = food/item value after applicable coupon discount
+  const eligibleOrderValue = Math.max(0, subtotal - discount);
+  // maximumCoinDiscount = FLOOR(eligibleOrderValue * 10 / 100)
+  const maximumCoinDiscount = Math.floor((eligibleOrderValue * 10) / 100);
+  // coinsToUse = MIN(customerCurrentBalance, maximumCoinDiscount) when checked
+  const coinsToUse = isUseSwadCoinsChecked
+    ? Math.min(Math.max(0, swadCoinBalance), maximumCoinDiscount)
+    : 0;
+  const swadCoinDiscount = coinsToUse; // 1 Coin = ₹1
+
   const effectiveTotal = Math.max(
     0,
-    subtotal - discount + packagingFee + gst + effectiveDeliveryFee
+    subtotal - discount - swadCoinDiscount + packagingFee + gst + effectiveDeliveryFee
   );
 
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -1350,6 +1403,8 @@ export const CheckoutPage: React.FC = () => {
       couponId: appliedCoupon?.id,
       couponCode: appliedCoupon ? appliedCoupon.code : undefined,
       couponDiscountAmount: discount > 0 ? discount : undefined,
+      swadCoinsUsed: coinsToUse,
+      swadCoinDiscountAmount: swadCoinDiscount,
       customerDetails: {
         ...formData,
         orderType: isSelfPickup ? 'pickup' : 'delivery',
@@ -1415,6 +1470,8 @@ export const CheckoutPage: React.FC = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...newOrder,
+          requestedSwadCoins: coinsToUse,
+          swadCoinsUsed: coinsToUse,
           customerId: resolvedCustId || newOrder.customerId,
           addressId: isSelfPickup ? null : (resolvedAddrId || newOrder.addressId || null),
           deliveryAddressSnapshot: isSelfPickup ? null : (newOrder.deliveryAddressSnapshot || null),
@@ -1460,6 +1517,10 @@ export const CheckoutPage: React.FC = () => {
     }
 
     setIsSubmitting(false);
+    setIsUseSwadCoinsChecked(false);
+    if (coinsToUse > 0) {
+      setSwadCoinBalance((prev) => Math.max(0, prev - coinsToUse));
+    }
     clearCart();
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -1861,6 +1922,15 @@ export const CheckoutPage: React.FC = () => {
               <div className="flex justify-between text-emerald-700 font-bold bg-emerald-50 px-2 py-1 rounded">
                 <span>🎉 10% Welcome Discount</span>
                 <span>- ₹{placedOrder.welcomeDiscountAmount}</span>
+              </div>
+            )}
+            {(placedOrder.swadCoinsUsed || 0) > 0 && (
+              <div className="flex justify-between text-amber-800 font-bold bg-amber-50 px-2 py-1 rounded border border-amber-200/60">
+                <span className="flex items-center gap-1">
+                  <Coins className="w-3 h-3 text-amber-700" />
+                  Swad Coins Redeemed ({placedOrder.swadCoinsUsed} Coins)
+                </span>
+                <span>- ₹{placedOrder.swadCoinDiscountAmount || placedOrder.swadCoinsUsed}</span>
               </div>
             )}
             <div className="flex justify-between">
@@ -3249,6 +3319,57 @@ export const CheckoutPage: React.FC = () => {
                 )}
               </div>
 
+              {/* Swad Coins Redemption Section (Rules 17-19) */}
+              {swadCoinBalance > 0 && (
+                <div className="p-3 bg-linear-to-r from-amber-50/80 via-orange-50/60 to-amber-50/80 rounded-xl border border-amber-200/80 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-6 h-6 rounded-full bg-amber-500/20 text-amber-800 flex items-center justify-center font-bold text-xs">
+                        <Coins className="w-3.5 h-3.5 text-amber-700" />
+                      </div>
+                      <div>
+                        <span className="text-xs font-bold text-stone-900 block leading-tight">Swad Coins</span>
+                        <span className="text-[11px] text-stone-600">
+                          Balance: <strong className="text-amber-800 font-bold">{swadCoinBalance} Coins</strong> (₹{swadCoinBalance})
+                        </span>
+                      </div>
+                    </div>
+                    {isUseSwadCoinsChecked && maximumCoinDiscount > 0 && (
+                      <span className="text-[10px] font-extrabold text-amber-800 bg-amber-100 px-2 py-0.5 rounded-full">
+                        -₹{coinsToUse}
+                      </span>
+                    )}
+                  </div>
+
+                  <label className="flex items-start gap-2 cursor-pointer select-none pt-1 border-t border-amber-200/60">
+                    <input
+                      type="checkbox"
+                      checked={isUseSwadCoinsChecked}
+                      onChange={(e) => setIsUseSwadCoinsChecked(e.target.checked)}
+                      disabled={maximumCoinDiscount <= 0}
+                      className="mt-0.5 w-4 h-4 rounded text-amber-700 focus:ring-amber-500 border-amber-300 cursor-pointer disabled:opacity-50"
+                    />
+                    <div className="text-xs">
+                      <span className="font-semibold text-stone-800 block">Use Swad Coins</span>
+                      <span className="text-[11px] text-stone-600">
+                        {maximumCoinDiscount > 0 ? (
+                          <>
+                            You can use up to{' '}
+                            <strong className="text-amber-800 font-bold">
+                              {Math.min(swadCoinBalance, maximumCoinDiscount)} Coins (₹
+                              {Math.min(swadCoinBalance, maximumCoinDiscount)})
+                            </strong>{' '}
+                            on this order (max 10% of items)
+                          </>
+                        ) : (
+                          <span className="text-stone-500">Order value too low to redeem coins</span>
+                        )}
+                      </span>
+                    </div>
+                  </label>
+                </div>
+              )}
+
               {/* Pricing breakdown */}
               <div className="pt-2 border-t border-gray-100 space-y-1.5 text-xs text-gray-600">
                 <div className="flex justify-between">
@@ -3260,6 +3381,16 @@ export const CheckoutPage: React.FC = () => {
                   <div className="flex justify-between text-emerald-600 font-semibold">
                     <span>Coupon Discount ({appliedCoupon?.code})</span>
                     <span>- ₹{discount}</span>
+                  </div>
+                )}
+
+                {isUseSwadCoinsChecked && swadCoinDiscount > 0 && (
+                  <div className="flex justify-between text-amber-800 font-semibold bg-amber-50/80 px-2 py-1 rounded-md border border-amber-200/60">
+                    <span className="flex items-center gap-1">
+                      <Coins className="w-3.5 h-3.5 text-amber-700" />
+                      Swad Coin Discount ({coinsToUse} Coins)
+                    </span>
+                    <span className="font-bold">- ₹{swadCoinDiscount}</span>
                   </div>
                 )}
 

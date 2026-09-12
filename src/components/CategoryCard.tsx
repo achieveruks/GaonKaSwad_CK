@@ -2,7 +2,7 @@ import React from 'react';
 import { Category } from '../types';
 import { useNavigation } from '../context/NavigationContext';
 import { useProducts } from '../context/ProductContext';
-import { Flame, Soup, Utensils, Wheat, Sparkles, ChevronRight } from 'lucide-react';
+import { Flame, Soup, Utensils, Wheat, Sparkles, ChevronRight, Leaf } from 'lucide-react';
 import { motion } from 'motion/react';
 
 interface CategoryCardProps {
@@ -36,6 +36,8 @@ export const CategoryCard: React.FC<CategoryCardProps> = ({
         return <Utensils className="w-5 h-5 text-red-500" />;
       case 'Wheat':
         return <Wheat className="w-5 h-5 text-yellow-500" />;
+      case 'Leaf':
+        return <Leaf className="w-5 h-5 text-emerald-500" />;
       case 'Sparkles':
       default:
         return <Sparkles className="w-5 h-5 text-amber-400" />;

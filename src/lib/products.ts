@@ -425,3 +425,94 @@ export async function getDashboardStats(token: string): Promise<DashboardStats> 
   }
 }
 
+/**
+ * Trigger the Swad Coins daily reward scheduler manually (Admin/Owner only)
+ */
+export async function triggerSwadCoinsRewardScheduler(token?: string): Promise<{
+  success: boolean;
+  message?: string;
+  summary?: {
+    totalEligible: number;
+    created: number;
+    skippedAlreadyRewarded: number;
+    failed: number;
+  };
+  error?: string;
+}> {
+  const res = await fetch(`${API_BASE}/admin/swad-coins/generate-rewards`, {
+    method: 'POST',
+    headers: getAuthHeaders(token),
+  });
+  const data = await res.json();
+  if (!res.ok || !data.success) {
+    throw new Error(data.error || 'Failed to trigger Swad Coin reward scheduler');
+  }
+  return data;
+}
+
+export interface AdminCustomerCoinRecord {
+  id: string;
+  phone: string;
+  fullName: string;
+  email?: string;
+  swadCoinBalance: number;
+  createdAt?: string;
+}
+
+export async function fetchAdminCustomersWithCoins(token?: string): Promise<AdminCustomerCoinRecord[]> {
+  const res = await fetch(`${API_BASE}/admin/swad-coins/customers`, {
+    headers: getAuthHeaders(token),
+  });
+  const data = await res.json();
+  if (!res.ok || !data.success) {
+    throw new Error(data.error || 'Failed to load customers');
+  }
+  return data.customers || [];
+}
+
+export async function issueAdminSwadCoins(
+  payload: { customerIdOrPhone: string; amount: number; reason: string },
+  token?: string
+): Promise<{
+  success: boolean;
+  message: string;
+  newBalance: number;
+  customerId?: string;
+  customerName?: string;
+  customerPhone?: string;
+  transaction?: any;
+}> {
+  const res = await fetch(`${API_BASE}/admin/swad-coins/credit`, {
+    method: 'POST',
+    headers: getAuthHeaders(token),
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json();
+  if (!res.ok || !data.success) {
+    throw new Error(data.error || 'Failed to issue Swad Coins');
+  }
+  return data;
+}
+
+export interface AdminSwadCoinsStats {
+  totalIssued: number;
+  pending: number;
+  claimed: number;
+  redeemed: number;
+  grossRedeemed?: number;
+  refunded?: number;
+  expired: number;
+  inCirculation: number;
+}
+
+export async function fetchAdminSwadCoinsStats(token?: string): Promise<AdminSwadCoinsStats> {
+  const res = await fetch(`${API_BASE}/admin/swad-coins/stats`, {
+    headers: getAuthHeaders(token),
+  });
+  const data = await res.json();
+  if (!res.ok || !data.success) {
+    throw new Error(data.error || 'Failed to fetch Swad Coins statistics');
+  }
+  return data.stats;
+}
+

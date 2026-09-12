@@ -347,6 +347,8 @@ export interface Customer {
   marketingConsent?: boolean;
   welcomeDiscountUsed?: boolean;
   welcomeDiscountUsedAt?: string;
+  swadCoinBalance?: number;
+  swad_coin_balance?: number;
   lastOrderAt?: string;
   createdAt?: string;
   updatedAt?: string;
@@ -460,6 +462,8 @@ export interface Order {
   couponCode?: string;
   couponId?: string;
   couponDiscountAmount?: number;
+  swadCoinsUsed?: number;
+  swadCoinDiscountAmount?: number;
   customerDetails: CheckoutFormData;
   deliveryAddressSnapshot?: {
     fullAddress: string;
@@ -508,4 +512,37 @@ export interface FilterState {
   maxPrice: number;
   sortBy: 'popular' | 'price-low' | 'price-high' | 'rating' | 'newest';
 }
+
+export type SwadCoinRewardStatus = 'PENDING' | 'CLAIMED' | 'EXPIRED';
+
+export interface SwadCoinReward {
+  id: string;
+  customerId: string;
+  orderId: string;
+  eligibleOrderValue: number;
+  rewardPercentage: number;
+  coinAmount: number;
+  status: SwadCoinRewardStatus;
+  expiresAt: string;
+  claimedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type SwadCoinTransactionType = 'EARN' | 'REDEEM' | 'REFUND' | 'ADMIN_CREDIT' | 'ADMIN_DEBIT';
+
+export interface SwadCoinTransaction {
+  id: string;
+  customerId: string;
+  type: SwadCoinTransactionType;
+  amount: number; // positive for EARN/REFUND/ADMIN_CREDIT, negative for REDEEM/ADMIN_DEBIT
+  balanceBefore: number;
+  balanceAfter: number;
+  orderId?: string;
+  rewardId?: string;
+  adminId?: string;
+  description?: string;
+  createdAt: string;
+}
+
 

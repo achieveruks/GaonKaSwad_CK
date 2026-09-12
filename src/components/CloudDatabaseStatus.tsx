@@ -255,7 +255,39 @@ CREATE POLICY "Orders Update Policy" ON public.orders FOR UPDATE USING (public.i
 
 CREATE POLICY "Profiles Self Select" ON public.profiles FOR SELECT USING (auth.uid() = id OR public.is_owner());
 CREATE POLICY "Profiles Self Update" ON public.profiles FOR UPDATE USING (auth.uid() = id OR public.is_owner());
-CREATE POLICY "Profiles Owner Full Access" ON public.profiles FOR ALL USING (public.is_owner() OR auth.uid() IS NULL);`;
+CREATE POLICY "Profiles Owner Full Access" ON public.profiles FOR ALL USING (public.is_owner() OR auth.uid() IS NULL);
+
+-- 7. SWAD COINS LOYALTY TABLES & POLICIES
+CREATE TABLE IF NOT EXISTS public.swad_coin_rewards (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  customer_id UUID REFERENCES public.customers(id) ON DELETE CASCADE,
+  order_id TEXT NOT NULL UNIQUE,
+  eligible_order_value NUMERIC(10, 2) NOT NULL,
+  reward_percentage NUMERIC(5, 2) NOT NULL,
+  coin_amount INT NOT NULL CHECK (coin_amount >= 5 AND coin_amount <= 100),
+  status TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'CLAIMED', 'EXPIRED')),
+  expires_at TIMESTAMPTZ NOT NULL,
+  claimed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
+  updated_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS public.swad_coin_transactions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  customer_id UUID NOT NULL REFERENCES public.customers(id) ON DELETE CASCADE,
+  type TEXT NOT NULL CHECK (type IN ('EARN', 'REDEEM', 'REFUND', 'ADMIN_CREDIT', 'ADMIN_DEBIT')),
+  amount INT NOT NULL,
+  balance_before INT NOT NULL,
+  balance_after INT NOT NULL,
+  order_id TEXT,
+  reward_id UUID REFERENCES public.swad_coin_rewards(id) ON DELETE SET NULL,
+  admin_id TEXT,
+  description TEXT,
+  created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
+);
+
+ALTER TABLE public.swad_coin_rewards DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.swad_coin_transactions DISABLE ROW LEVEL SECURITY;`;
 
   const copyToClipboard = () => {
     navigator.clipboard.writeText(sqlCode);

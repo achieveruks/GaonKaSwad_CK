@@ -17,9 +17,10 @@ import { motion } from 'motion/react';
 interface ProductCardProps {
   product: Product;
   viewMode?: 'grid' | 'list';
+  soldCount?: number;
 }
 
-export const ProductCard: React.FC<ProductCardProps> = ({ product, viewMode = 'grid' }) => {
+export const ProductCard: React.FC<ProductCardProps> = ({ product, viewMode = 'grid', soldCount }) => {
   const { addToCart, cart, updateQuantity } = useCart();
   const { goToProduct } = useNavigation();
   const { selectedLocation, setIsLocationModalOpen } = useLocation();
@@ -112,6 +113,11 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, viewMode = 'g
               ) : !isInStockHere ? (
                 <span className="px-2 py-0.5 bg-stone-900/90 text-amber-300 font-bold text-[10px] uppercase tracking-wider rounded shadow-2xs border border-amber-400/40">
                   OUT OF STOCK
+                </span>
+              ) : soldCount && soldCount > 0 ? (
+                <span className="px-2 py-0.5 bg-gradient-to-r from-orange-600 to-amber-600 text-white font-bold text-[10px] uppercase tracking-wider rounded shadow-2xs flex items-center gap-1">
+                  <Flame className="w-2.5 h-2.5 fill-white" />
+                  {soldCount} ORDERED
                 </span>
               ) : isBestsellerHere ? (
                 <span className="px-2 py-0.5 bg-orange-600 text-white font-bold text-[10px] uppercase tracking-wider rounded shadow-2xs flex items-center gap-1">
