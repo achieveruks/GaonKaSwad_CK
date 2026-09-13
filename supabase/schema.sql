@@ -649,15 +649,29 @@ DECLARE
   assigned_role TEXT;
   assigned_outlet TEXT;
   meta_role TEXT;
+  clean_email TEXT;
 BEGIN
+  clean_email := LOWER(COALESCE(NEW.email, ''));
   meta_role := LOWER(COALESCE(NEW.raw_user_meta_data->>'role', ''));
 
-  IF LOWER(NEW.email) = 'achieveruks@gmail.com' OR meta_role = 'owner' THEN
+  IF clean_email = 'achieveruks@gmail.com' OR clean_email = 'admin@gaonkaswad.com' OR meta_role = 'owner' THEN
     assigned_role := 'owner';
     assigned_outlet := NULL;
-  ELSIF meta_role = 'outlet_manager' THEN
+  ELSIF meta_role = 'outlet_manager' OR clean_email LIKE 'manager.%@gaonkaswad.in' OR clean_email LIKE '%manager%@gaonkaswad.in' THEN
     assigned_role := 'outlet_manager';
-    assigned_outlet := NEW.raw_user_meta_data->>'outlet_id';
+    assigned_outlet := COALESCE(
+      NEW.raw_user_meta_data->>'outlet_id',
+      CASE
+        WHEN clean_email LIKE '%hsr%' THEN 'blr-hsr'
+        WHEN clean_email LIKE '%kvbbsr%' OR clean_email LIKE '%kendriya%' THEN 'bbsr-kendriyavihar'
+        WHEN clean_email LIKE '%kadabeesan%' THEN 'blr-kadabeesanhalli'
+        WHEN clean_email LIKE '%indiranagar%' THEN 'blr-indiranagar'
+        WHEN clean_email LIKE '%whitefield%' THEN 'blr-whitefield'
+        WHEN clean_email LIKE '%patia%' THEN 'bbsr-patia'
+        WHEN clean_email LIKE '%khandagiri%' THEN 'bbsr-khandagiri'
+        ELSE NULL
+      END
+    );
   ELSE
     assigned_role := 'customer';
     assigned_outlet := NULL;

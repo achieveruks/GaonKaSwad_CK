@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { OwnerLayout } from './OwnerLayout';
 import { useAuth } from '../../context/AuthContext';
 import { supabase, isSupabaseConfigured } from '../../lib/supabase';
@@ -7,6 +7,7 @@ import {
   fetchAdminCustomersWithCoins,
   issueAdminSwadCoins,
   fetchAdminSwadCoinsStats,
+  fetchSwadCoinDispatches,
   AdminCustomerCoinRecord,
   AdminSwadCoinsStats,
 } from '../../lib/products';
@@ -17,7 +18,8 @@ import {
   fetchCouponStatsFromCloud,
 } from '../../lib/supabaseService';
 import { getOutlets } from '../../lib/locationService';
-import { Coupon, Outlet } from '../../types';
+import { Coupon, Outlet, SwadCoinDispatch } from '../../types';
+import { useNavigation } from '../../context/NavigationContext';
 import {
   TicketPercent,
   Plus,
@@ -50,10 +52,13 @@ import {
   UserCheck,
   Sparkles,
   ArrowRight,
+  Eye,
+  ExternalLink,
 } from 'lucide-react';
 
 export const CouponsPage: React.FC = () => {
   const { token } = useAuth();
+  const { goToOwnerDashboard } = useNavigation();
   const [coupons, setCoupons] = useState<Coupon[]>([]);
   const [outlets, setOutlets] = useState<Outlet[]>([]);
   const [couponRedemptionsMap, setCouponRedemptionsMap] = useState<Record<string, { count: number; totalDiscount: number }>>({});
@@ -121,6 +126,120 @@ export const CouponsPage: React.FC = () => {
     };
   } | null>(null);
 
+  // Swad Coins Dispatch Audit History State
+  const [dispatchLogs, setDispatchLogs] = useState<SwadCoinDispatch[]>([]);
+  const [isLoadingDispatches, setIsLoadingDispatches] = useState(false);
+  const [dispatchSearchQuery, setDispatchSearchQuery] = useState('');
+  const [dispatchStartDate, setDispatchStartDate] = useState('');
+  const [dispatchEndDate, setDispatchEndDate] = useState('');
+  const [dispatchTypeFilter, setDispatchTypeFilter] = useState<'ALL' | 'MANUAL' | 'SCHEDULED'>('ALL');
+  const [selectedDispatchForOrders, setSelectedDispatchForOrders] = useState<SwadCoinDispatch | null>(null);
+  const [batchOrderSearchQuery, setBatchOrderSearchQuery] = useState('');
+  const [copiedBatchAll, setCopiedBatchAll] = useState(false);
+  const [copiedSingleOrder, setCopiedSingleOrder] = useState<string | null>(null);
+
+  const dispatchStartRef = useRef<HTMLInputElement>(null);
+  const dispatchEndRef = useRef<HTMLInputElement>(null);
+
+  const openPicker = (ref: React.RefObject<HTMLInputElement | null>) => {
+    if (ref.current) {
+      try {
+        if (typeof (ref.current as any).showPicker === 'function') {
+          (ref.current as any).showPicker();
+        } else {
+          ref.current.focus();
+        }
+      } catch (e) {
+        ref.current.focus();
+      }
+    }
+  };
+
+  const setPresetRange = (preset: 'today' | '7days' | '30days' | 'clear') => {
+    if (preset === 'clear') {
+      setDispatchStartDate('');
+      setDispatchEndDate('');
+      return;
+    }
+    const now = new Date();
+    const toISO = (d: Date) => {
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+    const endStr = toISO(now);
+    if (preset === 'today') {
+      setDispatchStartDate(endStr);
+      setDispatchEndDate(endStr);
+    } else if (preset === '7days') {
+      const start = new Date();
+      start.setDate(start.getDate() - 7);
+      setDispatchStartDate(toISO(start));
+      setDispatchEndDate(endStr);
+    } else if (preset === '30days') {
+      const start = new Date();
+      start.setDate(start.getDate() - 30);
+      setDispatchStartDate(toISO(start));
+      setDispatchEndDate(endStr);
+    }
+  };
+
+  const loadDispatchHistory = async () => {
+    setIsLoadingDispatches(true);
+    try {
+      let logs: SwadCoinDispatch[] = [];
+      // 1. Try Backend API
+      try {
+        logs = await fetchSwadCoinDispatches(token || undefined);
+      } catch (apiErr) {
+        console.warn('API dispatch fetch note, trying direct Supabase fallback:', apiErr);
+      }
+
+      // 2. Direct Supabase Query Fallback (if API was empty or failed)
+      if ((!logs || logs.length === 0) && isSupabaseConfigured()) {
+        try {
+          const { data, error } = await supabase
+            .from('swad_coins_dispatch')
+            .select('*')
+            .order('run_at', { ascending: false });
+
+          if (!error && Array.isArray(data) && data.length > 0) {
+            logs = data.map((d: any) => ({
+              id: d.id,
+              runAt: d.run_at || new Date().toISOString(),
+              run_at: d.run_at,
+              runType: (d.run_type || 'MANUAL') as any,
+              run_type: d.run_type || 'MANUAL',
+              ordersProcessed: Number(d.orders_processed || 0),
+              orders_processed: Number(d.orders_processed || 0),
+              ordersScanned: Number(d.orders_scanned || 0),
+              orders_scanned: Number(d.orders_scanned || 0),
+              ordersSkipped: Number(d.orders_skipped || 0),
+              orders_skipped: Number(d.orders_skipped || 0),
+              coinsIssued: Number(d.coins_issued || 0),
+              coins_issued: Number(d.coins_issued || 0),
+              syncedCount: Number(d.synced_count || 0),
+              synced_count: Number(d.synced_count || 0),
+              orderIds: Array.isArray(d.order_ids) ? d.order_ids : [],
+              order_ids: Array.isArray(d.order_ids) ? d.order_ids : [],
+              status: d.status || 'SUCCESS',
+              notes: d.notes || '',
+            }));
+          }
+        } catch (dbErr) {
+          console.warn('Direct Supabase dispatch fetch note:', dbErr);
+        }
+      }
+
+      setDispatchLogs(logs || []);
+    } catch (err) {
+      console.warn('Failed to fetch swad coin dispatch history:', err);
+    } finally {
+      setIsLoadingDispatches(false);
+    }
+  };
+
   const handleRunRewardScheduler = async () => {
     setIsRunningScheduler(true);
     setSchedulerResult(null);
@@ -133,6 +252,7 @@ export const CouponsPage: React.FC = () => {
           summary: res.summary,
         });
         loadSwadCoinsStats();
+        loadDispatchHistory();
       } else {
         setSchedulerResult({
           type: 'error',
@@ -465,6 +585,7 @@ export const CouponsPage: React.FC = () => {
   useEffect(() => {
     loadData();
     loadSwadCoinsStats();
+    loadDispatchHistory();
   }, []);
 
   const handleCopyCode = (code: string) => {
@@ -1202,12 +1323,12 @@ export const CouponsPage: React.FC = () => {
                           The rewards are safely saved in local storage. To permit direct inserts into your Supabase cloud tables, paste this 2-line query into your <strong>Supabase Dashboard &gt; SQL Editor</strong>:
                         </p>
                         <div className="flex items-center justify-between gap-2 p-2.5 rounded-lg bg-white/90 font-mono text-[11px] text-amber-950 border border-amber-300">
-                          <code className="break-all">ALTER TABLE public.swad_coin_rewards DISABLE ROW LEVEL SECURITY; ALTER TABLE public.swad_coin_transactions DISABLE ROW LEVEL SECURITY;</code>
+                          <code className="break-all">ALTER TABLE public.swad_coin_rewards DISABLE ROW LEVEL SECURITY; ALTER TABLE public.swad_coin_transactions DISABLE ROW LEVEL SECURITY; ALTER TABLE public.swad_coins_dispatch DISABLE ROW LEVEL SECURITY;</code>
                           <button
                             type="button"
                             onClick={() => {
                               navigator.clipboard.writeText(
-                                'ALTER TABLE public.swad_coin_rewards DISABLE ROW LEVEL SECURITY;\nALTER TABLE public.swad_coin_transactions DISABLE ROW LEVEL SECURITY;'
+                                'ALTER TABLE public.swad_coin_rewards DISABLE ROW LEVEL SECURITY;\nALTER TABLE public.swad_coin_transactions DISABLE ROW LEVEL SECURITY;\nALTER TABLE public.swad_coins_dispatch DISABLE ROW LEVEL SECURITY;'
                               );
                               setCopiedSql(true);
                               setTimeout(() => setCopiedSql(false), 2000);
@@ -1239,6 +1360,384 @@ export const CouponsPage: React.FC = () => {
                 </button>
               </div>
             )}
+
+            {/* Swad Coins Dispatch Audit History List */}
+            <div className="mt-6 pt-6 border-t border-stone-200">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+                <div>
+                  <h4 className="text-sm font-black text-stone-900 flex items-center gap-2">
+                    <Coins className="w-4 h-4 text-amber-600" />
+                    Reward Dispatch Audit History
+                    <span className="text-[11px] font-semibold text-stone-500 px-2 py-0.5 bg-stone-100 rounded-full border border-stone-200">
+                      Table: swad_coins_dispatch
+                    </span>
+                  </h4>
+                  <p className="text-xs text-stone-500 mt-0.5">
+                    Records every execution where eligible rewards were successfully written to Supabase (count &gt; 0).
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={loadDispatchHistory}
+                  disabled={isLoadingDispatches}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-stone-50 border border-stone-200 rounded-xl text-xs font-bold text-stone-700 hover:text-stone-900 transition-colors shadow-2xs self-start sm:self-auto cursor-pointer"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isLoadingDispatches ? 'animate-spin' : ''}`} />
+                  Refresh
+                </button>
+              </div>
+
+              {/* Filters: Search, Full-Click Date Range & Run Type */}
+              <div className="space-y-2.5 mb-4">
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-2.5">
+                  {/* Search */}
+                  <div className="lg:col-span-4 relative">
+                    <Search className="w-4 h-4 text-stone-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={dispatchSearchQuery}
+                      onChange={(e) => setDispatchSearchQuery(e.target.value)}
+                      placeholder="Search by Order ID, batch ID, or notes..."
+                      className="w-full pl-9 pr-7 py-2 bg-white border border-stone-200 rounded-xl text-xs text-stone-800 placeholder:text-stone-400 focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500"
+                    />
+                    {dispatchSearchQuery && (
+                      <button
+                        type="button"
+                        onClick={() => setDispatchSearchQuery('')}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-stone-400 hover:text-stone-600 text-xs"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Date Range Selector: From & To Full-Clickable inputs */}
+                  <div className="lg:col-span-5 flex items-center gap-1.5 bg-stone-50/80 p-1 rounded-xl border border-stone-200">
+                    {/* From Date Box */}
+                    <div
+                      onClick={() => openPicker(dispatchStartRef)}
+                      className={`relative flex-1 flex items-center justify-between px-2.5 py-1.5 rounded-lg border transition-all cursor-pointer select-none ${
+                        dispatchStartDate
+                          ? 'bg-amber-50/90 border-amber-300 text-amber-950 font-bold shadow-2xs'
+                          : 'bg-white border-stone-200 text-stone-600 hover:border-stone-300'
+                      }`}
+                      title="Click anywhere to select From Date"
+                    >
+                      <div className="flex items-center gap-1.5 min-w-0 pointer-events-none">
+                        <Calendar className={`w-3.5 h-3.5 shrink-0 ${dispatchStartDate ? 'text-amber-700' : 'text-stone-400'}`} />
+                        <span className="text-[11px] truncate">
+                          {dispatchStartDate ? (
+                            <span><span className="text-stone-400 font-normal mr-1">From:</span>{dispatchStartDate}</span>
+                          ) : (
+                            <span className="text-stone-400">From Date</span>
+                          )}
+                        </span>
+                      </div>
+                      <input
+                        ref={dispatchStartRef}
+                        type="date"
+                        value={dispatchStartDate}
+                        onChange={(e) => setDispatchStartDate(e.target.value)}
+                        className="full-click-date-input"
+                        title="Click to select From Date"
+                      />
+                    </div>
+
+                    <span className="text-xs text-stone-400 font-semibold px-0.5">→</span>
+
+                    {/* To Date Box */}
+                    <div
+                      onClick={() => openPicker(dispatchEndRef)}
+                      className={`relative flex-1 flex items-center justify-between px-2.5 py-1.5 rounded-lg border transition-all cursor-pointer select-none ${
+                        dispatchEndDate
+                          ? 'bg-amber-50/90 border-amber-300 text-amber-950 font-bold shadow-2xs'
+                          : 'bg-white border-stone-200 text-stone-600 hover:border-stone-300'
+                      }`}
+                      title="Click anywhere to select To Date"
+                    >
+                      <div className="flex items-center gap-1.5 min-w-0 pointer-events-none">
+                        <Calendar className={`w-3.5 h-3.5 shrink-0 ${dispatchEndDate ? 'text-amber-700' : 'text-stone-400'}`} />
+                        <span className="text-[11px] truncate">
+                          {dispatchEndDate ? (
+                            <span><span className="text-stone-400 font-normal mr-1">To:</span>{dispatchEndDate}</span>
+                          ) : (
+                            <span className="text-stone-400">To Date</span>
+                          )}
+                        </span>
+                      </div>
+                      <input
+                        ref={dispatchEndRef}
+                        type="date"
+                        value={dispatchEndDate}
+                        onChange={(e) => setDispatchEndDate(e.target.value)}
+                        className="full-click-date-input"
+                        title="Click to select To Date"
+                      />
+                    </div>
+
+                    {/* Clear date range if either is set */}
+                    {(dispatchStartDate || dispatchEndDate) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDispatchStartDate('');
+                          setDispatchEndDate('');
+                        }}
+                        title="Clear date range"
+                        className="p-1.5 rounded-lg text-stone-400 hover:text-stone-700 hover:bg-stone-200/60 transition-colors shrink-0 cursor-pointer"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Run Type Filter */}
+                  <div className="lg:col-span-3">
+                    <select
+                      value={dispatchTypeFilter}
+                      onChange={(e) => setDispatchTypeFilter(e.target.value as any)}
+                      className="w-full px-3 py-2 bg-white border border-stone-200 rounded-xl text-xs text-stone-800 focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 cursor-pointer"
+                    >
+                      <option value="ALL">All Run Types</option>
+                      <option value="MANUAL">Manual Run</option>
+                      <option value="SCHEDULED">Scheduled (Cron)</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Quick Date Range Presets */}
+                <div className="flex items-center gap-1.5 flex-wrap text-[11px]">
+                  <span className="text-stone-400 font-medium mr-1">Quick Range:</span>
+                  <button
+                    type="button"
+                    onClick={() => setPresetRange('today')}
+                    className="px-2.5 py-1 rounded-lg border border-stone-200 bg-white hover:bg-amber-50 hover:border-amber-300 text-stone-700 hover:text-amber-900 font-semibold transition-colors cursor-pointer"
+                  >
+                    Today
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPresetRange('7days')}
+                    className="px-2.5 py-1 rounded-lg border border-stone-200 bg-white hover:bg-amber-50 hover:border-amber-300 text-stone-700 hover:text-amber-900 font-semibold transition-colors cursor-pointer"
+                  >
+                    Last 7 Days
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPresetRange('30days')}
+                    className="px-2.5 py-1 rounded-lg border border-stone-200 bg-white hover:bg-amber-50 hover:border-amber-300 text-stone-700 hover:text-amber-900 font-semibold transition-colors cursor-pointer"
+                  >
+                    Last 30 Days
+                  </button>
+                  {(dispatchStartDate || dispatchEndDate) && (
+                    <button
+                      type="button"
+                      onClick={() => setPresetRange('clear')}
+                      className="px-2.5 py-1 rounded-lg border border-red-200 bg-red-50 hover:bg-red-100 text-red-700 font-semibold transition-colors cursor-pointer flex items-center gap-1"
+                    >
+                      <X className="w-3 h-3" />
+                      Reset Dates
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Table / Dispatch Records */}
+              {isLoadingDispatches ? (
+                <div className="py-10 text-center text-xs text-stone-400 flex items-center justify-center gap-2">
+                  <RefreshCw className="w-4 h-4 animate-spin text-amber-600" />
+                  Loading dispatch history from database...
+                </div>
+              ) : (() => {
+                const filtered = dispatchLogs.filter((d) => {
+                  const runDate = (d.runAt || (d as any).run_at || '').slice(0, 10);
+                  if (dispatchStartDate && runDate < dispatchStartDate) {
+                    return false;
+                  }
+                  if (dispatchEndDate && runDate > dispatchEndDate) {
+                    return false;
+                  }
+                  const runType = (d.runType || (d as any).run_type || 'MANUAL').toUpperCase();
+                  if (dispatchTypeFilter !== 'ALL' && runType !== dispatchTypeFilter) {
+                    return false;
+                  }
+                  if (dispatchSearchQuery.trim()) {
+                    const q = dispatchSearchQuery.toLowerCase().trim();
+                    const idMatch = (d.id || '').toLowerCase().includes(q);
+                    const notesMatch = (d.notes || '').toLowerCase().includes(q);
+                    const orderIds = Array.isArray(d.orderIds)
+                      ? d.orderIds
+                      : Array.isArray((d as any).order_ids)
+                      ? (d as any).order_ids
+                      : [];
+                    const orderMatch = orderIds.some((oid: string) => String(oid).toLowerCase().includes(q));
+                    if (!idMatch && !notesMatch && !orderMatch) {
+                      return false;
+                    }
+                  }
+                  return true;
+                });
+
+                if (filtered.length === 0) {
+                  return (
+                    <div className="py-8 px-4 text-center rounded-2xl bg-stone-50/80 border border-stone-200 text-xs text-stone-500">
+                      {dispatchLogs.length === 0 ? (
+                        <>
+                          <Clock className="w-6 h-6 text-stone-400 mx-auto mb-2" />
+                          <p className="font-bold text-stone-700">No dispatch runs recorded yet</p>
+                          <p className="text-[11px] text-stone-500 mt-1 max-w-md mx-auto">
+                            Dispatches are recorded automatically when the reward scheduler runs (manual or 04:00 AM cron) and writes order rewards to Supabase (written count &gt; 0).
+                          </p>
+                        </>
+                      ) : (
+                        <>
+                          <Filter className="w-5 h-5 text-stone-400 mx-auto mb-1.5" />
+                          <p className="font-bold text-stone-700">No matching dispatch runs found</p>
+                          <p className="text-[11px] text-stone-500 mt-0.5">Try clearing the search query or date range filter.</p>
+                        </>
+                      )}
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="overflow-x-auto rounded-2xl border border-stone-200 bg-white shadow-2xs">
+                    <table className="w-full text-left text-xs">
+                      <thead>
+                        <tr className="bg-stone-50/90 text-stone-600 font-bold border-b border-stone-200">
+                          <th className="py-3 px-3.5">Run Time</th>
+                          <th className="py-3 px-3.5">Type</th>
+                          <th className="py-3 px-3.5 text-center">Orders Rewarded</th>
+                          <th className="py-3 px-3.5 text-center">Coins Issued</th>
+                          <th className="py-3 px-3.5 text-center">Supabase Synced</th>
+                          <th className="py-3 px-3.5">Rewarded Orders</th>
+                          <th className="py-3 px-3.5">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-stone-100">
+                        {filtered.map((log) => {
+                          const dateStr = log.runAt || (log as any).run_at || new Date().toISOString();
+                          const runType = (log.runType || (log as any).run_type || 'MANUAL').toUpperCase();
+                          const ordersCount = log.ordersProcessed ?? (log as any).orders_processed ?? 0;
+                          const coinsCount = log.coinsIssued ?? (log as any).coins_issued ?? 0;
+                          const syncedCount = log.syncedCount ?? (log as any).synced_count ?? 0;
+                          const orderIds: string[] = Array.isArray(log.orderIds)
+                            ? log.orderIds
+                            : Array.isArray((log as any).order_ids)
+                            ? (log as any).order_ids
+                            : [];
+
+                          return (
+                            <tr key={log.id} className="hover:bg-amber-50/30 transition-colors">
+                              <td className="py-3 px-3.5 whitespace-nowrap">
+                                <div className="font-bold text-stone-900">
+                                  {new Date(dateStr).toLocaleDateString('en-IN', {
+                                    day: 'numeric',
+                                    month: 'short',
+                                    year: 'numeric',
+                                  })}
+                                </div>
+                                <div className="text-[11px] text-stone-400 font-mono">
+                                  {new Date(dateStr).toLocaleTimeString('en-IN', {
+                                    hour: '2-digit',
+                                    minute: '2-digit',
+                                    second: '2-digit',
+                                  })}
+                                </div>
+                              </td>
+
+                              <td className="py-3 px-3.5 whitespace-nowrap">
+                                {runType === 'SCHEDULED' ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-purple-50 text-purple-700 border border-purple-200 text-[11px] font-bold">
+                                    <Clock className="w-3 h-3" />
+                                    Cron (4 AM)
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-sky-50 text-sky-700 border border-sky-200 text-[11px] font-bold">
+                                    <Play className="w-3 h-3" />
+                                    Manual
+                                  </span>
+                                )}
+                              </td>
+
+                              <td className="py-3 px-3.5 text-center whitespace-nowrap font-bold text-stone-800">
+                                <span className="inline-block px-2 py-0.5 rounded-md bg-stone-100 text-stone-800 border border-stone-200 font-mono">
+                                  {ordersCount}
+                                </span>
+                              </td>
+
+                              <td className="py-3 px-3.5 text-center whitespace-nowrap">
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-50 text-amber-800 font-bold border border-amber-200 font-mono">
+                                  <Coins className="w-3 h-3 text-amber-600" />
+                                  +{coinsCount}
+                                </span>
+                              </td>
+
+                              <td className="py-3 px-3.5 text-center whitespace-nowrap">
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 font-bold border border-emerald-200 font-mono">
+                                  <CheckCircle className="w-3 h-3 text-emerald-600" />
+                                  {syncedCount}
+                                </span>
+                              </td>
+
+                              <td className="py-3 px-3.5">
+                                {orderIds.length > 0 ? (
+                                  <div className="flex items-center gap-1.5 flex-wrap max-w-sm">
+                                    <button
+                                      type="button"
+                                      onClick={() => setSelectedDispatchForOrders(log)}
+                                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-xs font-bold transition-all shadow-2xs cursor-pointer group"
+                                      title="Click to inspect all order IDs in this batch"
+                                    >
+                                      <Eye className="w-3.5 h-3.5 text-amber-700 group-hover:scale-110 transition-transform" />
+                                      <span>{orderIds.length} Order{orderIds.length > 1 ? 's' : ''}</span>
+                                    </button>
+
+                                    {orderIds.slice(0, 2).map((oid, idx) => (
+                                      <span
+                                        key={idx}
+                                        className="px-1.5 py-0.5 bg-stone-100 text-stone-700 rounded text-[10px] font-mono border border-stone-200"
+                                      >
+                                        {oid}
+                                      </span>
+                                    ))}
+
+                                    {orderIds.length > 2 && (
+                                      <button
+                                        type="button"
+                                        onClick={() => setSelectedDispatchForOrders(log)}
+                                        className="px-1.5 py-0.5 bg-stone-200 hover:bg-amber-200 text-stone-700 hover:text-amber-900 rounded text-[10px] font-bold transition-colors cursor-pointer"
+                                        title={`Click to view all ${orderIds.length} orders`}
+                                      >
+                                        +{orderIds.length - 2} more
+                                      </button>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <span className="text-[11px] text-stone-400 italic">None logged</span>
+                                )}
+                              </td>
+
+                              <td className="py-3 px-3.5 whitespace-nowrap">
+                                <span
+                                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold border ${
+                                    log.status === 'SUCCESS'
+                                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                      : 'bg-amber-50 text-amber-800 border-amber-200'
+                                  }`}
+                                >
+                                  {log.status === 'SUCCESS' ? 'SUCCESS' : 'PARTIAL'}
+                                </span>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })()}
+            </div>
           </div>
         </div>
       )}
@@ -1879,6 +2378,215 @@ export const CouponsPage: React.FC = () => {
                   </div>
                 </form>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+      {/* 6. Rewarded Orders Batch Detail Modal */}
+      {selectedDispatchForOrders && (
+        <div className="fixed inset-0 z-50 bg-stone-950/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl border border-stone-200 shadow-2xl max-w-2xl w-full max-h-[90vh] flex flex-col my-auto animate-in fade-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="p-5 border-b border-stone-200 flex items-start justify-between gap-3">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-amber-50 text-amber-800 flex items-center justify-center border border-amber-200 shrink-0 mt-0.5">
+                  <Coins className="w-5 h-5 text-amber-600" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="font-black text-stone-900 text-base">
+                      Rewarded Orders in Batch
+                    </h3>
+                    <span
+                      className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                        (selectedDispatchForOrders.runType || (selectedDispatchForOrders as any).run_type) === 'SCHEDULED'
+                          ? 'bg-purple-50 text-purple-700 border-purple-200'
+                          : 'bg-sky-50 text-sky-700 border-sky-200'
+                      }`}
+                    >
+                      {(selectedDispatchForOrders.runType || (selectedDispatchForOrders as any).run_type) === 'SCHEDULED'
+                        ? 'Cron (4 AM)'
+                        : 'Manual Run'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-stone-500 mt-1">
+                    Run on{' '}
+                    {new Date(
+                      selectedDispatchForOrders.runAt || (selectedDispatchForOrders as any).run_at || ''
+                    ).toLocaleString('en-IN', {
+                      dateStyle: 'medium',
+                      timeStyle: 'short',
+                    })}{' '}
+                    •{' '}
+                    <strong className="text-stone-800 font-semibold">
+                      {selectedDispatchForOrders.coinsIssued ?? (selectedDispatchForOrders as any).coins_issued ?? 0} Swad Coins
+                    </strong>{' '}
+                    distributed across{' '}
+                    <strong className="text-stone-800 font-semibold">
+                      {(selectedDispatchForOrders.orderIds || (selectedDispatchForOrders as any).order_ids || []).length} Orders
+                    </strong>
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedDispatchForOrders(null);
+                  setBatchOrderSearchQuery('');
+                }}
+                className="w-8 h-8 rounded-xl text-stone-400 hover:text-stone-700 hover:bg-stone-100 flex items-center justify-center transition-colors cursor-pointer shrink-0"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Controls: Search & Copy All */}
+            <div className="p-4 bg-stone-50 border-b border-stone-200 flex flex-col sm:flex-row items-center justify-between gap-3">
+              <div className="relative w-full sm:w-80">
+                <Search className="w-4 h-4 text-stone-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  value={batchOrderSearchQuery}
+                  onChange={(e) => setBatchOrderSearchQuery(e.target.value)}
+                  placeholder="Filter order ID in batch (e.g. #00035)..."
+                  className="w-full pl-9 pr-7 py-2 bg-white border border-stone-200 rounded-xl text-xs text-stone-800 placeholder:text-stone-400 focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500"
+                />
+                {batchOrderSearchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setBatchOrderSearchQuery('')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-stone-400 hover:text-stone-600 text-xs"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-end">
+                <span className="text-xs text-stone-500 font-medium whitespace-nowrap">
+                  {(() => {
+                    const all: string[] =
+                      selectedDispatchForOrders.orderIds || (selectedDispatchForOrders as any).order_ids || [];
+                    const filtered = all.filter((oid) =>
+                      oid.toLowerCase().includes(batchOrderSearchQuery.toLowerCase().trim())
+                    );
+                    return `${filtered.length} of ${all.length} orders`;
+                  })()}
+                </span>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const all: string[] =
+                      selectedDispatchForOrders.orderIds || (selectedDispatchForOrders as any).order_ids || [];
+                    navigator.clipboard.writeText(all.join(', '));
+                    setCopiedBatchAll(true);
+                    setTimeout(() => setCopiedBatchAll(false), 2000);
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 bg-white hover:bg-stone-100 border border-stone-200 rounded-xl text-xs font-bold text-stone-700 transition-colors shadow-2xs cursor-pointer"
+                >
+                  {copiedBatchAll ? (
+                    <>
+                      <Check className="w-3.5 h-3.5 text-emerald-600" />
+                      <span className="text-emerald-700">Copied All!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-3.5 h-3.5 text-stone-500" />
+                      <span>Copy All ({((selectedDispatchForOrders.orderIds || (selectedDispatchForOrders as any).order_ids || []) as string[]).length})</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {/* Modal Orders List / Grid */}
+            <div className="p-5 overflow-y-auto max-h-96">
+              {(() => {
+                const allOrders: string[] =
+                  selectedDispatchForOrders.orderIds || (selectedDispatchForOrders as any).order_ids || [];
+                const filteredOrders = allOrders.filter((oid) =>
+                  oid.toLowerCase().includes(batchOrderSearchQuery.toLowerCase().trim())
+                );
+
+                if (filteredOrders.length === 0) {
+                  return (
+                    <div className="py-12 text-center text-xs text-stone-500">
+                      <Search className="w-8 h-8 text-stone-300 mx-auto mb-2" />
+                      <p className="font-bold text-stone-700">No matching orders found</p>
+                      <p className="text-[11px] text-stone-400 mt-1">Try clearing your search term</p>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    {filteredOrders.map((orderId, idx) => (
+                      <div
+                        key={idx}
+                        className="flex items-center justify-between p-3 rounded-2xl bg-stone-50/70 border border-stone-200 hover:border-amber-300 hover:bg-amber-50/20 transition-all group"
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <span className="w-6 h-6 rounded-lg bg-stone-200/70 text-stone-600 text-[10px] font-bold flex items-center justify-center shrink-0">
+                            {idx + 1}
+                          </span>
+                          <span className="font-mono text-xs font-bold text-stone-900 truncate">
+                            {orderId}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(orderId);
+                              setCopiedSingleOrder(orderId);
+                              setTimeout(() => setCopiedSingleOrder(null), 1500);
+                            }}
+                            title="Copy Order ID"
+                            className="p-1.5 rounded-lg text-stone-400 hover:text-stone-700 hover:bg-stone-200/60 transition-colors cursor-pointer"
+                          >
+                            {copiedSingleOrder === orderId ? (
+                              <Check className="w-3.5 h-3.5 text-emerald-600" />
+                            ) : (
+                              <Copy className="w-3.5 h-3.5" />
+                            )}
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedDispatchForOrders(null);
+                              goToOwnerDashboard();
+                            }}
+                            title="View on Owner Orders Dashboard"
+                            className="p-1.5 rounded-lg text-stone-400 hover:text-amber-700 hover:bg-amber-100/70 transition-colors cursor-pointer"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 border-t border-stone-200 bg-stone-50/80 flex items-center justify-between rounded-b-3xl">
+              <span className="text-[11px] text-stone-500 font-medium">
+                Tip: Click the copy icon next to any order ID, or use "Copy All" to export for auditing.
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedDispatchForOrders(null);
+                  setBatchOrderSearchQuery('');
+                }}
+                className="px-4 py-2 bg-stone-900 hover:bg-stone-800 text-white rounded-xl text-xs font-bold transition-colors cursor-pointer shadow-2xs"
+              >
+                Close
+              </button>
             </div>
           </div>
         </div>

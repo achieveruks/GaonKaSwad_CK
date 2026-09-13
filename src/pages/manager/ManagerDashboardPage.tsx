@@ -43,6 +43,7 @@ import {
   RefreshCw,
   AlertCircle,
   X,
+  Lock,
   Edit2,
   Trash2,
   Filter,
@@ -124,12 +125,19 @@ export const ManagerDashboardPage: React.FC = () => {
     setTimeout(() => setFeedbackMsg(null), 4000);
   };
 
-  // Guard: Protect manager dashboard
+  // Guard: Protect manager dashboard (strictly outlet_manager or owner)
   useEffect(() => {
-    if (!authLoading && !isAuthenticated) {
-      goToOwnerLogin();
+    if (!authLoading) {
+      if (!isAuthenticated) {
+        goToOwnerLogin();
+      } else {
+        const role = ownerUser?.role || profile?.role;
+        if (role !== 'outlet_manager' && role !== 'owner') {
+          goToOwnerLogin();
+        }
+      }
     }
-  }, [authLoading, isAuthenticated, goToOwnerLogin]);
+  }, [authLoading, isAuthenticated, ownerUser, profile, goToOwnerLogin]);
 
   // Load Data
   const fetchData = useCallback(async () => {
@@ -608,6 +616,41 @@ export const ManagerDashboardPage: React.FC = () => {
         <div className="flex flex-col items-center gap-3">
           <div className="w-8 h-8 border-3 border-amber-800 border-t-transparent rounded-full animate-spin" />
           <p className="text-xs font-semibold text-stone-600">Loading Manager Dashboard...</p>
+        </div>
+      </div>
+    );
+  }
+
+  const currentRole = ownerUser?.role || profile?.role;
+  if (!isAuthenticated || (currentRole !== 'outlet_manager' && currentRole !== 'owner')) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-stone-50 p-4 font-sans">
+        <div className="bg-white p-6 sm:p-8 rounded-2xl border border-stone-200 shadow-sm max-w-sm w-full text-center space-y-4">
+          <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-800 flex items-center justify-center mx-auto border border-amber-200/60">
+            <Lock className="w-6 h-6" />
+          </div>
+          <div>
+            <h3 className="font-extrabold text-stone-900 text-base">Outlet Manager Access Required</h3>
+            <p className="text-xs text-stone-500 mt-1 leading-relaxed">
+              This dashboard is restricted to authorized Outlet Managers and Kitchen Owners only.
+            </p>
+          </div>
+          <div className="pt-2 flex flex-col gap-2">
+            <button
+              type="button"
+              onClick={goToOwnerLogin}
+              className="w-full py-2.5 bg-amber-800 hover:bg-amber-900 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer shadow-xs"
+            >
+              Sign In as Manager
+            </button>
+            <button
+              type="button"
+              onClick={goToHome}
+              className="w-full py-2 bg-stone-100 hover:bg-stone-200 text-stone-700 text-xs font-semibold rounded-xl transition-colors cursor-pointer"
+            >
+              Return to Storefront
+            </button>
+          </div>
         </div>
       </div>
     );

@@ -31,15 +31,16 @@ export const OwnerLoginPage: React.FC = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // If already authenticated and not loading, redirect to dashboard based on role
+  // If already authenticated and not loading, redirect to dashboard based on verified staff role
   useEffect(() => {
     if (!isLoading && isAuthenticated) {
       const role = ownerUser?.role || profile?.role;
       if (role === 'outlet_manager') {
         goToManagerDashboard();
-      } else {
+      } else if (role === 'owner') {
         goToOwnerDashboard();
       }
+      // Customer accounts stay on login page or see notice; never redirected to owner portals
     }
   }, [isAuthenticated, isLoading, ownerUser, profile, goToOwnerDashboard, goToManagerDashboard]);
 
@@ -56,10 +57,13 @@ export const OwnerLoginPage: React.FC = () => {
     try {
       const result = await login(email.trim(), password, selectedRole);
       if (result.success) {
-        if (selectedRole === 'outlet_manager') {
+        const verifiedRole = ownerUser?.role || profile?.role || selectedRole;
+        if (verifiedRole === 'outlet_manager') {
           goToManagerDashboard();
-        } else {
+        } else if (verifiedRole === 'owner') {
           goToOwnerDashboard();
+        } else {
+          setErrorMessage('Access Denied: Customer accounts are not authorized to enter the staff portal.');
         }
       } else {
         setErrorMessage(result.error || 'Invalid credentials. Please verify your Supabase email and password.');

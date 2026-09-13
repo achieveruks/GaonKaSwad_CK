@@ -22,6 +22,7 @@ import {
   SwadCoinTransaction,
   SwadCoinRewardStatus,
   SwadCoinTransactionType,
+  SwadCoinDispatch,
 } from '../src/types';
 
 /**
@@ -150,6 +151,7 @@ const COUPON_REDEMPTIONS_FILE = path.join(DATA_DIR, 'coupon_redemptions_store.js
 const PRODUCT_REVIEWS_FILE = path.join(DATA_DIR, 'product_reviews_store.json');
 const SWAD_COIN_REWARDS_FILE = path.join(DATA_DIR, 'swad_coin_rewards_store.json');
 const SWAD_COIN_TRANSACTIONS_FILE = path.join(DATA_DIR, 'swad_coin_transactions_store.json');
+const SWAD_COIN_DISPATCH_FILE = path.join(DATA_DIR, 'swad_coin_dispatch_store.json');
 
 /**
  * Weighted probability distribution for daily reward generation:
@@ -224,6 +226,7 @@ class AppStorage {
   private productReviews: ProductReview[] = [];
   private swadCoinRewards: SwadCoinReward[] = [];
   private swadCoinTransactions: SwadCoinTransaction[] = [];
+  private swadCoinDispatches: SwadCoinDispatch[] = [];
   private isInitialized = false;
 
   constructor() {
@@ -249,6 +252,7 @@ class AppStorage {
     // Initialize Swad Coins & Transactions
     this.swadCoinRewards = safeReadJson<SwadCoinReward[]>(SWAD_COIN_REWARDS_FILE, []);
     this.swadCoinTransactions = safeReadJson<SwadCoinTransaction[]>(SWAD_COIN_TRANSACTIONS_FILE, []);
+    this.swadCoinDispatches = safeReadJson<SwadCoinDispatch[]>(SWAD_COIN_DISPATCH_FILE, []);
 
     this.isInitialized = true;
   }
@@ -1372,46 +1376,87 @@ class AppStorage {
     return newOrder;
   }
 
+  public upsertOrder(orderData: any): Order {
+    this.init();
+    const id = String(orderData.orderId || orderData.order_id || orderData.order_number || orderData.id || '').trim();
+    const index = this.orders.findIndex(
+      (o) => o.orderId === id || o.id === id || (o as any).order_number === id
+    );
+
+    const now = new Date().toISOString();
+    const formattedOrder: any = {
+      ...orderData,
+      id: orderData.id || orderData.orderId || id,
+      orderId: orderData.orderId || orderData.order_number || orderData.id || id,
+      orderStatus: (orderData.orderStatus || orderData.order_status || orderData.status || 'received').toLowerCase().trim(),
+      status: (orderData.status || orderData.orderStatus || orderData.order_status || 'received').toLowerCase().trim(),
+      updatedAt: orderData.updatedAt || orderData.updated_at || now,
+    };
+
+    if (index !== -1) {
+      this.orders[index] = {
+        ...this.orders[index],
+        ...formattedOrder,
+      };
+      this.saveOrders();
+      return this.orders[index];
+    } else {
+      this.orders.unshift(formattedOrder);
+      this.saveOrders();
+      return formattedOrder;
+    }
+  }
+
   public updateOrderStatus(
     orderId: string,
     status: Order['status'],
     cancellationReason?: string
   ): Order | null {
     this.init();
-    const order = this.getOrderById(orderId);
-    if (!order) return null;
+    const cleanId = String(orderId || '').trim();
+    if (!cleanId) return null;
+
+    // Locate the exact object in the in-memory array to mutate directly
+    const targetOrder = this.orders.find(
+      (o) => o.orderId === cleanId || o.id === cleanId || (o as any).order_number === cleanId
+    );
+    if (!targetOrder) return null;
 
     const now = new Date().toISOString();
-    order.status = status;
+    targetOrder.status = status;
+    targetOrder.updatedAt = now;
     const normalized = (status || '').toLowerCase().trim();
 
     if (normalized === 'received') {
-      order.orderStatus = 'received';
+      targetOrder.orderStatus = 'received';
     } else if (normalized === 'confirmed') {
-      order.orderStatus = 'confirmed';
-      if (!order.confirmedAt) order.confirmedAt = now;
+      targetOrder.orderStatus = 'confirmed';
+      if (!targetOrder.confirmedAt) targetOrder.confirmedAt = now;
     } else if (normalized === 'preparing' || normalized === 'in kitchen' || normalized === 'preparing in kitchen') {
-      order.orderStatus = 'preparing';
-      if (!order.preparingAt) order.preparingAt = now;
+      targetOrder.orderStatus = 'preparing';
+      if (!targetOrder.preparingAt) targetOrder.preparingAt = now;
     } else if (normalized === 'ready' || normalized === 'ready for pickup') {
-      order.orderStatus = 'ready';
-      if (!order.readyAt) order.readyAt = now;
+      targetOrder.orderStatus = 'ready';
+      if (!targetOrder.readyAt) targetOrder.readyAt = now;
     } else if (normalized === 'out_for_delivery' || normalized === 'out for delivery') {
-      order.orderStatus = 'out_for_delivery';
-      if (!order.outForDeliveryAt) order.outForDeliveryAt = now;
+      targetOrder.orderStatus = 'out_for_delivery';
+      if (!targetOrder.outForDeliveryAt) targetOrder.outForDeliveryAt = now;
     } else if (normalized === 'delivered' || normalized === 'picked up') {
-      order.orderStatus = 'delivered';
-      if (!order.deliveredAt) order.deliveredAt = now;
+      targetOrder.orderStatus = 'delivered';
+      if (!targetOrder.deliveredAt) targetOrder.deliveredAt = now;
     } else if (normalized === 'cancelled') {
-      order.orderStatus = 'cancelled';
-      order.cancelledAt = now;
+      targetOrder.orderStatus = 'cancelled';
+      targetOrder.cancelledAt = now;
       if (cancellationReason) {
-        order.cancellationReason = cancellationReason;
+        targetOrder.cancellationReason = cancellationReason;
       }
     }
 
     this.saveOrders();
-    return order;
+    return {
+      ...targetOrder,
+      items: Array.isArray(targetOrder.items) ? targetOrder.items.map(deserializeOrderItem) : [],
+    };
   }
 
   public deleteOrder(orderId: string): boolean {
@@ -1432,8 +1477,8 @@ class AppStorage {
   public findCustomerByPhone(rawPhone?: string): Customer | undefined {
     this.init();
     const norm = normalizePhone(rawPhone);
-    if (!norm) return undefined;
-    return this.customers.find((c) => normalizePhone(c.phone) === norm);
+    if (!norm || norm.length !== 10) return undefined;
+    return this.customers.find((c) => normalizePhone(c.phone) === norm && c.id !== c.phone);
   }
 
   public findCustomerById(id: string): Customer | undefined {
@@ -1575,24 +1620,12 @@ class AppStorage {
     const balance = Math.max(0, Math.floor(newBalance));
     let customer = this.customers.find((c) => c.id === customerIdOrPhone || (norm && normalizePhone(c.phone) === norm));
     if (!customer) {
-      customer = {
-        id: customerIdOrPhone,
-        phone: norm || customerIdOrPhone,
-        fullName: 'Customer',
-        isActive: true,
-        marketingConsent: true,
-        welcomeDiscountUsed: false,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        swadCoinBalance: balance,
-        swad_coin_balance: balance,
-      };
-      this.customers.push(customer);
-    } else {
-      customer.swadCoinBalance = balance;
-      customer.swad_coin_balance = balance;
-      customer.updatedAt = new Date().toISOString();
+      // Never auto-create phantom customer records with dummy 'Customer' name
+      return null;
     }
+    customer.swadCoinBalance = balance;
+    customer.swad_coin_balance = balance;
+    customer.updatedAt = new Date().toISOString();
     this.saveCustomers();
     return customer;
   }
@@ -2026,17 +2059,55 @@ class AppStorage {
     const createdRewards: SwadCoinReward[] = [];
 
     // Combine storage orders with external orders (e.g. from Supabase)
-    const combinedOrders: any[] = [...this.orders];
+    const combinedOrdersMap = new Map<string, any>();
+
+    // 1. Seed with current in-memory orders
+    for (const ord of this.orders) {
+      const key = String(ord.orderId || (ord as any).order_number || ord.id || '').trim();
+      if (key) {
+        combinedOrdersMap.set(key, ord);
+      }
+    }
+
+    // 2. Merge freshly queried external delivered orders from Supabase
     if (Array.isArray(externalDeliveredOrders)) {
       for (const ext of externalDeliveredOrders) {
-        const extId = ext.orderId || ext.order_id || ext.order_number || ext.id;
-        if (extId && !combinedOrders.some((o) => (o.orderId || o.id) === extId)) {
-          combinedOrders.push(ext);
+        const extKey = String(ext.order_id || ext.orderId || ext.order_number || ext.id || '').trim();
+        if (!extKey) continue;
+
+        const existing = combinedOrdersMap.get(extKey);
+        if (existing) {
+          // Source-of-truth status from delivered query
+          const updatedStatus = String(ext.order_status || ext.orderStatus || ext.status || existing.orderStatus || 'delivered').toLowerCase().trim();
+          const merged = {
+            ...existing,
+            ...ext,
+            orderStatus: updatedStatus,
+            status: updatedStatus,
+            deliveredAt: ext.delivered_at || existing.deliveredAt || new Date().toISOString(),
+          };
+          combinedOrdersMap.set(extKey, merged);
+
+          // Immediately sync in-memory order object in this.orders
+          const memIdx = this.orders.findIndex(
+            (o) => String(o.orderId || (o as any).order_number || o.id || '').trim() === extKey
+          );
+          if (memIdx !== -1) {
+            this.orders[memIdx].status = updatedStatus as any;
+            this.orders[memIdx].orderStatus = updatedStatus;
+            if (merged.deliveredAt && !this.orders[memIdx].deliveredAt) {
+              this.orders[memIdx].deliveredAt = merged.deliveredAt;
+            }
+          }
+        } else {
+          // Brand new order from Supabase not yet in local storage
+          combinedOrdersMap.set(extKey, ext);
+          this.upsertOrder(ext);
         }
       }
     }
 
-    const eligibleOrders = combinedOrders.filter((o) => {
+    const eligibleOrders = Array.from(combinedOrdersMap.values()).filter((o) => {
       const rawStatus = String(o.orderStatus || o.order_status || o.status || '').toLowerCase().trim();
       const isDelivered = rawStatus === 'delivered' || rawStatus === 'picked_up' || rawStatus === 'picked up';
       const isCancelled = rawStatus === 'cancelled';
@@ -2122,6 +2193,51 @@ class AppStorage {
       failed,
       rewards: createdRewards,
     };
+  }
+
+  private saveSwadCoinDispatches() {
+    try {
+      if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+      fs.writeFileSync(SWAD_COIN_DISPATCH_FILE, JSON.stringify(this.swadCoinDispatches, null, 2), 'utf-8');
+    } catch (e) {
+      console.warn('Warning: Could not save swad coin dispatches to disk.', e);
+    }
+  }
+
+  public recordSwadCoinDispatch(entry: Omit<SwadCoinDispatch, 'id' | 'runAt'> & { id?: string; runAt?: string }): SwadCoinDispatch {
+    this.init();
+    const dispatchRecord: SwadCoinDispatch = {
+      id: entry.id || `disp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+      runAt: entry.runAt || new Date().toISOString(),
+      run_at: entry.runAt || new Date().toISOString(),
+      runType: entry.runType || 'MANUAL',
+      run_type: entry.runType || 'MANUAL',
+      ordersProcessed: Math.max(0, Number(entry.ordersProcessed || 0)),
+      orders_processed: Math.max(0, Number(entry.ordersProcessed || 0)),
+      ordersScanned: Math.max(0, Number(entry.ordersScanned || 0)),
+      orders_scanned: Math.max(0, Number(entry.ordersScanned || 0)),
+      ordersSkipped: Math.max(0, Number(entry.ordersSkipped || 0)),
+      orders_skipped: Math.max(0, Number(entry.ordersSkipped || 0)),
+      coinsIssued: Math.max(0, Number(entry.coinsIssued || 0)),
+      coins_issued: Math.max(0, Number(entry.coinsIssued || 0)),
+      syncedCount: Math.max(0, Number(entry.syncedCount || 0)),
+      synced_count: Math.max(0, Number(entry.syncedCount || 0)),
+      orderIds: Array.isArray(entry.orderIds) ? entry.orderIds : [],
+      order_ids: Array.isArray(entry.orderIds) ? entry.orderIds : [],
+      status: entry.status || 'SUCCESS',
+      notes: entry.notes || '',
+    };
+
+    this.swadCoinDispatches.unshift(dispatchRecord);
+    this.saveSwadCoinDispatches();
+    return dispatchRecord;
+  }
+
+  public getSwadCoinDispatches(): SwadCoinDispatch[] {
+    this.init();
+    return [...this.swadCoinDispatches].sort(
+      (a, b) => new Date(b.runAt || (b as any).run_at || 0).getTime() - new Date(a.runAt || (a as any).run_at || 0).getTime()
+    );
   }
 
   // =====================

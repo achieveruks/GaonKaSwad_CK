@@ -56,8 +56,8 @@ export const OtpModal: React.FC<OtpModalProps> = ({
     if (isModalOpen) {
       const cleanPhone = (modalPhone || '').replace(/\D/g, '').slice(-10);
       setPhone(cleanPhone);
-      setFullName(context.customer?.fullName || '');
-      setEmail(context.customer?.email || '');
+      setFullName(context.otpModalExtraData?.fullName || context.customer?.fullName || '');
+      setEmail(context.otpModalExtraData?.email || context.customer?.email || '');
       setOtp(['', '', '', '', '', '']);
       setError(null);
       setInfoNotice(null);

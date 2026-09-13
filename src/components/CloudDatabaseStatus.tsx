@@ -286,8 +286,23 @@ CREATE TABLE IF NOT EXISTS public.swad_coin_transactions (
   created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS public.swad_coins_dispatch (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  run_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  run_type VARCHAR(20) NOT NULL DEFAULT 'MANUAL',
+  orders_processed INTEGER NOT NULL DEFAULT 0,
+  orders_scanned INTEGER NOT NULL DEFAULT 0,
+  orders_skipped INTEGER NOT NULL DEFAULT 0,
+  coins_issued INTEGER NOT NULL DEFAULT 0,
+  synced_count INTEGER NOT NULL DEFAULT 0,
+  order_ids JSONB DEFAULT '[]'::jsonb,
+  status VARCHAR(20) NOT NULL DEFAULT 'SUCCESS',
+  notes TEXT
+);
+
 ALTER TABLE public.swad_coin_rewards DISABLE ROW LEVEL SECURITY;
-ALTER TABLE public.swad_coin_transactions DISABLE ROW LEVEL SECURITY;`;
+ALTER TABLE public.swad_coin_transactions DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.swad_coins_dispatch DISABLE ROW LEVEL SECURITY;`;
 
   const copyToClipboard = () => {
     navigator.clipboard.writeText(sqlCode);

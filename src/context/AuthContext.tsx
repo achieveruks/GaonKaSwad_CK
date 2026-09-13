@@ -168,18 +168,64 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Fetch Profile from public.profiles table
       let prof = await fetchCurrentProfile();
       const isAchiever = cleanEmail === 'achieveruks@gmail.com';
-      const role: UserRole = prof?.role || (isAchiever ? 'owner' : 'customer');
+      let role: UserRole = prof?.role || (isAchiever ? 'owner' : 'customer');
 
-      // If expectedRole was selected on the login page, verify authorization
-      if (expectedRole && expectedRole !== role && !isAchiever) {
-        // If they requested 'owner' but are only manager or customer
-        if (expectedRole === 'owner' && role !== 'owner') {
-          await supabase.auth.signOut();
-          return {
-            success: false,
-            error: `Access Denied: This account is registered as "${role}", not "owner". Please contact your administrator.`,
-          };
+      // Auto-heal / fallback: If profile was missing or defaulted to customer for manager emails
+      if (role === 'customer' && (cleanEmail.startsWith('manager.') || cleanEmail.includes('manager')) && cleanEmail.endsWith('@gaonkaswad.in')) {
+        try {
+          let derivedOutletId: string | null = null;
+          if (cleanEmail.includes('hsr')) derivedOutletId = 'blr-hsr';
+          else if (cleanEmail.includes('kadabeesan')) derivedOutletId = 'blr-kadabeesanhalli';
+          else if (cleanEmail.includes('kvbbsr') || cleanEmail.includes('kendriya')) derivedOutletId = 'bbsr-kendriyavihar';
+          else if (cleanEmail.includes('indiranagar')) derivedOutletId = 'blr-indiranagar';
+          else if (cleanEmail.includes('whitefield')) derivedOutletId = 'blr-whitefield';
+          else if (cleanEmail.includes('patia')) derivedOutletId = 'bbsr-patia';
+          else if (cleanEmail.includes('khandagiri')) derivedOutletId = 'bbsr-khandagiri';
+
+          await supabase
+            .from('profiles')
+            .update({
+              role: 'outlet_manager',
+              outlet_id: derivedOutletId,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', data.user.id);
+
+          prof = await fetchCurrentProfile();
+          if (prof?.role) {
+            role = prof.role;
+          }
+        } catch (healErr) {
+          console.warn('Auto-heal manager profile warning:', healErr);
         }
+      }
+
+      // STRICT ROLE VERIFICATION FOR /#/owner/login
+      // 1. Customer accounts can NEVER log into the staff/owner portal
+      if (role === 'customer' && !isAchiever) {
+        await supabase.auth.signOut();
+        return {
+          success: false,
+          error: 'Access Denied: This account has role "customer". Customer accounts cannot log in to the Owner & Manager portal. Please contact the administrator.',
+        };
+      }
+
+      // 2. If Outlet Manager role is expected, verify that the user is an outlet manager or owner
+      if (expectedRole === 'outlet_manager' && role !== 'outlet_manager' && role !== 'owner' && !isAchiever) {
+        await supabase.auth.signOut();
+        return {
+          success: false,
+          error: `Access Denied: This account is registered with role "${role}", not "outlet_manager". Outlet Manager privileges required.`,
+        };
+      }
+
+      // 3. If Owner role is expected, verify that the user is an owner
+      if (expectedRole === 'owner' && role !== 'owner' && !isAchiever) {
+        await supabase.auth.signOut();
+        return {
+          success: false,
+          error: `Access Denied: This account is registered with role "${role}", not "owner". Store Owner privileges required.`,
+        };
       }
 
       setToken(data.session.access_token);

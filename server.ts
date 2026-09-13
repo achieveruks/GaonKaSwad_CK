@@ -212,12 +212,17 @@ async function startServer() {
 
       // Check in Supabase first
       let exists = false;
+      let checkedSupabase = false;
       try {
-        const { data: supaCustomer } = await serverSupabase
+        const { data: supaCustomer, error: supaErr } = await serverSupabase
           .from('customers')
           .select('id, phone, full_name')
           .eq('phone', normPhone)
           .maybeSingle();
+
+        if (!supaErr) {
+          checkedSupabase = true;
+        }
 
         if (supaCustomer) {
           exists = true;
@@ -226,7 +231,7 @@ async function startServer() {
         console.warn('Supabase customer check error:', err);
       }
 
-      if (!exists) {
+      if (!exists && !checkedSupabase) {
         const memoryCustomer = productStorage.findCustomerByPhone(normPhone);
         if (memoryCustomer) exists = true;
       }
@@ -416,12 +421,17 @@ async function startServer() {
       }
 
       // Try Supabase first
+      let checkedSupabase = false;
       try {
-        const { data: supaCust } = await serverSupabase
+        const { data: supaCust, error: supaErr } = await serverSupabase
           .from('customers')
           .select('*')
           .eq('phone', normPhone)
           .maybeSingle();
+
+        if (!supaErr) {
+          checkedSupabase = true;
+        }
 
         if (supaCust) {
           const { data: addrRow } = await serverSupabase
@@ -463,6 +473,18 @@ async function startServer() {
         }
       } catch (err) {
         console.warn('Supabase customer lookup error:', err);
+      }
+
+      // If Supabase was checked and the customer does not exist in the database,
+      // return exists: false directly. Do not fall back to local test files.
+      if (checkedSupabase) {
+        return res.json({
+          success: true,
+          exists: false,
+          customer: null,
+          defaultAddress: null,
+          welcomeDiscountEligible: true,
+        });
       }
 
       const customer = productStorage.findCustomerByPhone(normPhone);
@@ -2295,11 +2317,11 @@ async function startServer() {
         balance = Math.max(0, localBalance);
       }
 
-      // Synchronize in-memory store under phone and customerId to match authoritative balance
-      if (rawPhone) productStorage.setCustomerSwadCoinBalance(rawPhone, balance);
-      if (supaCust?.phone) productStorage.setCustomerSwadCoinBalance(supaCust.phone, balance);
-      if (customerId) productStorage.setCustomerSwadCoinBalance(customerId, balance);
-      if (supaCust?.id) productStorage.setCustomerSwadCoinBalance(supaCust.id, balance);
+      // Synchronize in-memory store under phone and customerId only if customer exists in Supabase
+      if (supaCust) {
+        if (supaCust.phone) productStorage.setCustomerSwadCoinBalance(supaCust.phone, balance);
+        if (supaCust.id) productStorage.setCustomerSwadCoinBalance(supaCust.id, balance);
+      }
 
       return res.json({ success: true, balance });
     } catch (err: any) {
@@ -3019,129 +3041,256 @@ async function startServer() {
     }
   });
 
-  // 8. Admin/Cron: Trigger Daily Reward Generation (Protected)
-  app.post('/api/admin/swad-coins/generate-rewards', requireOwnerAuth, async (req: AuthenticatedRequest, res) => {
+  // Helper to run daily rewards and conditionally log to swad_coins_dispatch
+  async function executeSwadCoinDailyRewards(runType: 'MANUAL' | 'SCHEDULED' = 'MANUAL') {
+    let supaOrders: any[] = [];
     try {
-      let supaOrders: any[] = [];
-      try {
-        const { data } = await serverSupabase
-          .from('orders')
-          .select('*')
-          .in('order_status', ['delivered', 'picked_up']);
-        if (data) supaOrders = data;
-      } catch (e) {
-        console.warn('Supabase fetch note in generate-rewards endpoint:', e);
-      }
+      const { data } = await serverSupabase
+        .from('orders')
+        .select('*')
+        .in('order_status', ['delivered', 'picked_up']);
+      if (data) supaOrders = data;
+    } catch (e) {
+      console.warn('Supabase fetch note in executeSwadCoinDailyRewards:', e);
+    }
 
-      const summary = productStorage.generateDailySwadCoinRewards(supaOrders);
+    const summary = productStorage.generateDailySwadCoinRewards(supaOrders);
 
-      // Synchronize all pending/active rewards from local storage to Supabase swad_coin_rewards
-      let syncedToSupabase = 0;
-      let alreadyInSupabase = 0;
-      let rlsBlocked = false;
-      const syncErrors: string[] = [];
+    // Synchronize all pending/active rewards from local storage to Supabase swad_coin_rewards
+    let syncedToSupabase = 0;
+    let alreadyInSupabase = 0;
+    let rlsBlocked = false;
+    const syncErrors: string[] = [];
+    const rewardedOrderIdsInBatch: string[] = [];
+    let coinsIssuedInBatch = 0;
 
-      try {
-        const allRewards = productStorage.getAllSwadCoinRewards();
-        const [{ data: existingRewards }, { data: supaCusts }] = await Promise.all([
-          serverSupabase.from('swad_coin_rewards').select('order_id, id'),
-          serverSupabase.from('customers').select('id, phone'),
-        ]);
+    try {
+      const allRewards = productStorage.getAllSwadCoinRewards();
+      const [{ data: existingRewards }, { data: supaCusts }] = await Promise.all([
+        serverSupabase.from('swad_coin_rewards').select('order_id, id'),
+        serverSupabase.from('customers').select('id, phone'),
+      ]);
 
-        const existingOrderIds = new Set((existingRewards || []).map((r: any) => r.order_id));
-        const customersList = supaCusts || [];
+      const existingOrderIds = new Set((existingRewards || []).map((r: any) => r.order_id));
+      const customersList = supaCusts || [];
 
-        for (const reward of allRewards) {
-          const orderId = reward.orderId;
-          if (!orderId) continue;
+      for (const reward of allRewards) {
+        const orderId = reward.orderId;
+        if (!orderId) continue;
 
-          if (existingOrderIds.has(orderId)) {
-            alreadyInSupabase++;
-            continue;
-          }
+        if (existingOrderIds.has(orderId)) {
+          alreadyInSupabase++;
+          continue;
+        }
 
-          // Resolve customer UUID in Supabase
-          let customerIdUuid: string | null = null;
-          const ord = supaOrders.find((o: any) => o.order_number === orderId || o.order_id === orderId || o.id === orderId);
-          if (ord?.customer_id && ord.customer_id.length > 20) {
-            customerIdUuid = ord.customer_id;
-          } else if (ord?.customer_phone) {
-            const norm = normalizePhone(ord.customer_phone);
+        // Resolve customer UUID in Supabase
+        let customerIdUuid: string | null = null;
+        const ord = supaOrders.find((o: any) => o.order_number === orderId || o.order_id === orderId || o.id === orderId);
+        if (ord?.customer_id && ord.customer_id.length > 20) {
+          customerIdUuid = ord.customer_id;
+        } else if (ord?.customer_phone) {
+          const norm = normalizePhone(ord.customer_phone);
+          const foundCust = customersList.find((c: any) => normalizePhone(c.phone) === norm);
+          if (foundCust?.id) customerIdUuid = foundCust.id;
+        }
+
+        if (!customerIdUuid) {
+          const storageCust = productStorage.getAllCustomersWithCoins().find((c) => c.id === reward.customerId);
+          if (storageCust?.phone) {
+            const norm = normalizePhone(storageCust.phone);
             const foundCust = customersList.find((c: any) => normalizePhone(c.phone) === norm);
             if (foundCust?.id) customerIdUuid = foundCust.id;
           }
-
-          if (!customerIdUuid) {
-            const storageCust = productStorage.getAllCustomersWithCoins().find((c) => c.id === reward.customerId);
-            if (storageCust?.phone) {
-              const norm = normalizePhone(storageCust.phone);
-              const foundCust = customersList.find((c: any) => normalizePhone(c.phone) === norm);
-              if (foundCust?.id) customerIdUuid = foundCust.id;
-            }
-          }
-
-          if (!customerIdUuid && customersList.length > 0) {
-            customerIdUuid = customersList[0].id;
-          }
-
-          if (!customerIdUuid) {
-            syncErrors.push(`Order ${orderId}: No customer UUID found in Supabase`);
-            continue;
-          }
-
-          const { error: insertErr } = await serverSupabase
-            .from('swad_coin_rewards')
-            .insert({
-              customer_id: customerIdUuid,
-              order_id: orderId,
-              eligible_order_value: Number(reward.eligibleOrderValue || 0),
-              reward_percentage: Number(reward.rewardPercentage || 1.0),
-              coin_amount: Number(reward.coinAmount || 5),
-              status: reward.status || 'PENDING',
-              expires_at: reward.expiresAt,
-              created_at: reward.createdAt || new Date().toISOString(),
-              updated_at: reward.updatedAt || new Date().toISOString(),
-            });
-
-          if (insertErr) {
-            if (insertErr.code === '42501' || insertErr.message?.includes('row-level security')) {
-              rlsBlocked = true;
-            }
-            syncErrors.push(`Order ${orderId}: ${insertErr.message}`);
-          } else {
-            syncedToSupabase++;
-            existingOrderIds.add(orderId);
-          }
         }
-      } catch (syncErr: any) {
-        console.warn('Sync to Supabase swad_coin_rewards note:', syncErr.message);
+
+        if (!customerIdUuid && customersList.length > 0) {
+          customerIdUuid = customersList[0].id;
+        }
+
+        if (!customerIdUuid) {
+          syncErrors.push(`Order ${orderId}: No customer UUID found in Supabase`);
+          continue;
+        }
+
+        const { error: insertErr } = await serverSupabase
+          .from('swad_coin_rewards')
+          .insert({
+            customer_id: customerIdUuid,
+            order_id: orderId,
+            eligible_order_value: Number(reward.eligibleOrderValue || 0),
+            reward_percentage: Number(reward.rewardPercentage || 1.0),
+            coin_amount: Number(reward.coinAmount || 5),
+            status: reward.status || 'PENDING',
+            expires_at: reward.expiresAt,
+            created_at: reward.createdAt || new Date().toISOString(),
+            updated_at: reward.updatedAt || new Date().toISOString(),
+          });
+
+        if (insertErr) {
+          if (insertErr.code === '42501' || insertErr.message?.includes('row-level security')) {
+            rlsBlocked = true;
+          }
+          syncErrors.push(`Order ${orderId}: ${insertErr.message}`);
+        } else {
+          syncedToSupabase++;
+          existingOrderIds.add(orderId);
+          rewardedOrderIdsInBatch.push(orderId);
+          coinsIssuedInBatch += Number(reward.coinAmount || 5);
+        }
+      }
+    } catch (syncErr: any) {
+      console.warn('Sync to Supabase swad_coin_rewards note:', syncErr.message);
+    }
+
+    // Condition: If syncedToSupabase > 0, record a dispatch entry in swad_coins_dispatch
+    let recordedDispatch: any = null;
+    if (syncedToSupabase > 0) {
+      const dispatchPayload = {
+        run_type: runType,
+        orders_processed: rewardedOrderIdsInBatch.length,
+        orders_scanned: summary.totalEligible,
+        orders_skipped: summary.skippedAlreadyRewarded,
+        coins_issued: coinsIssuedInBatch,
+        synced_count: syncedToSupabase,
+        order_ids: rewardedOrderIdsInBatch,
+        status: syncErrors.length > 0 ? 'PARTIAL' : 'SUCCESS',
+        notes: `${runType === 'MANUAL' ? 'Manual run triggered by Owner' : 'Automated 04:00 AM cron run'}. ${syncedToSupabase} order rewards written to Supabase.${syncErrors.length > 0 ? ` Encountered ${syncErrors.length} sync issue(s).` : ''}`,
+      };
+
+      // 1. Try Supabase cloud table insert
+      try {
+        const { data: supaDispatch, error: dispErr } = await serverSupabase
+          .from('swad_coins_dispatch')
+          .insert(dispatchPayload)
+          .select()
+          .maybeSingle();
+
+        if (!dispErr && supaDispatch) {
+          recordedDispatch = supaDispatch;
+        } else if (dispErr) {
+          console.warn('Could not insert to cloud swad_coins_dispatch table:', dispErr.message);
+        }
+      } catch (err: any) {
+        console.warn('Error inserting to Supabase swad_coins_dispatch:', err.message);
       }
 
-      let message = `Daily rewards processed: ${summary.created} new generated, ${summary.skippedAlreadyRewarded} skipped (already rewarded).`;
-      if (syncedToSupabase > 0) {
-        message += ` ${syncedToSupabase} reward row(s) successfully written to Supabase swad_coin_rewards.`;
+      // 2. Always persist into local storage backup for resilient local audits
+      try {
+        recordedDispatch = productStorage.recordSwadCoinDispatch({
+          id: recordedDispatch?.id,
+          runAt: recordedDispatch?.run_at || new Date().toISOString(),
+          runType,
+          ordersProcessed: rewardedOrderIdsInBatch.length,
+          ordersScanned: summary.totalEligible,
+          ordersSkipped: summary.skippedAlreadyRewarded,
+          coinsIssued: coinsIssuedInBatch,
+          syncedCount: syncedToSupabase,
+          orderIds: rewardedOrderIdsInBatch,
+          status: syncErrors.length > 0 ? 'PARTIAL' : 'SUCCESS',
+          notes: dispatchPayload.notes,
+        });
+      } catch (err: any) {
+        console.warn('Error recording dispatch in local storage:', err);
       }
-      if (alreadyInSupabase > 0) {
-        message += ` (${alreadyInSupabase} already exist in Supabase).`;
-      }
-      if (rlsBlocked) {
-        message += ` ⚠️ Note: Row-Level Security (RLS) is active on Supabase swad_coin_rewards. Please disable RLS or add a public policy in Supabase SQL Editor.`;
-      }
+    }
 
-      return res.json({
-        success: true,
-        message,
-        summary: {
-          ...summary,
-          syncedToSupabase,
-          alreadyInSupabase,
-          rlsBlocked,
-          syncErrors: syncErrors.slice(0, 3),
-        },
-      });
+    let message = `Daily rewards processed: ${summary.created} new generated, ${summary.skippedAlreadyRewarded} skipped (already rewarded).`;
+    if (syncedToSupabase > 0) {
+      message += ` ${syncedToSupabase} reward row(s) successfully written to Supabase swad_coin_rewards.`;
+    }
+    if (alreadyInSupabase > 0) {
+      message += ` (${alreadyInSupabase} already exist in Supabase).`;
+    }
+    if (rlsBlocked) {
+      message += ` ⚠️ Note: Row-Level Security (RLS) is active on Supabase swad_coin_rewards. Please disable RLS or add a public policy in Supabase SQL Editor.`;
+    }
+
+    return {
+      success: true,
+      message,
+      summary: {
+        ...summary,
+        syncedToSupabase,
+        alreadyInSupabase,
+        rlsBlocked,
+        syncErrors: syncErrors.slice(0, 3),
+        coinsIssued: coinsIssuedInBatch,
+        rewardedOrderIds: rewardedOrderIdsInBatch,
+      },
+      dispatch: recordedDispatch,
+    };
+  }
+
+  // 8. Admin/Cron: Trigger Daily Reward Generation (Protected)
+  app.post('/api/admin/swad-coins/generate-rewards', requireOwnerAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      const result = await executeSwadCoinDailyRewards('MANUAL');
+      return res.json(result);
     } catch (err: any) {
       console.error('Generate rewards error:', err);
       return res.status(500).json({ success: false, error: 'Failed to generate rewards.' });
+    }
+  });
+
+  // 8b. Admin: Fetch Swad Coins Dispatch Audit History
+  app.get('/api/admin/swad-coins/dispatches', requireOwnerAuth, async (req: AuthenticatedRequest, res) => {
+    try {
+      let dispatches: any[] = [];
+
+      // 1. Try Supabase cloud table first (ordered newest first)
+      try {
+        const { data, error } = await serverSupabase
+          .from('swad_coins_dispatch')
+          .select('*')
+          .order('run_at', { ascending: false });
+
+        if (!error && Array.isArray(data) && data.length > 0) {
+          dispatches = data.map((d: any) => ({
+            id: d.id,
+            runAt: d.run_at,
+            run_at: d.run_at,
+            runType: d.run_type || 'MANUAL',
+            run_type: d.run_type || 'MANUAL',
+            ordersProcessed: Number(d.orders_processed || 0),
+            orders_processed: Number(d.orders_processed || 0),
+            ordersScanned: Number(d.orders_scanned || 0),
+            orders_scanned: Number(d.orders_scanned || 0),
+            ordersSkipped: Number(d.orders_skipped || 0),
+            orders_skipped: Number(d.orders_skipped || 0),
+            coinsIssued: Number(d.coins_issued || 0),
+            coins_issued: Number(d.coins_issued || 0),
+            syncedCount: Number(d.synced_count || 0),
+            synced_count: Number(d.synced_count || 0),
+            orderIds: Array.isArray(d.order_ids) ? d.order_ids : [],
+            order_ids: Array.isArray(d.order_ids) ? d.order_ids : [],
+            status: d.status || 'SUCCESS',
+            notes: d.notes || '',
+          }));
+        }
+      } catch (e) {
+        console.warn('Supabase swad_coins_dispatch fetch note:', e);
+      }
+
+      // 2. Merge with local storage dispatches to ensure zero loss
+      const localDispatches = productStorage.getSwadCoinDispatches();
+      for (const loc of localDispatches) {
+        if (!dispatches.some((d) => d.id === loc.id)) {
+          dispatches.push(loc);
+        }
+      }
+
+      // Sort by runAt descending
+      dispatches.sort(
+        (a, b) => new Date(b.runAt || b.run_at || 0).getTime() - new Date(a.runAt || a.run_at || 0).getTime()
+      );
+
+      return res.json({
+        success: true,
+        dispatches,
+      });
+    } catch (err: any) {
+      console.error('Fetch swad-coins dispatches error:', err);
+      return res.status(500).json({ success: false, error: 'Failed to fetch dispatch logs.' });
     }
   });
 
@@ -4054,12 +4203,40 @@ async function startServer() {
         return res.status(400).json({ success: false, error: 'Status is required' });
       }
 
-      const updated = productStorage.updateOrderStatus(req.params.orderId, status, cancellationReason);
+      const orderIdentifier = String(req.params.orderId || '').trim();
+      const now = new Date().toISOString();
+      const norm = (status || '').toLowerCase().trim();
 
-      // Sync status update & timestamps to Supabase
+      // 1. Immediately update in-memory storage array item
+      let updated = productStorage.updateOrderStatus(orderIdentifier, status, cancellationReason);
+
+      // If order is not yet present in in-memory storage, fetch from Supabase and upsert directly into in-memory array
+      if (!updated) {
+        try {
+          const { data: supaOrder } = await serverSupabase
+            .from('orders')
+            .select('*')
+            .or(`order_id.eq.${orderIdentifier},order_number.eq.${orderIdentifier},id.eq.${orderIdentifier}`)
+            .maybeSingle();
+
+          if (supaOrder) {
+            updated = productStorage.upsertOrder({
+              ...supaOrder,
+              status,
+              orderStatus: norm,
+              updatedAt: now,
+              deliveredAt: (norm === 'delivered' || norm === 'picked up') ? now : (supaOrder.delivered_at || undefined),
+              cancelledAt: norm === 'cancelled' ? now : undefined,
+              cancellationReason: norm === 'cancelled' ? cancellationReason : undefined,
+            });
+          }
+        } catch (fetchErr) {
+          console.warn('Supabase fetch for order upsert notice:', fetchErr);
+        }
+      }
+
+      // 2. Sync status update & corresponding transition timestamps to Supabase
       try {
-        const now = new Date().toISOString();
-        const norm = (status || '').toLowerCase().trim();
         const supaUpdate: any = {
           updated_at: now,
         };
@@ -4068,14 +4245,19 @@ async function startServer() {
           supaUpdate.order_status = 'received';
         } else if (norm === 'confirmed') {
           supaUpdate.order_status = 'confirmed';
+          supaUpdate.confirmed_at = now;
         } else if (norm === 'preparing' || norm === 'in kitchen' || norm === 'preparing in kitchen') {
           supaUpdate.order_status = 'preparing';
+          supaUpdate.preparing_at = now;
         } else if (norm === 'ready' || norm === 'ready for pickup' || norm === 'ready for dispatch') {
           supaUpdate.order_status = 'ready';
+          supaUpdate.ready_at = now;
         } else if (norm === 'out_for_delivery' || norm === 'out for delivery') {
           supaUpdate.order_status = 'out_for_delivery';
+          supaUpdate.out_for_delivery_at = now;
         } else if (norm === 'delivered' || norm === 'picked up') {
           supaUpdate.order_status = 'delivered';
+          supaUpdate.delivered_at = now;
         } else if (norm === 'cancelled') {
           supaUpdate.order_status = 'cancelled';
           supaUpdate.cancelled_at = now;
@@ -4084,7 +4266,7 @@ async function startServer() {
           }
           // Automatic Swad Coin refund on cancellation across Supabase & local storage
           try {
-            await refundOrderSwadCoins(req.params.orderId, cancellationReason || 'Order cancelled');
+            await refundOrderSwadCoins(orderIdentifier, cancellationReason || 'Order cancelled');
           } catch (refErr) {
             console.warn('Swad Coin refund warning on order cancel:', refErr);
           }
@@ -4095,7 +4277,7 @@ async function startServer() {
         await serverSupabase
           .from('orders')
           .update(supaUpdate)
-          .or(`order_id.eq.${req.params.orderId},id.eq.${req.params.orderId}`);
+          .or(`order_id.eq.${orderIdentifier},order_number.eq.${orderIdentifier},id.eq.${orderIdentifier}`);
       } catch (syncErr) {
         console.warn('Supabase order status sync notice:', syncErr);
       }
@@ -4977,27 +5159,24 @@ async function startServer() {
   }
 
   // --- Automated Scheduled Jobs ---
-  // Daily Swad Coin Reward Generation at 04:00 AM server time
-  cron.schedule('0 4 * * *', async () => {
-    console.log('[Swad Coins] Executing daily 04:00 AM reward generation job...');
-    try {
-      let supaOrders: any[] = [];
+  // Daily Swad Coin Reward Generation at 04:00 AM IST (Asia/Kolkata)
+  // Only runs automatically once per day at 4:00 AM IST. Never triggers automatically on individual orders.
+  // Admins can trigger reward generation manually at any time from the Admin Dashboard.
+  cron.schedule(
+    '0 4 * * *',
+    async () => {
+      console.log('[Swad Coins] Executing daily 04:00 AM IST reward generation job...');
       try {
-        const { data } = await serverSupabase
-          .from('orders')
-          .select('*')
-          .in('order_status', ['delivered', 'picked_up']);
-        if (data) supaOrders = data;
-      } catch (e) {
-        console.warn('[Swad Coins Cron] Supabase delivered orders fetch note:', e);
+        const cronResult = await executeSwadCoinDailyRewards('SCHEDULED');
+        console.log(`[Swad Coins] Daily scheduled job completed: ${cronResult.message}`);
+      } catch (cronErr) {
+        console.error('[Swad Coins] Error during daily reward cron execution:', cronErr);
       }
-
-      const summary = productStorage.generateDailySwadCoinRewards(supaOrders);
-      console.log(`[Swad Coins] Daily job completed: generated ${summary.created} rewards, skipped ${summary.skippedAlreadyRewarded} already rewarded.`);
-    } catch (cronErr) {
-      console.error('[Swad Coins] Error during daily reward cron execution:', cronErr);
+    },
+    {
+      timezone: 'Asia/Kolkata',
     }
-  });
+  );
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Gaon Ka Swad server running on http://localhost:${PORT}`);

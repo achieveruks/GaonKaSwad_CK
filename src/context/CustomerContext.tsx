@@ -20,11 +20,13 @@ interface CustomerContextType {
   isOtpModalOpen: boolean;
   otpModalPhone: string;
   otpModalMode: 'signin' | 'create_account' | 'verify_review' | 'direct_otp' | 'signin_otp';
+  otpModalExtraData?: { fullName?: string; email?: string };
   otpModalOnSuccess?: (customer: Customer | null, address: CustomerAddress | null) => void;
   openOtpModal: (
     phone: string,
     mode: 'signin' | 'create_account' | 'verify_review' | 'direct_otp' | 'signin_otp',
-    onSuccess?: (customer: Customer | null, address: CustomerAddress | null) => void
+    onSuccess?: (customer: Customer | null, address: CustomerAddress | null) => void,
+    extraData?: { fullName?: string; email?: string }
   ) => void;
   closeOtpModal: () => void;
   sendOtp: (phone: string) => Promise<{ success: boolean; exists: boolean; message?: string; error?: string }>;
@@ -149,6 +151,7 @@ export const CustomerProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const [isOtpModalOpen, setIsOtpModalOpen] = useState(false);
   const [otpModalPhone, setOtpModalPhone] = useState('');
   const [otpModalMode, setOtpModalMode] = useState<'signin' | 'create_account' | 'verify_review' | 'direct_otp' | 'signin_otp'>('signin');
+  const [otpModalExtraData, setOtpModalExtraData] = useState<{ fullName?: string; email?: string } | undefined>(undefined);
   const [otpModalCallback, setOtpModalCallback] = useState<
     ((cust: Customer | null, addr: CustomerAddress | null) => void) | undefined
   >(undefined);
@@ -422,16 +425,19 @@ export const CustomerProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const openOtpModal = (
     phone: string,
     mode: 'signin' | 'create_account' | 'verify_review' | 'direct_otp' | 'signin_otp',
-    onSuccess?: (cust: Customer | null, addr: CustomerAddress | null) => void
+    onSuccess?: (cust: Customer | null, addr: CustomerAddress | null) => void,
+    extraData?: { fullName?: string; email?: string }
   ) => {
     setOtpModalPhone(phone);
     setOtpModalMode(mode);
+    setOtpModalExtraData(extraData);
     setOtpModalCallback(() => onSuccess);
     setIsOtpModalOpen(true);
   };
 
   const closeOtpModal = () => {
     setIsOtpModalOpen(false);
+    setOtpModalExtraData(undefined);
     setOtpModalCallback(undefined);
   };
 
@@ -745,6 +751,7 @@ export const CustomerProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         isOtpModalOpen,
         otpModalPhone,
         otpModalMode,
+        otpModalExtraData,
         otpModalOnSuccess: otpModalCallback,
         openOtpModal,
         closeOtpModal,

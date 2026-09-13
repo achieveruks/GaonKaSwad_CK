@@ -146,6 +146,11 @@ const SCHEDULE_TIME_SLOTS: ScheduleTimeSlot[] = [
   },
 ];
 
+const isValidIndianPhone = (phone: string): boolean => {
+  const clean = (phone || '').replace(/\D/g, '');
+  return clean.length === 10 && /^[6-9]\d{9}$/.test(clean);
+};
+
 export const CheckoutPage: React.FC = () => {
   const {
     cart,
@@ -370,7 +375,8 @@ export const CheckoutPage: React.FC = () => {
   // Fetch verified Swad Coin balance whenever customer or phone changes
   useEffect(() => {
     let isMounted = true;
-    const phone = customer?.phone || formData.phone;
+    const cleanPhone = (formData.phone || '').replace(/\D/g, '').slice(0, 10);
+    const phone = customer?.phone || (isValidIndianPhone(cleanPhone) ? cleanPhone : '');
     const custId = customer?.id;
 
     if (!phone && !custId) {
@@ -709,38 +715,40 @@ export const CheckoutPage: React.FC = () => {
   }, [customer, defaultAddress, selectedAddressId]);
 
   // Dynamic Returning Customer Phone Lookup (Privacy-Preserving)
+  // Only checks database if mobile number is a valid 10-digit Indian number (starts with 6-9)
   useEffect(() => {
-    const cleanPhone = formData.phone.replace(/\D/g, '').slice(0, 10);
-    if (cleanPhone.length === 10 && !isCustomerLoggedIn) {
+    const cleanPhone = (formData.phone || '').replace(/\D/g, '').slice(0, 10);
+    const isValidIndian = isValidIndianPhone(cleanPhone);
+
+    if (isValidIndian && !isCustomerLoggedIn) {
       let isMounted = true;
       setIsLookingUpPhone(true);
-      lookupCustomer(cleanPhone).then((res) => {
-        if (!isMounted) return;
-        setIsLookingUpPhone(false);
-        if (res.exists) {
-          // Account exists on server: flag account presence without exposing PII (name, email, address)
-          setReturningCustomerFound({
-            phone: cleanPhone,
-          });
-        } else {
-          // If 10-digit mobile number is not found in server: treat as fresh guest user
-          setReturningCustomerFound(null);
-          setFormData((prev) => ({
-            ...prev,
-            fullName: '',
-            email: '',
-            address: '',
-            landmark: '',
-            pincode: '',
-            isPhoneVerified: false,
-            createAccount: false,
-          }));
-        }
-      });
+      lookupCustomer(cleanPhone)
+        .then((res) => {
+          if (!isMounted) return;
+          setIsLookingUpPhone(false);
+          if (res.exists) {
+            // Account exists on server: flag account presence without exposing PII (name, email, address)
+            setReturningCustomerFound({
+              phone: cleanPhone,
+            });
+          } else {
+            // If valid 10-digit Indian mobile number is not found on server: treat as fresh guest user
+            setReturningCustomerFound(null);
+          }
+        })
+        .catch((err) => {
+          console.warn('Error looking up customer phone:', err);
+          if (isMounted) {
+            setIsLookingUpPhone(false);
+            setReturningCustomerFound(null);
+          }
+        });
       return () => {
         isMounted = false;
       };
     } else {
+      setIsLookingUpPhone(false);
       setReturningCustomerFound(null);
     }
   }, [formData.phone, isCustomerLoggedIn]);
@@ -897,7 +905,56 @@ export const CheckoutPage: React.FC = () => {
       };
     }
 
-    // Check 3: Registered customer phone found on server but user is NOT authenticated yet
+    // Check 3: Active validation in progress
+    if (isLookingUpPhone) {
+      return {
+        canPlaceOrder: false,
+        reason: 'Verifying mobile number and checking customer account...',
+        buttonLabel: 'Verifying Phone...',
+        actionRequired: null,
+      };
+    }
+
+    if (isPinLookupLoading) {
+      return {
+        canPlaceOrder: false,
+        reason: 'Checking delivery zone serviceability, please wait...',
+        buttonLabel: 'Verifying Delivery Zone...',
+        actionRequired: null,
+      };
+    }
+
+    // Check 4: Contact Information must be set and valid
+    const cleanFullName = (formData.fullName || '').trim();
+    if (!cleanFullName || cleanFullName.length < 2 || !/[a-zA-Z]/.test(cleanFullName) || !/^[a-zA-Z\s.'-]+$/.test(cleanFullName)) {
+      return {
+        canPlaceOrder: false,
+        reason: 'Please enter your full name in Contact Information.',
+        buttonLabel: 'Enter Full Name to Proceed',
+        actionRequired: 'ENTER_NAME' as const,
+      };
+    }
+
+    const cleanPhoneDigits = (formData.phone || '').replace(/\D/g, '');
+    if (!cleanPhoneDigits || !isValidIndianPhone(cleanPhoneDigits)) {
+      return {
+        canPlaceOrder: false,
+        reason: 'Please enter a valid 10-digit Indian mobile number (starts with 6, 7, 8, or 9).',
+        buttonLabel: 'Enter Valid Mobile Number',
+        actionRequired: 'ENTER_PHONE' as const,
+      };
+    }
+
+    if (formData.email && formData.email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email.trim())) {
+      return {
+        canPlaceOrder: false,
+        reason: 'Please enter a valid email address.',
+        buttonLabel: 'Enter Valid Email',
+        actionRequired: 'ENTER_EMAIL' as const,
+      };
+    }
+
+    // Check 5: Registered customer phone found on server but user is NOT authenticated yet
     if (!isCustomerLoggedIn && returningCustomerFound !== null) {
       return {
         canPlaceOrder: false,
@@ -907,8 +964,18 @@ export const CheckoutPage: React.FC = () => {
       };
     }
 
-    // Check 4: Address being edited or newly added (Doorstep Delivery mode only)
+    // Check 6: Fulfillment & Delivery Details must be set and valid
     if (!isSelfPickup && orderType === 'delivery') {
+      const cleanAddress = (formData.address || '').trim();
+      if (!cleanAddress || cleanAddress.length < 5) {
+        return {
+          canPlaceOrder: false,
+          reason: 'Please enter your complete delivery address (minimum 5 characters).',
+          buttonLabel: 'Enter Delivery Address',
+          actionRequired: 'ENTER_ADDRESS' as const,
+        };
+      }
+
       if (isEditingSavedAddress) {
         return {
           canPlaceOrder: false,
@@ -926,11 +993,8 @@ export const CheckoutPage: React.FC = () => {
           actionRequired: 'SAVE_NEW_ADDRESS' as const,
         };
       }
-    }
 
-    // Check 5: Delivery Mode validations (Outlet cannot deliver outside its zone)
-    if (!isSelfPickup && orderType === 'delivery') {
-      // 5a. Incomplete PIN
+      // 6a. Incomplete PIN
       if (!isPinComplete) {
         return {
           canPlaceOrder: false,
@@ -940,7 +1004,7 @@ export const CheckoutPage: React.FC = () => {
         };
       }
 
-      // 5b. PIN is serviced by a DIFFERENT active outlet
+      // 6b. PIN is serviced by a DIFFERENT active outlet
       if (pinServiceability.status === 'SERVICED_BY_OTHER') {
         const altName = pinServiceability.altOutlet?.name || 'another kitchen';
         return {
@@ -951,7 +1015,7 @@ export const CheckoutPage: React.FC = () => {
         };
       }
 
-      // 5c. PIN is NOT serviced by ANY outlet (outside delivery coverage)
+      // 6c. PIN is NOT serviced by ANY outlet (outside delivery coverage)
       if (pinServiceability.status === 'NOT_SERVICED') {
         return {
           canPlaceOrder: false,
@@ -961,7 +1025,7 @@ export const CheckoutPage: React.FC = () => {
         };
       }
 
-      // 5d. Guarantee PIN is served by current outlet
+      // 6d. Guarantee PIN is served by current outlet
       if (pinServiceability.status !== 'SERVICED_BY_CURRENT') {
         return {
           canPlaceOrder: false,
@@ -984,6 +1048,12 @@ export const CheckoutPage: React.FC = () => {
   }, [
     cart.length,
     isSubmitting,
+    isLookingUpPhone,
+    isPinLookupLoading,
+    formData.fullName,
+    formData.phone,
+    formData.email,
+    formData.address,
     isCustomerLoggedIn,
     returningCustomerFound,
     isSelfPickup,
@@ -1291,25 +1361,33 @@ export const CheckoutPage: React.FC = () => {
     } catch (e) {
       console.warn('sendOtp failed:', e);
     }
-    openOtpModal(cleanPhone, 'direct_otp', (cust, addr) => {
-      if (cust) {
-        setFormData((prev) => ({
-          ...prev,
-          fullName: cust.fullName || prev.fullName,
-          email: cust.email || prev.email || '',
-          phone: cust.phone,
-          address: addr?.fullAddress || prev.address || '',
-          landmark: addr?.landmark || prev.landmark || '',
-          city: addr?.city || prev.city,
-          state: addr?.state || prev.state,
-          pincode: addr?.pincode || prev.pincode,
-          isPhoneVerified: true,
-          createAccount: false,
-        }));
-      } else {
-        setFormData((prev) => ({ ...prev, isPhoneVerified: true }));
+    openOtpModal(
+      cleanPhone,
+      'direct_otp',
+      (cust, addr) => {
+        if (cust) {
+          setFormData((prev) => ({
+            ...prev,
+            fullName: cust.fullName || prev.fullName,
+            email: cust.email || prev.email || '',
+            phone: cust.phone,
+            address: addr?.fullAddress || prev.address || '',
+            landmark: addr?.landmark || prev.landmark || '',
+            city: addr?.city || prev.city,
+            state: addr?.state || prev.state,
+            pincode: addr?.pincode || prev.pincode,
+            isPhoneVerified: true,
+            createAccount: false,
+          }));
+        } else {
+          setFormData((prev) => ({ ...prev, isPhoneVerified: true }));
+        }
+      },
+      {
+        fullName: formData.fullName || undefined,
+        email: formData.email || undefined,
       }
-    });
+    );
   };
 
   const handleSubmitOrder = async (e: React.FormEvent) => {
@@ -2032,7 +2110,7 @@ export const CheckoutPage: React.FC = () => {
       </div>
 
       {/* Returning Customer Recognition Banner */}
-      {returningCustomerFound && !isCustomerLoggedIn && (
+      {returningCustomerFound && !isCustomerLoggedIn && isValidIndianPhone(formData.phone) && (
         <motion.div
           initial={{ opacity: 0, y: -8 }}
           animate={{ opacity: 1, y: 0 }}
@@ -2063,6 +2141,43 @@ export const CheckoutPage: React.FC = () => {
             >
               <UserCheck className="w-3.5 h-3.5" />
               <span>Sign In Now</span>
+            </button>
+          </div>
+        </motion.div>
+      )}
+
+      {/* New Customer / Unregistered Number Prompt Banner */}
+      {!returningCustomerFound && !isCustomerLoggedIn && isValidIndianPhone(formData.phone) && !isLookingUpPhone && (
+        <motion.div
+          initial={{ opacity: 0, y: -8 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-amber-50/80 border border-amber-200/90 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs"
+        >
+          <div className="flex items-start gap-3">
+            <div className="w-9 h-9 rounded-xl bg-amber-800 text-white flex items-center justify-center shrink-0">
+              <UserCheck className="w-5 h-5" />
+            </div>
+            <div>
+              <h4 className="font-bold text-sm text-stone-900 flex items-center gap-1.5">
+                <span>Sign in with this information</span>
+                <span className="bg-amber-200/80 text-amber-900 text-[10px] font-bold px-2 py-0.5 rounded">
+                  New Customer
+                </span>
+              </h4>
+              <p className="text-xs text-stone-600 mt-0.5">
+                Sign in with OTP (+91 {formData.phone}) to save your delivery address, track orders, and earn Swad Coins.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleTriggerOtpVerification}
+              className="px-4 py-2 bg-amber-800 hover:bg-amber-900 text-white text-xs font-bold rounded-xl transition-colors shadow-xs flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+            >
+              <UserCheck className="w-3.5 h-3.5" />
+              <span>Sign In with this Information</span>
             </button>
           </div>
         </motion.div>
@@ -2195,59 +2310,68 @@ export const CheckoutPage: React.FC = () => {
                   )}
                 </div>
 
-                {(isCustomerLoggedIn || returningCustomerFound) && (
+                {isCustomerLoggedIn && (
+                  <div className="sm:col-span-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 p-3 bg-amber-50/70 border border-amber-200/80 rounded-xl text-xs text-stone-700">
+                    <div className="flex items-center gap-2">
+                      <UserCheck className="w-4 h-4 text-amber-800 shrink-0" />
+                      <span>You can edit this (personal info) in Profile page.</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={goToProfile}
+                      className="text-xs font-bold text-amber-900 bg-white hover:bg-amber-100/60 border border-amber-300 px-3 py-1 rounded-lg transition-colors cursor-pointer shrink-0 self-start sm:self-auto shadow-2xs"
+                    >
+                      Edit in Profile →
+                    </button>
+                  </div>
+                )}
+
+                {/* Returning customer recognized in database */}
+                {!isCustomerLoggedIn && returningCustomerFound && isValidIndianPhone(formData.phone) && (
                   <div className="sm:col-span-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 p-3 bg-amber-50/70 border border-amber-200/80 rounded-xl text-xs text-stone-700">
                     <div className="flex items-center gap-2">
                       <UserCheck className="w-4 h-4 text-amber-800 shrink-0" />
                       <span>
-                        {isCustomerLoggedIn ? (
-                          <>You can edit this (personal info) in Profile page.</>
-                        ) : (
-                          <>
-                            Welcome back, Foodie! We found your saved account. Please sign in with OTP to verify and use your saved details.
-                          </>
-                        )}
+                        Welcome back, Foodie! We found your saved account. Please sign in with OTP to access your saved details and addresses.
                       </span>
                     </div>
-                    {isCustomerLoggedIn ? (
-                      <button
-                        type="button"
-                        onClick={goToProfile}
-                        className="text-xs font-bold text-amber-900 bg-white hover:bg-amber-100/60 border border-amber-300 px-3 py-1 rounded-lg transition-colors cursor-pointer shrink-0 self-start sm:self-auto shadow-2xs"
-                      >
-                        Edit in Profile →
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={handleTriggerOtpVerification}
-                        className="text-xs font-bold text-white bg-amber-800 hover:bg-amber-900 px-3 py-1 rounded-lg transition-colors cursor-pointer shrink-0 self-start sm:self-auto shadow-2xs flex items-center gap-1"
-                      >
-                        <UserCheck className="w-3.5 h-3.5" />
-                        <span>Sign In Now</span>
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      onClick={handleTriggerOtpVerification}
+                      className="text-xs font-bold text-white bg-amber-800 hover:bg-amber-900 px-3 py-1 rounded-lg transition-colors cursor-pointer shrink-0 self-start sm:self-auto shadow-2xs flex items-center gap-1"
+                    >
+                      <UserCheck className="w-3.5 h-3.5" />
+                      <span>Sign In Now</span>
+                    </button>
                   </div>
                 )}
 
-                {/* When 10-digit mobile number is not found on server & not logged in */}
-                {!isCustomerLoggedIn && !returningCustomerFound && formData.phone.length === 10 && (
+                {/* Looking up valid mobile number on server */}
+                {!isCustomerLoggedIn && isValidIndianPhone(formData.phone) && isLookingUpPhone && (
+                  <div className="sm:col-span-2 flex items-center gap-2 p-3 bg-stone-50 border border-stone-200 rounded-xl text-xs text-stone-600">
+                    <Loader2 className="w-4 h-4 animate-spin text-amber-800 shrink-0" />
+                    <span>Verifying mobile number on server...</span>
+                  </div>
+                )}
+
+                {/* When valid 10-digit Indian mobile number is not found on server & not logged in */}
+                {!isCustomerLoggedIn && !returningCustomerFound && isValidIndianPhone(formData.phone) && !isLookingUpPhone && (
                   <div className="sm:col-span-2">
                     {!formData.isPhoneVerified ? (
                       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 p-3 bg-amber-50/70 border border-amber-200/80 rounded-xl text-xs text-stone-700">
                         <div className="flex items-center gap-2">
-                          <ShieldCheck className="w-4 h-4 text-amber-800 shrink-0" />
+                          <UserCheck className="w-4 h-4 text-amber-800 shrink-0" />
                           <span>
-                            Verify mobile number <strong>+91 {formData.phone}</strong> via OTP to secure order
+                            Sign in with this information (<strong>+91 {formData.phone}</strong>)
                           </span>
                         </div>
                         <button
                           type="button"
                           onClick={handleTriggerOtpVerification}
-                          className="text-xs font-bold text-white bg-orange-600 hover:bg-orange-700 px-3.5 py-1.5 rounded-lg transition-colors cursor-pointer shrink-0 self-start sm:self-auto shadow-2xs flex items-center gap-1.5"
+                          className="text-xs font-bold text-white bg-amber-800 hover:bg-amber-900 px-3.5 py-1.5 rounded-lg transition-colors cursor-pointer shrink-0 self-start sm:self-auto shadow-2xs flex items-center gap-1.5"
                         >
-                          <ShieldCheck className="w-3.5 h-3.5" />
-                          <span>Verify Mobile Number</span>
+                          <UserCheck className="w-3.5 h-3.5" />
+                          <span>Sign In with this Information</span>
                         </button>
                       </div>
                     ) : (
@@ -3471,6 +3595,16 @@ export const CheckoutPage: React.FC = () => {
                 >
                   {isSubmitting ? (
                     <span>Sending to Kitchen...</span>
+                  ) : isLookingUpPhone ? (
+                    <span className="flex items-center gap-1.5">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Verifying Mobile Number...</span>
+                    </span>
+                  ) : isPinLookupLoading ? (
+                    <span className="flex items-center gap-1.5">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Verifying Delivery Zone...</span>
+                    </span>
                   ) : !isPlaceOrderEnabled ? (
                     <span>{placeOrderValidation.buttonLabel}</span>
                   ) : (

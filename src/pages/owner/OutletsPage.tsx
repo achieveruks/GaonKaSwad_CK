@@ -4,6 +4,7 @@ import { useNavigation } from '../../context/NavigationContext';
 import { useAuth } from '../../context/AuthContext';
 import { useProducts } from '../../context/ProductContext';
 import { Outlet, DeliveryZone, Product, OutletAbout } from '../../types';
+import { supabase, isSupabaseConfigured } from '../../lib/supabase';
 import { getAboutByOutletId, saveAboutByOutletId } from '../../lib/aboutService';
 import {
   getOutlets,
@@ -37,6 +38,8 @@ import {
   Building,
   Layers,
   Filter,
+  Calendar,
+  X,
   UtensilsCrossed,
   Sparkles,
   Flame,
@@ -137,6 +140,170 @@ export const OutletsPage: React.FC = () => {
 
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
+  // Raw orders for dynamic date filtering
+  const [allOrdersList, setAllOrdersList] = useState<any[]>([]);
+
+  // Per-outlet date filter state (All, Today, 7D, 30D, or Custom date range)
+  const [outletDateFilters, setOutletDateFilters] = useState<
+    Record<
+      string,
+      {
+        preset: 'all' | 'today' | '7d' | '30d' | 'custom';
+        startDate: string;
+        endDate: string;
+      }
+    >
+  >({});
+
+  // Helpers for date filtering
+  const getTodayStr = () => {
+    const d = new Date();
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  const getDaysAgoStr = (days: number) => {
+    const d = new Date();
+    d.setDate(d.getDate() - days);
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  const isOrderInDateRange = (
+    rawCreatedAt: string | undefined,
+    startDate?: string,
+    endDate?: string
+  ) => {
+    if (!startDate && !endDate) return true;
+    if (!rawCreatedAt) return false;
+    try {
+      const d = new Date(rawCreatedAt);
+      if (isNaN(d.getTime())) return false;
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      const orderDateStr = `${year}-${month}-${day}`;
+
+      if (startDate && orderDateStr < startDate) return false;
+      if (endDate && orderDateStr > endDate) return false;
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const handleSetOutletFilter = (
+    outletId: string | number,
+    preset: 'all' | 'today' | '7d' | '30d'
+  ) => {
+    const oid = String(outletId);
+    if (preset === 'all') {
+      setOutletDateFilters((prev) => ({
+        ...prev,
+        [oid]: { preset: 'all', startDate: '', endDate: '' },
+      }));
+    } else if (preset === 'today') {
+      const today = getTodayStr();
+      setOutletDateFilters((prev) => ({
+        ...prev,
+        [oid]: { preset: 'today', startDate: today, endDate: today },
+      }));
+    } else if (preset === '7d') {
+      setOutletDateFilters((prev) => ({
+        ...prev,
+        [oid]: { preset: '7d', startDate: getDaysAgoStr(7), endDate: getTodayStr() },
+      }));
+    } else if (preset === '30d') {
+      setOutletDateFilters((prev) => ({
+        ...prev,
+        [oid]: { preset: '30d', startDate: getDaysAgoStr(30), endDate: getTodayStr() },
+      }));
+    }
+  };
+
+  const handleDateChange = (
+    outletId: string | number,
+    type: 'start' | 'end',
+    value: string
+  ) => {
+    const oid = String(outletId);
+    setOutletDateFilters((prev) => {
+      const current = prev[oid] || { preset: 'all', startDate: '', endDate: '' };
+      return {
+        ...prev,
+        [oid]: {
+          preset: 'custom',
+          startDate: type === 'start' ? value : current.startDate,
+          endDate: type === 'end' ? value : current.endDate,
+        },
+      };
+    });
+  };
+
+  const triggerDatePicker = (e: React.MouseEvent<HTMLDivElement>) => {
+    const input = e.currentTarget.querySelector('input[type="date"]') as HTMLInputElement | null;
+    if (input && typeof input.showPicker === 'function') {
+      try {
+        input.showPicker();
+      } catch {
+        // Fallback to native overlay click
+      }
+    }
+  };
+
+  const getOutletFilteredStats = (
+    outletId: string | number,
+    filter?: { preset: string; startDate: string; endDate: string }
+  ) => {
+    const oid = String(outletId).trim();
+    const startDate = filter?.startDate || '';
+    const endDate = filter?.endDate || '';
+
+    let receivedCount = 0;
+    let receivedAmount = 0;
+    let deliveredCount = 0;
+    let deliveredAmount = 0;
+    let cancelledCount = 0;
+    let cancelledAmount = 0;
+
+    allOrdersList.forEach((ord) => {
+      const rawOid = ord.outletId || ord.outlet_id;
+      if (!rawOid || String(rawOid).trim() !== oid) return;
+
+      const rawCreatedAt = ord.createdAt || ord.created_at;
+      if (!isOrderInDateRange(rawCreatedAt, startDate, endDate)) {
+        return;
+      }
+
+      const amount = Number(ord.total || ord.totalAmount || ord.total_amount || 0) || 0;
+      const status = String(ord.orderStatus || ord.status || '').trim().toLowerCase();
+
+      receivedCount += 1;
+      receivedAmount += amount;
+
+      if (status === 'delivered') {
+        deliveredCount += 1;
+        deliveredAmount += amount;
+      } else if (status === 'cancelled') {
+        cancelledCount += 1;
+        cancelledAmount += amount;
+      }
+    });
+
+    return {
+      receivedCount,
+      receivedAmount,
+      deliveredCount,
+      deliveredAmount,
+      cancelledCount,
+      cancelledAmount,
+    };
+  };
+
   const fetchOutletsAndZones = useCallback(async () => {
     setIsLoading(true);
     try {
@@ -147,6 +314,35 @@ export const OutletsPage: React.FC = () => {
 
       setOutlets(Array.isArray(fetchedOutlets) ? fetchedOutlets : []);
       setZones(Array.isArray(fetchedZones) ? fetchedZones : []);
+
+      // Fetch live orders to aggregate business done per outlet
+      try {
+        let ordersList: any[] = [];
+        try {
+          const res = await fetch('/api/orders');
+          if (res.ok) {
+            const data = await res.json();
+            if (data.success && Array.isArray(data.orders)) {
+              ordersList = data.orders;
+            }
+          }
+        } catch {
+          // fallback to supabase below
+        }
+
+        if (ordersList.length === 0 && isSupabaseConfigured()) {
+          const { data: supaOrders } = await supabase
+            .from('orders')
+            .select('outlet_id, order_status, total_amount, created_at');
+          if (Array.isArray(supaOrders)) {
+            ordersList = supaOrders;
+          }
+        }
+
+        setAllOrdersList(ordersList);
+      } catch (statsErr) {
+        console.warn('Failed to aggregate outlet order stats:', statsErr);
+      }
     } catch (err) {
       console.error('Error fetching outlets:', err);
       setOutlets([]);
@@ -749,6 +945,14 @@ export const OutletsPage: React.FC = () => {
               const bestsellerCount = servedProducts.filter((p) => isProductBestsellerAtOutlet(p, outlet.id)).length;
               const chefSpecialCount = servedProducts.filter((p) => isProductChefSpecialAtOutlet(p, outlet.id)).length;
 
+              // Business stats (Received, Delivered, Cancelled) for this outlet filtered by date range
+              const outletFilter = outletDateFilters[String(outlet.id)] || {
+                preset: 'all' as const,
+                startDate: '',
+                endDate: '',
+              };
+              const outletStats = getOutletFilteredStats(outlet.id, outletFilter);
+
               return (
                 <div
                   key={outlet.id}
@@ -904,44 +1108,225 @@ export const OutletsPage: React.FC = () => {
                       {outlet.email && <span className="text-[11px]">{outlet.email}</span>}
                     </div>
 
-                    {/* Assigned Zones & PINs Section */}
-                    <div className="pt-2 border-t border-stone-100 space-y-1.5">
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="font-bold text-stone-800 flex items-center gap-1">
-                          <Layers className="w-3.5 h-3.5 text-amber-700" />
-                          <span>Delivery Coverage ({outletZones.length} Zones)</span>
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => goToOwnerDeliveryZones()}
-                          className="text-[11px] font-bold text-amber-800 hover:text-amber-950 flex items-center gap-0.5 cursor-pointer"
-                        >
-                          <span>Manage Zones</span>
-                          <ChevronRight className="w-3 h-3" />
-                        </button>
-                      </div>
+                    {/* Delivery Coverage & Outlet Business Stats Section */}
+                    <div className="pt-2.5 border-t border-stone-100">
+                      <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-center">
+                        {/* Left Side: Delivery Coverage with PINs and Moved "Manage Zones >" below */}
+                        <div className="sm:col-span-6 flex flex-col justify-between space-y-1.5">
+                          <div className="space-y-1">
+                            <span className="font-bold text-stone-800 flex items-center gap-1 text-xs">
+                              <Layers className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+                              <span>Delivery Coverage ({outletZones.length} Zones)</span>
+                            </span>
 
-                      {allPins.length > 0 ? (
-                        <div className="flex flex-wrap gap-1">
-                          {allPins.slice(0, 8).map((pin) => (
-                            <span
-                              key={pin}
-                              className="px-2 py-0.5 bg-amber-50 text-amber-900 border border-amber-200 rounded-md font-mono text-[10px] font-semibold"
+                            {allPins.length > 0 ? (
+                              <div className="flex flex-wrap gap-1">
+                                {allPins.slice(0, 6).map((pin) => (
+                                  <span
+                                    key={pin}
+                                    className="px-2 py-0.5 bg-amber-50 text-amber-900 border border-amber-200 rounded-md font-mono text-[10px] font-semibold"
+                                  >
+                                    {pin}
+                                  </span>
+                                ))}
+                                {allPins.length > 6 && (
+                                  <span className="px-1.5 py-0.5 bg-stone-100 text-stone-600 rounded-md text-[10px]">
+                                    +{allPins.length - 6} more
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <p className="text-[11px] text-amber-700 italic">
+                                No delivery PIN codes assigned yet. Add a zone to start receiving orders.
+                              </p>
+                            )}
+                          </div>
+
+                          {/* Moved "Manage Zones >" below the pins */}
+                          <div className="pt-0.5">
+                            <button
+                              type="button"
+                              onClick={() => goToOwnerDeliveryZones()}
+                              className="inline-flex items-center gap-0.5 text-[11px] font-bold text-amber-800 hover:text-amber-950 transition-colors cursor-pointer group"
                             >
-                              {pin}
-                            </span>
-                          ))}
-                          {allPins.length > 8 && (
-                            <span className="px-1.5 py-0.5 bg-stone-100 text-stone-600 rounded-md text-[10px]">
-                              +{allPins.length - 8} more
-                            </span>
-                          )}
+                              <span>Manage Zones</span>
+                              <ChevronRight className="w-3 h-3 group-hover:translate-x-0.5 transition-transform" />
+                            </button>
+                          </div>
                         </div>
-                      ) : (
-                        <p className="text-[11px] text-amber-700 italic">
-                          No delivery PIN codes assigned yet. Add a zone to start receiving orders.
-                        </p>
-                      )}
+
+                        {/* Right Side: Round Bordered Area with Compact Date Range Filter & 3-Column Business Stats */}
+                        <div className="sm:col-span-6 flex flex-col justify-center">
+                          <div className="rounded-2xl border border-stone-200/90 bg-stone-50/75 p-2 sm:p-2.5 shadow-2xs space-y-1.5">
+                            {/* Very Compact Date Filter Bar */}
+                            <div className="space-y-1 pb-1.5 border-b border-stone-200/70">
+                              {/* Row 1: Label & Quick Preset Buttons */}
+                              <div className="flex items-center justify-between gap-1">
+                                <div className="flex items-center gap-1 text-[10px] font-bold text-stone-700 shrink-0">
+                                  <Calendar className="w-3 h-3 text-amber-700 shrink-0" />
+                                  <span>Date Filter</span>
+                                </div>
+
+                                <div className="inline-flex items-center bg-stone-200/80 p-0.5 rounded-lg text-[9px] font-bold gap-0.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleSetOutletFilter(outlet.id, 'all')}
+                                    className={`px-1.5 py-0.5 rounded transition-all cursor-pointer ${
+                                      outletFilter.preset === 'all'
+                                        ? 'bg-amber-800 text-white shadow-2xs'
+                                        : 'text-stone-600 hover:text-stone-900'
+                                    }`}
+                                  >
+                                    All
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleSetOutletFilter(outlet.id, 'today')}
+                                    className={`px-1.5 py-0.5 rounded transition-all cursor-pointer ${
+                                      outletFilter.preset === 'today'
+                                        ? 'bg-amber-800 text-white shadow-2xs'
+                                        : 'text-stone-600 hover:text-stone-900'
+                                    }`}
+                                  >
+                                    Today
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleSetOutletFilter(outlet.id, '7d')}
+                                    className={`px-1.5 py-0.5 rounded transition-all cursor-pointer ${
+                                      outletFilter.preset === '7d'
+                                        ? 'bg-amber-800 text-white shadow-2xs'
+                                        : 'text-stone-600 hover:text-stone-900'
+                                    }`}
+                                  >
+                                    7D
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleSetOutletFilter(outlet.id, '30d')}
+                                    className={`px-1.5 py-0.5 rounded transition-all cursor-pointer ${
+                                      outletFilter.preset === '30d'
+                                        ? 'bg-amber-800 text-white shadow-2xs'
+                                        : 'text-stone-600 hover:text-stone-900'
+                                    }`}
+                                  >
+                                    30D
+                                  </button>
+                                </div>
+                              </div>
+
+                              {/* Row 2: Compact Start & End Date Inputs with Full-Click and Clear button */}
+                              <div className="flex items-center gap-1 text-[10px]">
+                                {/* Start Date */}
+                                <div
+                                  onClick={triggerDatePicker}
+                                  className={`relative flex-1 flex items-center justify-between px-1.5 py-0.5 rounded-md border text-[10px] font-mono cursor-pointer transition-all ${
+                                    outletFilter.startDate
+                                      ? 'bg-amber-50 border-amber-300 text-amber-950 font-bold'
+                                      : 'bg-white border-stone-200 text-stone-500 hover:border-amber-400'
+                                  }`}
+                                  title="Click anywhere to select Start Date"
+                                >
+                                  <span className="truncate">
+                                    {outletFilter.startDate ? outletFilter.startDate : 'From Date'}
+                                  </span>
+                                  <input
+                                    type="date"
+                                    value={outletFilter.startDate}
+                                    onChange={(e) => handleDateChange(outlet.id, 'start', e.target.value)}
+                                    className="full-click-date-input"
+                                    title="Click to select Start Date"
+                                  />
+                                </div>
+
+                                <span className="text-stone-400 text-[10px] font-bold shrink-0">→</span>
+
+                                {/* End Date */}
+                                <div
+                                  onClick={triggerDatePicker}
+                                  className={`relative flex-1 flex items-center justify-between px-1.5 py-0.5 rounded-md border text-[10px] font-mono cursor-pointer transition-all ${
+                                    outletFilter.endDate
+                                      ? 'bg-amber-50 border-amber-300 text-amber-950 font-bold'
+                                      : 'bg-white border-stone-200 text-stone-500 hover:border-amber-400'
+                                  }`}
+                                  title="Click anywhere to select End Date"
+                                >
+                                  <span className="truncate">
+                                    {outletFilter.endDate ? outletFilter.endDate : 'To Date'}
+                                  </span>
+                                  <input
+                                    type="date"
+                                    value={outletFilter.endDate}
+                                    onChange={(e) => handleDateChange(outlet.id, 'end', e.target.value)}
+                                    className="full-click-date-input"
+                                    title="Click to select End Date"
+                                  />
+                                </div>
+
+                                {/* Reset / Clear button */}
+                                {(outletFilter.startDate || outletFilter.endDate) && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleSetOutletFilter(outlet.id, 'all')}
+                                    className="p-1 text-stone-400 hover:text-stone-700 hover:bg-stone-200/60 rounded-md transition-colors shrink-0 cursor-pointer"
+                                    title="Clear date filter (show all)"
+                                  >
+                                    <X className="w-3 h-3" />
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* 3-Column Business Stat Layout: Received, Delivered, Cancelled */}
+                            <div className="grid grid-cols-3 gap-1 text-center divide-x divide-stone-200/80 pt-0.5">
+                              {/* Received: Total orders received at this kitchen outlet (neutral / dark font) */}
+                              <div className="px-1">
+                                <span className="text-[10px] font-bold text-stone-500 uppercase tracking-tight block">
+                                  Received
+                                </span>
+                                <div className="mt-1">
+                                  <span className="text-xs font-black text-stone-900 block leading-tight">
+                                    ₹{outletStats.receivedAmount.toLocaleString('en-IN')}
+                                  </span>
+                                  <span className="text-[10px] font-bold text-stone-600 block leading-tight mt-0.5">
+                                    [{outletStats.receivedCount}]
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* Delivered: Total successfully delivered orders (emerald green highlight) */}
+                              <div className="px-1">
+                                <span className="text-[10px] font-bold text-emerald-700 uppercase tracking-tight block">
+                                  Delivered
+                                </span>
+                                <div className="mt-1">
+                                  <span className="text-xs font-black text-emerald-600 block leading-tight">
+                                    ₹{outletStats.deliveredAmount.toLocaleString('en-IN')}
+                                  </span>
+                                  <span className="text-[10px] font-bold text-emerald-700 block leading-tight mt-0.5">
+                                    [{outletStats.deliveredCount}]
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* Cancelled: Total cancelled orders (rose / red highlight) */}
+                              <div className="px-1">
+                                <span className="text-[10px] font-bold text-rose-600 uppercase tracking-tight block">
+                                  Cancelled
+                                </span>
+                                <div className="mt-1">
+                                  <span className="text-xs font-black text-rose-600 block leading-tight">
+                                    ₹{outletStats.cancelledAmount.toLocaleString('en-IN')}
+                                  </span>
+                                  <span className="text-[10px] font-bold text-rose-700 block leading-tight mt-0.5">
+                                    [{outletStats.cancelledCount}]
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   </div>
 

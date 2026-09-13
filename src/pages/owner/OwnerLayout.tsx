@@ -56,6 +56,9 @@ export const OwnerLayout: React.FC<OwnerLayoutProps> = ({
         const role = ownerUser?.role || profile?.role;
         if (role === 'outlet_manager') {
           goToManagerDashboard();
+        } else if (role !== 'owner') {
+          // Block customers or unassigned roles from Owner portal
+          goToOwnerLogin();
         }
       }
     }
@@ -72,7 +75,8 @@ export const OwnerLayout: React.FC<OwnerLayoutProps> = ({
     );
   }
 
-  if (!isAuthenticated) {
+  const role = ownerUser?.role || profile?.role;
+  if (!isAuthenticated || role !== 'owner') {
     return (
       <div className="min-h-screen flex items-center justify-center bg-stone-50 p-4 font-sans">
         <div className="bg-white p-6 sm:p-8 rounded-2xl border border-stone-200 shadow-sm max-w-sm w-full text-center space-y-4">

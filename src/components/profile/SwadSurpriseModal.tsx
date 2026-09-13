@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   X,
   Gift,
@@ -46,6 +46,14 @@ export const SwadSurpriseModal: React.FC<SwadSurpriseModalProps> = ({
   const [revealingCardId, setRevealingCardId] = useState<string | null>(null);
   const [revealedCards, setRevealedCards] = useState<Record<string, { amount: number; removing: boolean }>>({});
   const [cardErrors, setCardErrors] = useState<Record<string, string>>({});
+  const timersRef = useRef<NodeJS.Timeout[]>([]);
+
+  useEffect(() => {
+    return () => {
+      timersRef.current.forEach((t) => clearTimeout(t));
+      timersRef.current = [];
+    };
+  }, []);
 
   useEffect(() => {
     setSessionBalance(currentBalance);
@@ -75,6 +83,8 @@ export const SwadSurpriseModal: React.FC<SwadSurpriseModalProps> = ({
 
   useEffect(() => {
     if (isOpen) {
+      timersRef.current.forEach((t) => clearTimeout(t));
+      timersRef.current = [];
       setRevealingCardId(null);
       setRevealedCards({});
       setCardErrors({});
@@ -119,8 +129,8 @@ export const SwadSurpriseModal: React.FC<SwadSurpriseModalProps> = ({
 
         triggerConfetti();
 
-        // Show "Swad Coins credited to your Wallet!" on the card, wait exactly 1 second, then vanish smoothly
-        setTimeout(() => {
+        // Show "Swad Coins credited to your Wallet!" on the card, stay visible for 4 seconds, then vanish
+        const hideTimer = setTimeout(() => {
           // Trigger smooth fade-out / shrink animation
           setRevealedCards((prev) => ({
             ...prev,
@@ -128,11 +138,13 @@ export const SwadSurpriseModal: React.FC<SwadSurpriseModalProps> = ({
           }));
 
           // After exit animation finishes, remove from modal cards and notify parent
-          setTimeout(() => {
+          const cleanupTimer = setTimeout(() => {
             setCards((prev) => prev.filter((c) => c.id !== card.id));
             onRewardClaimed(card.id, earned, newBal);
           }, 400);
-        }, 1000);
+          timersRef.current.push(cleanupTimer);
+        }, 4000);
+        timersRef.current.push(hideTimer);
       } else {
         setRevealingCardId(null);
         setCardErrors((prev) => ({

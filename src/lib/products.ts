@@ -1,4 +1,4 @@
-import { Product, Category, DashboardStats } from '../types';
+import { Product, Category, DashboardStats, SwadCoinDispatch } from '../types';
 import {
   fetchSupabaseProducts,
   fetchSupabaseProductBySlug,
@@ -515,4 +515,16 @@ export async function fetchAdminSwadCoinsStats(token?: string): Promise<AdminSwa
   }
   return data.stats;
 }
+
+export async function fetchSwadCoinDispatches(token?: string): Promise<SwadCoinDispatch[]> {
+  const res = await fetch(`${API_BASE}/admin/swad-coins/dispatches`, {
+    headers: getAuthHeaders(token),
+  });
+  const data = await res.json();
+  if (!res.ok || !data.success) {
+    throw new Error(data.error || 'Failed to fetch Swad Coins dispatch history');
+  }
+  return data.dispatches || [];
+}
+
 

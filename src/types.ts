@@ -450,6 +450,8 @@ export interface Order {
   kitchenAddress?: string;
   deliveryPinCode: string;
   createdAt: string;
+  updatedAt?: string;
+  updated_at?: string;
   items: Array<OrderItem | CartItem>;
   subtotal: number;
   discount: number;
@@ -544,5 +546,31 @@ export interface SwadCoinTransaction {
   description?: string;
   createdAt: string;
 }
+
+export type SwadCoinDispatchRunType = 'MANUAL' | 'SCHEDULED';
+export type SwadCoinDispatchStatus = 'SUCCESS' | 'PARTIAL' | 'FAILED';
+
+export interface SwadCoinDispatch {
+  id: string;
+  runAt: string;
+  run_at?: string;
+  runType: SwadCoinDispatchRunType;
+  run_type?: SwadCoinDispatchRunType;
+  ordersProcessed: number;
+  orders_processed?: number;
+  ordersScanned: number;
+  orders_scanned?: number;
+  ordersSkipped: number;
+  orders_skipped?: number;
+  coinsIssued: number;
+  coins_issued?: number;
+  syncedCount: number;
+  synced_count?: number;
+  orderIds: string[];
+  order_ids?: string[];
+  status: SwadCoinDispatchStatus;
+  notes?: string;
+}
+
 
 
