@@ -2406,8 +2406,8 @@ export const CheckoutPage: React.FC = () => {
                     </div>
                   </label>
 
-                  {/* Phone OTP Verification Helper */}
-                  {formData.createAccount && (
+                  {/* Phone OTP Verification Helper - ONLY show when phone is a valid 10-digit Indian number */}
+                  {formData.createAccount && isValidIndianPhone(formData.phone) && (
                     <div className="flex items-center justify-between bg-white border border-stone-200 rounded-xl p-2.5 px-3 text-xs">
                       <div className="flex items-center gap-2">
                         {formData.isPhoneVerified ? (
@@ -2416,7 +2416,7 @@ export const CheckoutPage: React.FC = () => {
                           </span>
                         ) : (
                           <span className="text-stone-600 text-[11px]">
-                            Verify mobile number to confirm account
+                            Verify mobile number (+91 {formData.phone}) to confirm account
                           </span>
                         )}
                       </div>

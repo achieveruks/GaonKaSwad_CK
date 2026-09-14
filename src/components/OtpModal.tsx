@@ -72,7 +72,7 @@ export const OtpModal: React.FC<OtpModalProps> = ({
         }, 100);
       } else if (modalMode === 'direct_otp' || modalMode === 'signin_otp') {
         setView('otp');
-        setInfoNotice(`A 6-digit OTP code has been sent via SMS to +91 ${cleanPhone}.`);
+        setInfoNotice(`A 6-digit verification code has been sent to +91 ${cleanPhone}.`);
         setTimeout(() => {
           otpInputRefs.current[0]?.focus();
         }, 150);
@@ -123,8 +123,10 @@ export const OtpModal: React.FC<OtpModalProps> = ({
         setView('signup');
         setInfoNotice(`No account found for +91 ${normPhone}. Please enter your details below to create an account.`);
       } else {
-        // Customer exists: Proceed to OTP interface
+        // Customer exists: Send OTP & Proceed to OTP interface
+        await context.sendOtp(normPhone);
         setView('otp');
+        setInfoNotice(`A 6-digit verification code has been sent to +91 ${normPhone}.`);
         setOtp(['', '', '', '', '', '']);
         setResendTimer(30);
         setTimeout(() => {
@@ -164,9 +166,12 @@ export const OtpModal: React.FC<OtpModalProps> = ({
     setIsLoading(true);
 
     try {
-      // Transition to OTP screen with pre-filled mobile number
+      // Trigger OTP generation and transition to OTP screen
+      await context.sendOtp(normPhone);
+
       setIsLoading(false);
       setView('otp');
+      setInfoNotice(`A 6-digit verification code has been sent to +91 ${normPhone}.`);
       setOtp(['', '', '', '', '', '']);
       setResendTimer(30);
       setTimeout(() => {

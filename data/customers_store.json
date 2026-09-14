@@ -61,5 +61,15 @@
     "updatedAt": "2026-09-13T08:00:33.664Z",
     "swadCoinBalance": 0,
     "swad_coin_balance": 0
+  },
+  {
+    "id": "cust-mu1brk8u-pyu9",
+    "phone": "9876543210",
+    "fullName": "Achiever Uks",
+    "isActive": true,
+    "marketingConsent": false,
+    "welcomeDiscountUsed": false,
+    "createdAt": "2026-09-14T14:15:08.094Z",
+    "updatedAt": "2026-09-14T14:15:08.094Z"
   }
 ]

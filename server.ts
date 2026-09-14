@@ -11,11 +11,22 @@ import {
   requireOwnerAuth,
   AuthenticatedRequest,
 } from './server/auth';
+import { generateOTP, formatOtpString, hashOTPSync, isBetaMode } from './src/lib/otpUtils';
 
 // Supabase Server Client
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || 'https://ifthfunawntmqjupafxp.supabase.co';
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlmdGhmdW5hd250bXFqdXBhZnhwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODcyMjc4NTQsImV4cCI6MjEwMjgwMzg1NH0.xS74LsNci-I_v-p13O3rzzhflOuOZaHLDcVLgEi9Yzw';
 const serverSupabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// In-memory OTP cache fallback
+interface MemoryOtpRecord {
+  phone: string;
+  otpHash: string;
+  otpCode?: string;
+  expiresAt: number;
+  attemptsLeft: number;
+}
+const memoryOtpStore = new Map<string, MemoryOtpRecord>();
 
 // UUID validation helper
 const isUUID = (str?: string | null): boolean => {
@@ -213,6 +224,7 @@ async function startServer() {
       // Check in Supabase first
       let exists = false;
       let checkedSupabase = false;
+      let supaCustomerId: string | null = null;
       try {
         const { data: supaCustomer, error: supaErr } = await serverSupabase
           .from('customers')
@@ -226,6 +238,7 @@ async function startServer() {
 
         if (supaCustomer) {
           exists = true;
+          supaCustomerId = supaCustomer.id;
         }
       } catch (err) {
         console.warn('Supabase customer check error:', err);
@@ -233,15 +246,58 @@ async function startServer() {
 
       if (!exists && !checkedSupabase) {
         const memoryCustomer = productStorage.findCustomerByPhone(normPhone);
-        if (memoryCustomer) exists = true;
+        if (memoryCustomer) {
+          exists = true;
+          supaCustomerId = memoryCustomer.id;
+        }
       }
+
+      // 1. Generate 6-digit OTP code using beta formula with UTC HHMM or secure crypto
+      const creationDate = new Date();
+      const createdAt = creationDate.toISOString();
+      const expiresAt = new Date(creationDate.getTime() + 5 * 60 * 1000).toISOString();
+      const numericOtp = generateOTP(normPhone, creationDate);
+      const otpCode = formatOtpString(numericOtp);
+      const otpHash = hashOTPSync(otpCode);
+
+      // 2. Delete any previous active OTP rows for this phone number from Supabase
+      try {
+        await serverSupabase
+          .from('customer_otps')
+          .delete()
+          .eq('phone', normPhone);
+
+        // 3. Insert newly generated OTP row with hash into Supabase
+        await serverSupabase
+          .from('customer_otps')
+          .insert({
+            phone: normPhone,
+            customer_id: supaCustomerId,
+            otp_hash: otpHash,
+            expires_at: expiresAt,
+            attempts_left: 3,
+            is_used: false,
+            created_at: createdAt,
+          });
+      } catch (otpDbErr) {
+        console.warn('customer_otps table save warning (check if table exists):', otpDbErr);
+      }
+
+      // Memory backup
+      memoryOtpStore.set(normPhone, {
+        phone: normPhone,
+        otpHash,
+        otpCode,
+        expiresAt: Date.now() + 5 * 60 * 1000,
+        attemptsLeft: 3,
+      });
 
       return res.json({
         success: true,
         exists,
         phone: normPhone,
         message: exists
-          ? 'Verification OTP sent to your mobile number.'
+          ? `Verification OTP sent to +91 ${normPhone}.`
           : 'Customer not registered. Please complete sign up.',
       });
     } catch (err: any) {
@@ -250,7 +306,7 @@ async function startServer() {
     }
   });
 
-  // 3c. Auth: Customer Verify OTP (Validated against 951753)
+  // 3c. Auth: Customer Verify OTP (Validated against customer_otps hash or beta formula)
   app.post('/api/auth/verify-otp', async (req, res) => {
     try {
       const { phone, otp, fullName, email } = req.body;
@@ -264,15 +320,94 @@ async function startServer() {
         });
       }
 
-      const inputOtp = String(otp || '').trim();
-      const DEMO_VALID_OTP = '951753';
-
-      if (inputOtp !== DEMO_VALID_OTP) {
+      const inputOtp = formatOtpString(otp);
+      if (!inputOtp || inputOtp.length !== 6) {
         return res.status(400).json({
           success: false,
-          error: 'Invalid 6-digit OTP. Please enter the verification code sent to your phone.',
+          error: 'Please enter the 6-digit verification code.',
         });
       }
+
+      const userHash = hashOTPSync(inputOtp);
+      let isValidOtp = false;
+      let rejectionError: string | null = null;
+
+      // 1. Verify against Supabase customer_otps table
+      try {
+        const { data: otpRows, error: otpFetchErr } = await serverSupabase
+          .from('customer_otps')
+          .select('*')
+          .eq('phone', normPhone)
+          .order('created_at', { ascending: false })
+          .limit(1);
+
+        const otpRecord = otpRows && otpRows.length > 0 ? otpRows[0] : null;
+
+        if (otpRecord) {
+          const now = Date.now();
+          const recordExpiry = new Date(otpRecord.expires_at).getTime();
+
+          if (recordExpiry < now) {
+            // Delete expired row
+            await serverSupabase.from('customer_otps').delete().eq('id', otpRecord.id);
+            rejectionError = 'OTP has expired. Please request a new verification code.';
+          } else if (otpRecord.attempts_left <= 1 && otpRecord.otp_hash !== userHash) {
+            // Exhausted attempts: delete row
+            await serverSupabase.from('customer_otps').delete().eq('id', otpRecord.id);
+            rejectionError = 'Maximum verification attempts exceeded. Please request a new OTP.';
+          } else if (otpRecord.otp_hash === userHash) {
+            isValidOtp = true;
+            // Successful verification: delete row immediately
+            await serverSupabase.from('customer_otps').delete().eq('id', otpRecord.id);
+          } else {
+            // Mismatch: decrement attempts_left
+            const remaining = Math.max(0, otpRecord.attempts_left - 1);
+            await serverSupabase
+              .from('customer_otps')
+              .update({ attempts_left: remaining })
+              .eq('id', otpRecord.id);
+            rejectionError = `Invalid 6-digit OTP code. ${remaining} attempt(s) remaining.`;
+          }
+        }
+      } catch (dbErr) {
+        console.warn('Supabase customer_otps verification check warning:', dbErr);
+      }
+
+      // 2. Memory store verification fallback
+      if (!isValidOtp && !rejectionError) {
+        const memRecord = memoryOtpStore.get(normPhone);
+        if (memRecord) {
+          if (memRecord.expiresAt < Date.now()) {
+            memoryOtpStore.delete(normPhone);
+            rejectionError = 'OTP has expired. Please request a new verification code.';
+          } else if (memRecord.attemptsLeft <= 1 && memRecord.otpHash !== userHash) {
+            memoryOtpStore.delete(normPhone);
+            rejectionError = 'Maximum verification attempts exceeded. Please request a new OTP.';
+          } else if (memRecord.otpHash === userHash) {
+            isValidOtp = true;
+            memoryOtpStore.delete(normPhone);
+          } else {
+            memRecord.attemptsLeft -= 1;
+            rejectionError = `Invalid 6-digit OTP code. ${memRecord.attemptsLeft} attempt(s) remaining.`;
+          }
+        }
+      }
+
+      // 3. Fallback check for offline / test environments
+      if (!isValidOtp && !rejectionError) {
+        const memRecord = memoryOtpStore.get(normPhone);
+        if (!memRecord) {
+          rejectionError = 'No active OTP found. Please request a new verification code.';
+        }
+      }
+
+      if (!isValidOtp) {
+        return res.status(400).json({
+          success: false,
+          error: rejectionError || 'Invalid 6-digit OTP. Please enter the verification code sent to your phone.',
+        });
+      }
+
 
       // 1. Sync or create customer in Supabase public.customers table
       let finalCustomer: any = null;

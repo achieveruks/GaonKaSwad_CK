@@ -8,6 +8,8 @@ import {
   deleteSupabaseCustomerAddress,
   upsertSupabaseCustomer,
   upsertSupabaseCustomerAddress,
+  generateAndSaveSupabaseOtp,
+  verifySupabaseOtp,
 } from '../lib/supabaseService';
 import { isSupabaseConfigured } from '../lib/supabase';
 
@@ -450,28 +452,63 @@ export const CustomerProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     try {
       // Check Supabase first if available
       let existsInSupabase = false;
+      let supaCustId: string | null = null;
       if (isSupabaseConfigured()) {
         try {
           const { customer } = await fetchSupabaseCustomerByPhone(normPhone);
-          if (customer) existsInSupabase = true;
+          if (customer) {
+            existsInSupabase = true;
+            supaCustId = customer.id;
+          }
         } catch (e) {
           console.warn('Supabase lookup during sendOtp error:', e);
         }
       }
 
-      const res = await fetch('/api/auth/send-otp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone: normPhone }),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        return { success: false, exists: existsInSupabase, error: data.error || 'Failed to send OTP' };
+      let serverResponseOk = false;
+      let serverData: any = null;
+
+      try {
+        const res = await fetch('/api/auth/send-otp', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phone: normPhone }),
+        });
+        if (res.ok) {
+          serverData = await res.json();
+          if (serverData.success) {
+            serverResponseOk = true;
+          }
+        }
+      } catch (networkErr) {
+        console.warn('Server /api/auth/send-otp unreachable, falling back to direct Supabase OTP creation:', networkErr);
       }
+
+      // If server API wasn't reachable or failed (e.g. static hosting returning 404),
+      // generate OTP and save hash directly in Supabase customer_otps table
+      if (!serverResponseOk) {
+        const supaResult = await generateAndSaveSupabaseOtp(normPhone, supaCustId);
+        if (supaResult.success) {
+          return {
+            success: true,
+            exists: existsInSupabase,
+            message: `Verification OTP generated for +91 ${normPhone}.`,
+          };
+        }
+      }
+
+      if (serverData && serverData.success) {
+        return {
+          success: true,
+          exists: existsInSupabase || !!serverData.exists,
+          message: serverData.message,
+        };
+      }
+
       return {
-        success: true,
-        exists: existsInSupabase || !!data.exists,
-        message: data.message,
+        success: false,
+        exists: existsInSupabase,
+        error: serverData?.error || 'Failed to send OTP. Please try again.',
       };
     } catch (err: any) {
       console.error('sendOtp error:', err);
@@ -495,25 +532,52 @@ export const CustomerProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
 
     try {
-      // 1. Server-level verification
-      const res = await fetch('/api/auth/verify-otp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone: normPhone, otp: cleanOtp, ...extraData }),
-      });
-      const data = await res.json();
+      let verifiedCustomer: Customer | null = null;
+      let defaultAddr: CustomerAddress | null = null;
+      let welcomeEligible = true;
+      let isNew = false;
+      let verifiedSuccess = false;
 
-      if (!res.ok || !data.success) {
-        return {
-          success: false,
-          error: data.error || 'Invalid OTP. Please check the code and try again.',
-        };
+      // 1. Try server-level verification
+      try {
+        const res = await fetch('/api/auth/verify-otp', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phone: normPhone, otp: cleanOtp, ...extraData }),
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success) {
+            verifiedSuccess = true;
+            verifiedCustomer = data.customer;
+            defaultAddr = data.defaultAddress || null;
+            welcomeEligible = data.welcomeDiscountEligible !== false;
+            isNew = !!data.isNewCustomer;
+          } else {
+            return {
+              success: false,
+              error: data.error || 'Invalid OTP. Please check the code and try again.',
+            };
+          }
+        }
+      } catch (serverErr) {
+        console.warn('Server /api/auth/verify-otp call failed, falling back to direct Supabase OTP verification:', serverErr);
       }
 
-      let verifiedCustomer: Customer = data.customer;
-      let defaultAddr: CustomerAddress | null = data.defaultAddress || null;
+      // 2. Direct Supabase verification fallback (for static hosting environments)
+      if (!verifiedSuccess) {
+        const supaVerifyResult = await verifySupabaseOtp(normPhone, cleanOtp);
+        if (!supaVerifyResult.success) {
+          return {
+            success: false,
+            error: supaVerifyResult.error || 'Invalid OTP code. Please try again.',
+          };
+        }
+        verifiedSuccess = true;
+      }
 
-      // 2. Direct Supabase Persistence to ensure public.customers entry is recorded
+      // 3. Ensure customer record exists in Supabase public.customers table
       if (isSupabaseConfigured()) {
         try {
           const supaCust = await upsertSupabaseCustomer({
@@ -522,20 +586,37 @@ export const CustomerProvider: React.FC<{ children: React.ReactNode }> = ({ chil
             email: extraData?.email || verifiedCustomer?.email,
           });
           if (supaCust) {
-            verifiedCustomer = { ...verifiedCustomer, ...supaCust };
+            verifiedCustomer = { ...(verifiedCustomer || {}), ...supaCust };
           }
         } catch (supaErr) {
           console.warn('Supabase customer upsert warning:', supaErr);
         }
       }
 
-      if (verifiedCustomer) {
-        setCustomer(verifiedCustomer);
+      // Fallback customer object if none was returned yet
+      if (!verifiedCustomer) {
+        verifiedCustomer = {
+          id: 'cust-' + normPhone,
+          phone: normPhone,
+          fullName: extraData?.fullName || 'Customer',
+          email: extraData?.email,
+          createdAt: new Date().toISOString(),
+        };
       }
+
+      // Load or refresh customer's default address
+      if (!defaultAddr && verifiedCustomer.id) {
+        try {
+          const addrs = await fetchCustomerAddresses(verifiedCustomer.id, normPhone);
+          defaultAddr = addrs.find((a) => a.isDefault) || addrs[0] || null;
+        } catch {}
+      }
+
+      setCustomer(verifiedCustomer);
       if (defaultAddr) {
         setDefaultAddress(defaultAddr);
       }
-      setIsWelcomeDiscountEligible(data.welcomeDiscountEligible !== false);
+      setIsWelcomeDiscountEligible(welcomeEligible);
 
       if (otpModalCallback) {
         otpModalCallback(verifiedCustomer, defaultAddr);
@@ -545,8 +626,8 @@ export const CustomerProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         success: true,
         customer: verifiedCustomer,
         defaultAddress: defaultAddr,
-        welcomeDiscountEligible: data.welcomeDiscountEligible !== false,
-        isNewCustomer: data.isNewCustomer,
+        welcomeDiscountEligible: welcomeEligible,
+        isNewCustomer: isNew,
       };
     } catch (err: any) {
       console.error('verifyOtp error:', err);
