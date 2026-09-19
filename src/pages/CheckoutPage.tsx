@@ -18,6 +18,7 @@ import {
   fetchAvailableCouponsForCustomer,
   recordCouponRedemption,
   fetchSupabaseOrderById,
+  formatDisplayOrderId,
 } from '../lib/supabaseService';
 import { fetchSwadCoinBalance } from '../lib/swadCoinService';
 import { lookupPincode } from '../lib/pincodeService';
@@ -1177,7 +1178,7 @@ export const CheckoutPage: React.FC = () => {
       if (!targetOrderId) return;
       try {
         // First try server API endpoint
-        const res = await fetch(`/api/orders/${targetOrderId}`);
+        const res = await fetch(`/api/orders/${encodeURIComponent(targetOrderId)}`);
         if (res.ok) {
           const data = await res.json();
           if (data.success && data.order) {
@@ -1453,7 +1454,7 @@ export const CheckoutPage: React.FC = () => {
     try {
       nextOrderId = await getNextSequentialOrderId();
     } catch {
-      nextOrderId = `GKSWAD-#001`;
+      nextOrderId = `GKSWAD-00001`;
     }
 
     const cleanCustomerPin = (formData.pincode || '').trim();
@@ -1542,6 +1543,9 @@ export const CheckoutPage: React.FC = () => {
       }
     }
 
+    let savedOrderObj = newOrder;
+    let orderPersisted = false;
+
     try {
       const res = await fetch('/api/orders', {
         method: 'POST',
@@ -1555,42 +1559,52 @@ export const CheckoutPage: React.FC = () => {
           deliveryAddressSnapshot: isSelfPickup ? null : (newOrder.deliveryAddressSnapshot || null),
         }),
       });
-      const data = await res.json();
-      const savedOrderObj = data.success && data.order ? data.order : newOrder;
-      setPlacedOrder(savedOrderObj);
-
-      // Record coupon redemption
-      if (appliedCoupon && discount > 0) {
-        try {
-          await recordCouponRedemption({
-            couponId: appliedCoupon.id,
-            couponCode: appliedCoupon.code,
-            orderId: savedOrderObj.id || savedOrderObj.orderId || nextOrderId,
-            customerId: resolvedCustId || customer?.id,
-            customerPhone: formData.phone || customer?.phone,
-            discountAmount: discount,
-            orderTotal: effectiveTotal,
-          });
-        } catch (couponErr) {
-          console.warn('Coupon redemption logging notice:', couponErr);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && data.order) {
+          savedOrderObj = data.order;
+          orderPersisted = true;
         }
       }
-    } catch {
-      setPlacedOrder(newOrder);
-      if (appliedCoupon && discount > 0) {
-        try {
-          await recordCouponRedemption({
-            couponId: appliedCoupon.id,
-            couponCode: appliedCoupon.code,
-            orderId: newOrder.id || newOrder.orderId || nextOrderId,
-            customerId: resolvedCustId || customer?.id,
-            customerPhone: formData.phone || customer?.phone,
-            discountAmount: discount,
-            orderTotal: effectiveTotal,
-          });
-        } catch (couponErr) {
-          console.warn('Coupon redemption logging notice:', couponErr);
+    } catch (apiErr) {
+      console.warn('Backend order API notice, falling back to direct Supabase persistence:', apiErr);
+    }
+
+    // Direct Supabase persistence fallback (e.g. for static hosting like Vercel)
+    if (!orderPersisted && isSupabaseConfigured()) {
+      try {
+        const directSaved = await createSupabaseOrder({
+          ...newOrder,
+          swadCoinsUsed: coinsToUse,
+          customerId: resolvedCustId || newOrder.customerId,
+          addressId: isSelfPickup ? null : (resolvedAddrId || newOrder.addressId || null),
+          deliveryAddressSnapshot: isSelfPickup ? null : (newOrder.deliveryAddressSnapshot || null),
+        });
+        if (directSaved) {
+          savedOrderObj = directSaved;
+          orderPersisted = true;
         }
+      } catch (supaErr) {
+        console.warn('Direct Supabase order creation notice:', supaErr);
+      }
+    }
+
+    setPlacedOrder(savedOrderObj);
+
+    // Record coupon redemption
+    if (appliedCoupon && discount > 0) {
+      try {
+        await recordCouponRedemption({
+          couponId: appliedCoupon.id,
+          couponCode: appliedCoupon.code,
+          orderId: savedOrderObj.id || savedOrderObj.orderId || nextOrderId,
+          customerId: resolvedCustId || customer?.id,
+          customerPhone: formData.phone || customer?.phone,
+          discountAmount: discount,
+          orderTotal: effectiveTotal,
+        });
+      } catch (couponErr) {
+        console.warn('Coupon redemption logging notice:', couponErr);
       }
     }
 
@@ -1757,7 +1771,7 @@ export const CheckoutPage: React.FC = () => {
           <div className="inline-block bg-gray-900 text-gray-100 rounded-xl px-5 py-2.5 border border-gray-800">
             <span className="text-[10px] text-gray-400 block font-medium">Your Order ID</span>
             <span className="font-mono font-bold text-base text-orange-400">
-              {placedOrder.orderId}
+              {formatDisplayOrderId(placedOrder.orderId)}
             </span>
           </div>
 

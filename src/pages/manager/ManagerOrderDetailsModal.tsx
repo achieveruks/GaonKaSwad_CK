@@ -22,6 +22,7 @@ import {
 import { Order } from '../../types';
 import { formatScheduledAt } from '../../utils/dateUtils';
 import { resolveOrderOutletInfo } from '../../lib/locationService';
+import { formatDisplayOrderId } from '../../lib/supabaseService';
 
 interface ManagerOrderDetailsModalProps {
   order: Order | null;
@@ -115,7 +116,7 @@ export const ManagerOrderDetailsModal: React.FC<ManagerOrderDetailsModalProps> =
                 </span>
               </div>
               <p className="text-xs text-stone-400 font-mono">
-                Order ID: {order.orderId || order.id}
+                Order ID: {formatDisplayOrderId(order.orderId || order.id)}
               </p>
             </div>
           </div>

@@ -20,6 +20,7 @@ import {
 import { Order } from '../../types';
 import { resolveOrderOutletInfo } from '../../lib/locationService';
 import { useLocation } from '../../context/LocationContext';
+import { formatDisplayOrderId } from '../../lib/supabaseService';
 
 interface OrderDetailsModalProps {
   order: Order;
@@ -263,7 +264,7 @@ export const OrderDetailsModal: React.FC<OrderDetailsModalProps> = ({
               </span>
             </div>
             <h3 className="font-serif font-bold text-xl text-amber-50 mt-1">
-              Order #{order.orderId || order.id}
+              Order {formatDisplayOrderId(order.orderId || order.id)}
             </h3>
           </div>
           <button

@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { Order } from '../../types';
 import { resolveOrderOutletInfo } from '../../lib/locationService';
+import { formatDisplayOrderId } from '../../lib/supabaseService';
 
 interface OrderCardProps {
   order: Order;
@@ -171,9 +172,9 @@ export const OrderCard: React.FC<OrderCardProps> = ({
   const resolvedOutletInfo = resolveOrderOutletInfo(order);
   const resolvedOutletName = resolvedOutletInfo.outletName;
 
-  // Format order ID display: e.g. '#GKSWAD-#00033'
+  // Format order ID display: e.g. '#GKSWAD-00033'
   const rawId = (order.orderId || order.id || '').toString().trim();
-  const formattedOrderId = rawId.startsWith('#') ? rawId : `#${rawId}`;
+  const formattedOrderId = formatDisplayOrderId(rawId);
 
   return (
     <div

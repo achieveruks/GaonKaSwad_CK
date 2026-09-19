@@ -1215,9 +1215,29 @@ export async function deleteSupabaseCustomerAddress(addressId: string): Promise<
   }
 }
 
+/**
+ * Formats an order ID for UI presentation with a single leading '#'.
+ * E.g. 'GKSWAD-00051' -> '#GKSWAD-00051'
+ * Legacy 'GKSWAD-#00051' -> '#GKSWAD-00051'
+ * '#GKSWAD-00051' -> '#GKSWAD-00051'
+ */
+export function formatDisplayOrderId(orderId?: string | null): string {
+  if (!orderId) return '';
+  const clean = String(orderId).trim().replace(/^#+/, '').replace(/GKSWAD-#/i, 'GKSWAD-');
+  return clean ? `#${clean}` : '';
+}
+
+/**
+ * Normalizes an order ID to clean URL-safe format: GKSWAD-00051
+ */
+export function normalizeOrderId(orderId?: string | null): string {
+  if (!orderId) return '';
+  return String(orderId).trim().replace(/^#+/, '').replace(/GKSWAD-#/i, 'GKSWAD-');
+}
+
 export async function getNextSequentialOrderId(): Promise<string> {
   if (!isSupabaseConfigured()) {
-    return `GKSWAD-#00001`;
+    return `GKSWAD-00001`;
   }
   try {
     const { data, error } = await supabase
@@ -1227,7 +1247,7 @@ export async function getNextSequentialOrderId(): Promise<string> {
       .limit(100);
 
     if (error || !data || data.length === 0) {
-      return `GKSWAD-#00001`;
+      return `GKSWAD-00001`;
     }
 
     let maxNum = 0;
@@ -1244,9 +1264,9 @@ export async function getNextSequentialOrderId(): Promise<string> {
       }
     }
     const nextSeq = maxNum + 1;
-    return `GKSWAD-#${String(nextSeq).padStart(5, '0')}`;
+    return `GKSWAD-${String(nextSeq).padStart(5, '0')}`;
   } catch {
-    return `GKSWAD-#00001`;
+    return `GKSWAD-00001`;
   }
 }
 
@@ -1651,13 +1671,18 @@ export async function fetchSupabaseOrdersByPhone(phone: string): Promise<{ order
 }
 
 export async function fetchSupabaseOrderById(orderId: string): Promise<Order | null> {
-  if (!isSupabaseConfigured()) return null;
+  if (!isSupabaseConfigured() || !orderId) return null;
 
   try {
+    const cleanId = orderId.replace(/^#+/, '');
+    const altId = cleanId.includes('GKSWAD-#')
+      ? cleanId.replace('GKSWAD-#', 'GKSWAD-')
+      : (cleanId.includes('GKSWAD-') ? cleanId.replace('GKSWAD-', 'GKSWAD-#') : cleanId);
+
     const { data, error } = await supabase
       .from('orders')
       .select('*')
-      .or(`order_id.eq.${orderId},id.eq.${orderId}`)
+      .or(`order_id.eq.${orderId},id.eq.${orderId},order_number.eq.${orderId},order_id.eq.${cleanId},order_number.eq.${cleanId},order_id.eq.${altId},order_number.eq.${altId}`)
       .maybeSingle();
 
     if (error || !data) return null;
@@ -1708,10 +1733,15 @@ export async function updateSupabaseOrderStatus(
   }
 
   try {
+    const cleanId = orderId.replace(/^#+/, '');
+    const altId = cleanId.includes('GKSWAD-#')
+      ? cleanId.replace('GKSWAD-#', 'GKSWAD-')
+      : (cleanId.includes('GKSWAD-') ? cleanId.replace('GKSWAD-', 'GKSWAD-#') : cleanId);
+
     const { error } = await supabase
       .from('orders')
       .update(updateFields)
-      .or(`order_id.eq.${orderId},id.eq.${orderId}`);
+      .or(`order_id.eq.${orderId},id.eq.${orderId},order_number.eq.${orderId},order_id.eq.${cleanId},order_number.eq.${cleanId},order_id.eq.${altId},order_number.eq.${altId}`);
 
     if (!error && norm === 'cancelled') {
       try {
@@ -1750,8 +1780,8 @@ export async function createSupabaseOrder(orderData: Partial<Order>): Promise<Or
   if (!isSupabaseConfigured()) throw new Error('Supabase not configured');
 
   const id = `order-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
-  let orderId = orderData.orderId;
-  if (!orderId || !orderId.startsWith('GKSWAD-#')) {
+  let orderId = orderData.orderId ? normalizeOrderId(orderData.orderId) : '';
+  if (!orderId || !orderId.startsWith('GKSWAD-')) {
     orderId = await getNextSequentialOrderId();
   }
   const now = new Date().toISOString();

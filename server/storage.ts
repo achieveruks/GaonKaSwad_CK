@@ -1281,10 +1281,11 @@ class AppStorage {
         }
       }
     }
+    const normalizedInputId = orderData.orderId ? orderData.orderId.replace(/^#+/, '').replace(/GKSWAD-#/i, 'GKSWAD-') : '';
     const formattedOrderId =
-      orderData.orderId && orderData.orderId.startsWith('GKSWAD-#')
-        ? orderData.orderId
-        : `GKSWAD-#${String(nextSeq).padStart(3, '0')}`;
+      normalizedInputId && normalizedInputId.startsWith('GKSWAD-')
+        ? normalizedInputId
+        : `GKSWAD-${String(nextSeq).padStart(5, '0')}`;
 
     // Atomically decrement portions in products for this outlet
     if (orderData.items && Array.isArray(orderData.items)) {

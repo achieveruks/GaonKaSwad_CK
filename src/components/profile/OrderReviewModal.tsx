@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { Order } from '../../types';
 import { useCustomer } from '../../context/CustomerContext';
+import { formatDisplayOrderId } from '../../lib/supabaseService';
 
 interface OrderReviewModalProps {
   order: Order;
@@ -217,7 +218,7 @@ export const OrderReviewModal: React.FC<OrderReviewModalProps> = ({
                   <ShieldCheck className="w-3 h-3 text-amber-300" /> Verified Purchase
                 </span>
               </div>
-              <p className="text-xs text-amber-200/80">Order #{order.orderId || order.id}</p>
+              <p className="text-xs text-amber-200/80">Order {formatDisplayOrderId(order.orderId || order.id)}</p>
             </div>
           </div>
           <button

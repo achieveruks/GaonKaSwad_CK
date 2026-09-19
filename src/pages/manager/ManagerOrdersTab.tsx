@@ -44,7 +44,7 @@ import {
   isOrderMatchingDateFilter,
   OrderDateFilterType,
 } from '../../utils/dateUtils';
-import { fetchSupabaseOrders, updateSupabaseOrderStatus } from '../../lib/supabaseService';
+import { fetchSupabaseOrders, updateSupabaseOrderStatus, formatDisplayOrderId } from '../../lib/supabaseService';
 import { ManagerOrderDetailsModal } from './ManagerOrderDetailsModal';
 import { CancelOrderModal } from './CancelOrderModal';
 
@@ -1216,7 +1216,7 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
                   <div className="flex items-center gap-2.5 flex-wrap">
                     <div className="flex items-center gap-1.5">
                       <span className="text-sm font-black font-mono tracking-tight text-stone-900">
-                        {order.orderId || order.id}
+                        {formatDisplayOrderId(order.orderId || order.id)}
                       </span>
                       <button
                         type="button"

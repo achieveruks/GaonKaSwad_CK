@@ -3442,7 +3442,7 @@ async function startServer() {
         .limit(100);
 
       if (error || !data || data.length === 0) {
-        return 'GKSWAD-#00001';
+        return 'GKSWAD-00001';
       }
 
       let maxNum = 0;
@@ -3459,9 +3459,9 @@ async function startServer() {
         }
       }
       const nextSeq = maxNum + 1;
-      return `GKSWAD-#${String(nextSeq).padStart(5, '0')}`;
+      return `GKSWAD-${String(nextSeq).padStart(5, '0')}`;
     } catch {
-      return 'GKSWAD-#00001';
+      return 'GKSWAD-00001';
     }
   }
 
@@ -3908,8 +3908,8 @@ async function startServer() {
           }
         }
 
-        let finalOrderId = order.orderId;
-        if (!finalOrderId || finalOrderId === 'GKSWAD-#001') {
+        let finalOrderId = order.orderId ? String(order.orderId).trim().replace(/^#+/, '').replace(/GKSWAD-#/i, 'GKSWAD-') : '';
+        if (!finalOrderId || !finalOrderId.startsWith('GKSWAD-')) {
           finalOrderId = await getNextServerOrderId();
         }
 
@@ -4461,12 +4461,18 @@ async function startServer() {
   // 22. Orders: Get Single Order
   app.get('/api/orders/:orderId', async (req, res) => {
     try {
-      const param = req.params.orderId;
+      const rawParam = req.params.orderId;
+      const param = decodeURIComponent(rawParam);
+      const cleanParam = param.replace(/^#+/, '');
+      const altParam = cleanParam.includes('GKSWAD-#')
+        ? cleanParam.replace('GKSWAD-#', 'GKSWAD-')
+        : (cleanParam.includes('GKSWAD-') ? cleanParam.replace('GKSWAD-', 'GKSWAD-#') : cleanParam);
+
       try {
         const { data } = await serverSupabase
           .from('orders')
           .select('*')
-          .or(`order_number.eq.${param},order_id.eq.${param},id.eq.${param}`)
+          .or(`order_number.eq.${param},order_id.eq.${param},id.eq.${param},order_number.eq.${cleanParam},order_id.eq.${cleanParam},order_number.eq.${altParam},order_id.eq.${altParam}`)
           .maybeSingle();
 
         if (data) {
@@ -4476,7 +4482,7 @@ async function startServer() {
         console.warn('Supabase get order notice:', e);
       }
 
-      const order = productStorage.getOrderById(param);
+      const order = productStorage.getOrderById(param) || productStorage.getOrderById(cleanParam) || productStorage.getOrderById(altParam);
       if (!order) {
         return res.status(404).json({ success: false, error: 'Order not found' });
       }
