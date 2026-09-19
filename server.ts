@@ -3990,10 +3990,25 @@ async function startServer() {
         }
 
         if (res1.data) {
-          console.log(`Order ${res1.data.order_id || res1.data.id} successfully persisted to Supabase.`);
-          if (res1.data.order_id && res1.data.order_id !== order.orderId) {
-            order.orderId = res1.data.order_id;
+          // If Supabase trigger forced a GKSWAD-# format, immediately strip the inner #
+          const dbOrderId = String(res1.data.order_id || res1.data.order_number || finalOrderId);
+          if (dbOrderId.includes('GKSWAD-#')) {
+            const cleanOrderId = dbOrderId.replace(/GKSWAD-#/g, 'GKSWAD-');
+            try {
+              await serverSupabase
+                .from('orders')
+                .update({ order_id: cleanOrderId, order_number: cleanOrderId })
+                .eq('id', res1.data.id);
+              res1.data.order_id = cleanOrderId;
+              res1.data.order_number = cleanOrderId;
+            } catch (cleanErr) {
+              console.warn('Post-insert ID normalization notice:', cleanErr);
+            }
           }
+
+          console.log(`Order ${res1.data.order_id || res1.data.id} successfully persisted to Supabase.`);
+          order.orderId = res1.data.order_id || finalOrderId;
+          order.orderNumber = res1.data.order_number || order.orderId;
 
           // Insert normalized order_items into Supabase
           if (safeItems.length > 0) {

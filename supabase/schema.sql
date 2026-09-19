@@ -343,19 +343,20 @@ CREATE INDEX IF NOT EXISTS idx_order_items_product_id ON public.order_items(prod
 -- AUTO-INCREMENT ORDER NUMBERS & ATOMIC INVENTORY DECREMENT
 -- ============================================================================
 
--- Sequence for Auto-Incrementing Order IDs (e.g. GKSWAD-#001, GKSWAD-#002)
+-- Sequence for Auto-Incrementing Order IDs (e.g. GKSWAD-00001, GKSWAD-00002)
 CREATE SEQUENCE IF NOT EXISTS public.order_number_seq START WITH 1;
 
--- Function: Automatically format order_id as GKSWAD-#001, GKSWAD-#002, ...
+-- Function: Automatically format order_id as GKSWAD-00001, GKSWAD-00002, ...
 CREATE OR REPLACE FUNCTION public.generate_order_id()
 RETURNS TRIGGER AS $$
 DECLARE
   seq_val BIGINT;
 BEGIN
-  IF NEW.order_id IS NULL OR NEW.order_id = '' OR NEW.order_id LIKE 'temp-%' OR NEW.order_id NOT LIKE 'GKSWAD-#%' THEN
+  IF NEW.order_id IS NULL OR NEW.order_id = '' OR NEW.order_id LIKE 'temp-%' OR NEW.order_id NOT LIKE 'GKSWAD-%' OR NEW.order_id LIKE 'GKSWAD-#%' THEN
     seq_val := nextval('public.order_number_seq');
-    NEW.order_id := 'GKSWAD-#' || LPAD(seq_val::text, 3, '0');
+    NEW.order_id := 'GKSWAD-' || LPAD(seq_val::text, 5, '0');
   END IF;
+  NEW.order_number := NEW.order_id;
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;

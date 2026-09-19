@@ -1560,10 +1560,15 @@ export function mapDbOrderToOrder(row: any): Order {
 
   const resolvedOutlet = resolveDbOrderOutlet(row);
 
+  const rawDbOrderId = String(row.order_id || row.order_number || row.id || '');
+  const cleanDbOrderId = rawDbOrderId.replace(/GKSWAD-#/g, 'GKSWAD-');
+  const rawDbOrderNum = String(row.order_number || row.order_id || cleanDbOrderId);
+  const cleanDbOrderNum = rawDbOrderNum.replace(/GKSWAD-#/g, 'GKSWAD-');
+
   return {
-    id: row.id || row.order_id,
-    orderId: row.order_id || row.order_number || row.id,
-    orderNumber: row.order_number || row.order_id,
+    id: row.id || cleanDbOrderId,
+    orderId: cleanDbOrderId,
+    orderNumber: cleanDbOrderNum,
     outletId: resolvedOutlet.outletId,
     outletName: resolvedOutlet.outletName,
     kitchenAddress: resolvedOutlet.kitchenAddress,
@@ -1872,6 +1877,23 @@ export async function createSupabaseOrder(orderData: Partial<Order>): Promise<Or
 
   if (error) {
     console.warn('createSupabaseOrder direct insert notice:', error.message);
+  }
+
+  if (data) {
+    const rawOid = String(data.order_id || data.order_number || '');
+    if (rawOid.includes('GKSWAD-#')) {
+      const cleanOid = rawOid.replace(/GKSWAD-#/g, 'GKSWAD-');
+      try {
+        await supabase
+          .from('orders')
+          .update({ order_id: cleanOid, order_number: cleanOid })
+          .eq('id', data.id);
+        data.order_id = cleanOid;
+        data.order_number = cleanOid;
+      } catch (cleanErr) {
+        console.warn('Direct order post-insert normalization notice:', cleanErr);
+      }
+    }
   }
 
   // Atomically decrement portions in Supabase products
