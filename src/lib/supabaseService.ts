@@ -1894,6 +1894,36 @@ export async function createSupabaseOrder(orderData: Partial<Order>): Promise<Or
         console.warn('Direct order post-insert normalization notice:', cleanErr);
       }
     }
+
+    // Insert line items into order_items table
+    if (safeItems && safeItems.length > 0) {
+      try {
+        const orderItemsPayload = safeItems.map((item: any) => {
+          const pId = item.productId || item.product?.id || item.id;
+          const pName = item.name || item.product?.name || 'Product';
+          const vName = item.selectedVariant?.name || item.variantName || null;
+          const unitPrice = Number(item.unitPrice || item.price || item.product?.price || 0);
+          const qty = Number(item.quantity || 1);
+          const itemDiscount = Number(item.discount || item.discount_amount || 0);
+          const totalPrice = Number(item.totalPrice || Math.max(0, unitPrice * qty - itemDiscount));
+          return {
+            order_id: data.id,
+            product_id: pId ? String(pId) : null,
+            product_name: pName,
+            product_variant_name: vName,
+            quantity: qty,
+            unit_price: unitPrice,
+            discount_amount: itemDiscount,
+            total_price: totalPrice,
+            created_at: now,
+          };
+        });
+
+        await supabase.from('order_items').insert(orderItemsPayload);
+      } catch (itemsInsertErr) {
+        console.warn('createSupabaseOrder order_items insert notice:', itemsInsertErr);
+      }
+    }
   }
 
   // Atomically decrement portions in Supabase products
