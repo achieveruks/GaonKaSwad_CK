@@ -19,6 +19,7 @@ import {
   LogOut,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import gksSquareLogo from '../assets/images/gks_contrast_logo.jpg';
 
 export const Navbar: React.FC = () => {
   const { currentRoute, goToHome, goToShop, goToCategories, goToAbout, goToContact, goToProfile, goToOrders } =
@@ -84,23 +85,34 @@ export const Navbar: React.FC = () => {
     ? customer.fullName.trim().split(/\s+/)[0]
     : 'Customer';
 
-  // Format second line outlet name beside "G"
-  const getOutletSecondLine = () => {
+  // Format highlighted outlet name with 2-tone color split
+  const getOutletDisplayName = () => {
     const rawName = selectedLocation?.outletName || currentOutlet?.name;
-    if (!rawName) return 'Select Location';
+    if (!rawName) return { firstPart: 'Select', secondPart: 'Location', full: 'Select Location' };
 
     const cleaned = rawName
       .replace(/^Gaon\s+Ka\s+Swad\s*[-–:]\s*/i, '')
       .replace(/^Gaon\s+Ka\s+Swad\s*/i, '')
       .replace(/\bOutlet\s+Name\b/gi, '')
-      .replace(/\bOutlet\b/gi, '')
-      .replace(/\bCloud\s+Kitchen\b/gi, '')
       .trim();
 
-    return cleaned || rawName;
+    const text = cleaned || rawName;
+    const parts = text.split(/\s+/);
+    if (parts.length > 1) {
+      return {
+        firstPart: parts[0],
+        secondPart: parts.slice(1).join(' '),
+        full: text,
+      };
+    }
+    return {
+      firstPart: text,
+      secondPart: '',
+      full: text,
+    };
   };
 
-  const outletSecondLine = getOutletSecondLine();
+  const outletDisplay = getOutletDisplayName();
 
   return (
     <header className="sticky top-0 z-40 bg-white border-b border-stone-200 shadow-xs">
@@ -130,53 +142,73 @@ export const Navbar: React.FC = () => {
       </div>
 
       {/* Main Nav Container */}
-      <div className="max-w-7xl mx-auto px-2.5 sm:px-3 md:px-6 lg:px-8">
-        <div className="flex items-center justify-between min-h-[3.75rem] sm:min-h-[4rem] md:min-h-[4.25rem] py-1 gap-1.5 sm:gap-2 md:gap-4">
+      <div className="max-w-7xl mx-auto px-2 sm:px-3 md:px-5 lg:px-6">
+        <div className="flex items-center justify-between min-h-[3.75rem] sm:min-h-[4rem] md:min-h-[4.25rem] py-1 gap-1.5 sm:gap-2 md:gap-3">
           {/* Brand Logo & Outlet / PIN Header Area */}
-          <div className="flex items-center gap-1.5 sm:gap-2 md:gap-2.5 shrink-0 min-w-0">
+          <div className="flex items-center gap-2 sm:gap-2.5 shrink-0 min-w-0">
+            {/* Clean Styled Rounded-Square Logo - Enriched & larger without increasing bar height */}
             <div
               onClick={goToHome}
-              className="w-7 h-7 sm:w-8 sm:h-8 md:w-9 md:h-9 bg-amber-800 rounded-lg flex items-center justify-center text-white font-bold text-xs sm:text-sm md:text-lg shadow-xs hover:scale-105 transition-transform shrink-0 cursor-pointer select-none"
+              className="relative w-12 h-12 sm:w-13 sm:h-13 md:w-14 md:h-14 rounded-2xl p-0.5 bg-gradient-to-br from-amber-200 via-amber-700/40 to-stone-400 shadow-sm hover:shadow-md hover:scale-105 transition-all shrink-0 cursor-pointer select-none"
+              title="Gaon Ka Swad - Home"
             >
-              G
+              <div className="w-full h-full rounded-[14px] overflow-hidden bg-amber-50">
+                <img
+                  src={gksSquareLogo}
+                  alt="Gaon Ka Swad"
+                  className="w-full h-full object-cover"
+                  referrerPolicy="no-referrer"
+                />
+              </div>
             </div>
+
+            {/* Outlet Name First Highlight, PIN Selector, and Pill Badge */}
             <div className="flex flex-col justify-center leading-tight text-left min-w-0">
+              {/* Top Line: Outlet Name with 2-color styling */}
               <div
                 onClick={goToHome}
-                className="cursor-pointer select-none"
+                className="cursor-pointer select-none group flex items-baseline gap-1 min-w-0"
               >
-                <span className="font-heading font-bold text-xs sm:text-xs md:text-sm lg:text-base text-stone-900 tracking-tight whitespace-nowrap block">
-                  Gaon Ka <span className="text-amber-800">Swad</span>
-                </span>
-                <span
-                  style={{ fontFamily: "'Playfair Display', Georgia, serif" }}
-                  className="text-[9px] sm:text-[10px] md:text-xs italic font-semibold text-amber-700 tracking-wide max-w-[100px] sm:max-w-[120px] md:max-w-[200px] truncate block hover:text-amber-800 transition-colors leading-none"
-                >
-                  {outletSecondLine}
+                <span className="font-heading font-extrabold text-sm sm:text-base md:text-lg text-stone-900 tracking-tight truncate max-w-[130px] sm:max-w-[170px] md:max-w-[240px]">
+                  {outletDisplay.firstPart}
+                  {outletDisplay.secondPart && (
+                    <span className="text-amber-800 ml-1 font-extrabold">
+                      {outletDisplay.secondPart}
+                    </span>
+                  )}
                 </span>
               </div>
 
-              {/* Pin Layout directly below Outlet Name */}
+              {/* Location Pin & Change Directly Below Outlet Name */}
               <button
                 type="button"
                 id="header-location-button"
                 onClick={() => setIsLocationModalOpen(true)}
-                className="mt-0.5 flex items-center gap-0.5 sm:gap-1 text-[9px] sm:text-[10px] md:text-[11px] font-semibold text-amber-900 hover:text-amber-950 transition-colors group cursor-pointer w-fit leading-none"
+                className="flex items-center gap-1 text-[11px] sm:text-xs font-semibold text-stone-700 hover:text-amber-900 transition-colors group cursor-pointer w-fit leading-tight mt-0.5"
                 title="Click to select or change delivery PIN code"
               >
-                <MapPin className="w-2.5 h-2.5 sm:w-2.5 sm:h-2.5 md:w-3 md:h-3 text-amber-700 group-hover:text-amber-900 shrink-0" />
-                <span className="font-bold underline decoration-amber-400 group-hover:decoration-amber-700 underline-offset-2">
-                  {selectedLocation ? `PIN ${selectedLocation.pinCode}` : 'Select PIN'}
+                <MapPin className="w-3 h-3 text-amber-700 shrink-0" />
+                <span className="font-bold text-stone-900">
+                  {selectedLocation ? `PIN ${selectedLocation.pinCode}` : 'PIN 751013'}
                 </span>
-                <span className="text-[8px] sm:text-[9px] md:text-[10px] text-amber-700 font-normal opacity-80">
-                  · Change
+                <span className="text-[10px] sm:text-[11px] text-amber-800 font-bold underline decoration-amber-300 group-hover:decoration-amber-800 underline-offset-2 ml-0.5">
+                  Change
                 </span>
+                <ChevronDown className="w-3 h-3 text-stone-400 group-hover:text-amber-800 transition-transform group-hover:translate-y-0.5" />
               </button>
+
+              {/* Below Line: Stylish Pill Badge */}
+              <div className="mt-1">
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 text-amber-900 border border-amber-200/80 text-[10px] sm:text-[10.5px] font-semibold tracking-wide whitespace-nowrap shadow-2xs">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-700 inline-block shrink-0 animate-pulse" />
+                  A Gaon Ka Swad Kitchen
+                </span>
+              </div>
             </div>
           </div>
 
           {/* Search Bar taking remaining space */}
-          <div className="hidden sm:block flex-1 min-w-0 max-w-3xl mx-1 sm:mx-2 md:mx-4">
+          <div className="hidden sm:block flex-1 min-w-0 max-w-2xl lg:max-w-3xl ml-2 sm:ml-3 md:ml-4 mr-1 sm:mr-2">
             <SearchBar />
           </div>
 
@@ -461,26 +493,44 @@ export const Navbar: React.FC = () => {
             className="xl:hidden bg-white border-b border-stone-200 overflow-hidden"
           >
             <div className="px-4 py-4 space-y-1.5">
-              {/* Location info inside mobile menu */}
+              {/* Location info inside mobile menu with Outlet Branding */}
               <div
                 onClick={() => {
                   setIsMobileMenuOpen(false);
                   setIsLocationModalOpen(true);
                 }}
-                className="p-3 bg-amber-50 rounded-xl border border-amber-200 cursor-pointer flex items-center justify-between mb-3"
+                className="p-3 bg-amber-50/80 rounded-xl border border-amber-200 cursor-pointer flex items-center justify-between mb-3"
               >
-                <div className="flex items-center gap-2">
-                  <MapPin className="w-4 h-4 text-amber-800 shrink-0" />
-                  <div>
-                    <div className="text-xs font-bold text-stone-900">
-                      {selectedLocation ? `PIN ${selectedLocation.pinCode}` : 'Select Delivery PIN'}
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-11 h-11 rounded-xl p-0.5 bg-gradient-to-br from-amber-200 via-amber-700/40 to-stone-400 overflow-hidden shrink-0 shadow-xs">
+                    <div className="w-full h-full rounded-[10px] overflow-hidden bg-amber-50">
+                      <img
+                        src={gksSquareLogo}
+                        alt="Gaon Ka Swad"
+                        className="w-full h-full object-cover"
+                        referrerPolicy="no-referrer"
+                      />
                     </div>
-                    <div className="text-[11px] text-stone-500 line-clamp-1">
-                      {selectedLocation ? selectedLocation.outletName : 'Check kitchen availability'}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-xs font-bold text-stone-900 truncate">
+                      <span>{outletDisplay.firstPart}</span>
+                      {outletDisplay.secondPart && (
+                        <span className="text-amber-800 ml-1 font-bold">{outletDisplay.secondPart}</span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1 mt-0.5">
+                      <span className="inline-flex items-center gap-1 px-1.5 py-0.2 bg-amber-100/70 text-amber-950 rounded-full text-[9.5px] font-semibold">
+                        A Gaon Ka Swad Kitchen
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-stone-700 font-medium flex items-center gap-1 mt-1">
+                      <MapPin className="w-3 h-3 text-amber-800 shrink-0" />
+                      <span className="font-bold">{selectedLocation ? `PIN ${selectedLocation.pinCode}` : 'PIN 751013'}</span>
                     </div>
                   </div>
                 </div>
-                <span className="text-xs font-bold text-amber-800 underline">Change</span>
+                <span className="text-xs font-bold text-amber-800 underline shrink-0">Change</span>
               </div>
 
               <button
