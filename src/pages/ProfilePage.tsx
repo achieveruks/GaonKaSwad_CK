@@ -64,6 +64,7 @@ export const ProfilePage: React.FC = () => {
     updateAddress,
     deleteAddress,
     setAddressAsDefault,
+    refreshCustomerProfile,
   } = useCustomer();
   const { goToHome, goToShop, goToCheckout, goToOrders } = useNavigation();
   const { addToCart, showToast, setIsCartDrawerOpen } = useCart();
@@ -146,6 +147,13 @@ export const ProfilePage: React.FC = () => {
       setEmail(customer.email || '');
     }
   }, [customer]);
+
+  // Ensure fresh profile from DB when landing on Profile page
+  useEffect(() => {
+    if (customer?.phone) {
+      refreshCustomerProfile(customer.phone);
+    }
+  }, [customer?.phone, refreshCustomerProfile]);
 
   // Load customer addresses from database on mount & customer change
   useEffect(() => {

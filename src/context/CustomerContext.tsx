@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { Customer, CustomerAddress } from '../types';
 import {
   fetchSupabaseCustomerByPhone,
@@ -10,8 +10,9 @@ import {
   upsertSupabaseCustomerAddress,
   generateAndSaveSupabaseOtp,
   verifySupabaseOtp,
+  mapDbCustomerToCustomer,
 } from '../lib/supabaseService';
-import { isSupabaseConfigured } from '../lib/supabase';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
 
 interface CustomerContextType {
   customer: Customer | null;
@@ -50,6 +51,7 @@ interface CustomerContextType {
     defaultAddress?: CustomerAddress | null;
     welcomeDiscountEligible?: boolean;
   }>;
+  refreshCustomerProfile: (optPhone?: string) => Promise<Customer | null>;
   fetchCustomerAddresses: (customerId?: string, phone?: string) => Promise<CustomerAddress[]>;
   saveNewAddress: (
     addressData: Partial<CustomerAddress>,
@@ -167,6 +169,102 @@ export const CustomerProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       setIsWelcomeDiscountEligible(true);
     }
   }, [customer]);
+
+  // Synchronize customer profile directly from database (mount, tab focus, or manual trigger)
+  const refreshCustomerProfile = useCallback(async (optPhone?: string): Promise<Customer | null> => {
+    const targetPhone = (optPhone || customer?.phone || '').replace(/\D/g, '').slice(-10);
+    if (!targetPhone || targetPhone.length !== 10) return null;
+
+    try {
+      if (isSupabaseConfigured()) {
+        const { customer: dbCust, defaultAddress: dbAddr } = await fetchSupabaseCustomerByPhone(targetPhone);
+        if (dbCust) {
+          setCustomer((prev) => {
+            // Check if there are meaningful differences to avoid redundant state updates
+            if (
+              !prev ||
+              prev.id !== dbCust.id ||
+              prev.fullName !== dbCust.fullName ||
+              prev.email !== dbCust.email ||
+              prev.welcomeDiscountUsed !== dbCust.welcomeDiscountUsed
+            ) {
+              return dbCust;
+            }
+            return prev;
+          });
+          if (dbAddr) {
+            setDefaultAddress((prev) => (prev?.id === dbAddr.id ? prev : dbAddr));
+          }
+          return dbCust;
+        }
+      }
+    } catch (err) {
+      console.warn('refreshCustomerProfile error:', err);
+    }
+    return null;
+  }, [customer?.phone]);
+
+  // 1. Initial Mount & Tab Visibility Revalidation (handles past updates made on other devices)
+  useEffect(() => {
+    // Immediate check on mount if a customer is present
+    if (customer?.phone) {
+      refreshCustomerProfile(customer.phone);
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && customer?.phone) {
+        refreshCustomerProfile(customer.phone);
+      }
+    };
+
+    window.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleVisibilityChange);
+    return () => {
+      window.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleVisibilityChange);
+    };
+  }, [customer?.phone, refreshCustomerProfile]);
+
+  // 2. Supabase Realtime Subscription (handles live concurrent updates made on other devices/admin)
+  useEffect(() => {
+    if (!isSupabaseConfigured() || !customer?.id) return;
+
+    const custId = customer.id;
+    const channelName = `realtime-customer-${custId}`;
+
+    const channel = supabase
+      .channel(channelName)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'customers',
+          filter: `id=eq.${custId}`,
+        },
+        (payload: any) => {
+          if (payload.new) {
+            const updated = mapDbCustomerToCustomer(payload.new);
+            setCustomer((prev) => {
+              if (
+                !prev ||
+                prev.fullName !== updated.fullName ||
+                prev.email !== updated.email ||
+                prev.welcomeDiscountUsed !== updated.welcomeDiscountUsed
+              ) {
+                return { ...prev, ...updated };
+              }
+              return prev;
+            });
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [customer?.id]);
 
   // Load customer addresses directly from database (always fresh, zero client cache)
   const fetchCustomerAddresses = useCallback(async (customerId?: string, phone?: string): Promise<CustomerAddress[]> => {
@@ -575,15 +673,33 @@ export const CustomerProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           };
         }
         verifiedSuccess = true;
+
+        // Fetch existing customer details from Supabase if not returned by server
+        if (!verifiedCustomer && isSupabaseConfigured()) {
+          try {
+            const { customer: existingCust, defaultAddress: existingAddr } = await fetchSupabaseCustomerByPhone(normPhone);
+            if (existingCust) {
+              verifiedCustomer = existingCust;
+              if (existingAddr && !defaultAddr) {
+                defaultAddr = existingAddr;
+              }
+              welcomeEligible = !existingCust.welcomeDiscountUsed;
+              isNew = false;
+            }
+          } catch (fetchErr) {
+            console.warn('Supabase fetchCustomerByPhone fallback warning:', fetchErr);
+          }
+        }
       }
 
       // 3. Ensure customer record exists in Supabase public.customers table
       if (isSupabaseConfigured()) {
         try {
+          const resolvedName = extraData?.fullName?.trim() || verifiedCustomer?.fullName;
           const supaCust = await upsertSupabaseCustomer({
             phone: normPhone,
-            fullName: extraData?.fullName || verifiedCustomer?.fullName || 'Customer',
-            email: extraData?.email || verifiedCustomer?.email,
+            fullName: resolvedName && resolvedName.toLowerCase() !== 'customer' ? resolvedName : (verifiedCustomer?.fullName || undefined),
+            email: extraData?.email?.trim() || verifiedCustomer?.email,
           });
           if (supaCust) {
             verifiedCustomer = { ...(verifiedCustomer || {}), ...supaCust };
@@ -839,6 +955,7 @@ export const CustomerProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         sendOtp,
         verifyOtp,
         lookupCustomer,
+        refreshCustomerProfile,
         fetchCustomerAddresses,
         saveNewAddress,
         updateAddress,

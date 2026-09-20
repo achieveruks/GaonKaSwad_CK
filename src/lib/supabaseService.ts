@@ -935,7 +935,14 @@ export async function upsertSupabaseCustomer(customerData: {
     const updatePayload: any = {
       updated_at: now,
     };
-    if (customerData.fullName) updatePayload.full_name = customerData.fullName.trim();
+    const cleanIncomingName = customerData.fullName ? customerData.fullName.trim() : '';
+    // Guard: Only update existing full_name if the incoming name is provided AND not the generic placeholder 'Customer',
+    // OR if the existing customer currently only has 'Customer' as their name.
+    if (cleanIncomingName && cleanIncomingName.toLowerCase() !== 'customer') {
+      updatePayload.full_name = cleanIncomingName;
+    } else if (cleanIncomingName && existing.full_name === 'Customer') {
+      updatePayload.full_name = cleanIncomingName;
+    }
     if (customerData.email !== undefined) updatePayload.email = customerData.email ? customerData.email.trim() : null;
     if (customerData.marketingConsent !== undefined) updatePayload.marketing_consent = !!customerData.marketingConsent;
     if (customerData.welcomeDiscountUsed !== undefined) updatePayload.welcome_discount_used = !!customerData.welcomeDiscountUsed;
