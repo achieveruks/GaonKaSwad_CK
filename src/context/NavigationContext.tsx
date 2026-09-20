@@ -53,13 +53,28 @@ interface NavigationContextType {
 
 const NavigationContext = createContext<NavigationContextType | undefined>(undefined);
 
-// Helper to parse route from URL hash
-function parseHash(hash: string): AppRoute {
-  const cleanHash = hash.replace(/^#\/?/, '');
-  if (!cleanHash || cleanHash === '') return { path: '/' };
+// Helper to parse route from pathname, search, and optional hash
+function parseCurrentLocation(pathname: string, search: string, hash: string): AppRoute {
+  // 1. Backward compatibility: if URL contains a hash route (e.g. #/shop or #contact), parse hash first
+  if (hash && hash.length > 1) {
+    const cleanHash = hash.replace(/^#\/?/, '');
+    if (cleanHash) {
+      const [hashMain, hashQuery] = cleanHash.split('?');
+      const hashParams = new URLSearchParams(hashQuery || '');
+      const matched = parseRouteSegments(hashMain, hashParams);
+      if (matched) return matched;
+    }
+  }
 
-  const [main, queryString] = cleanHash.split('?');
-  const params = new URLSearchParams(queryString || '');
+  // 2. Standard HTML5 clean pathname (e.g. /, /shop, /contact, /about)
+  const cleanPath = pathname.replace(/^\/+/, '').replace(/\/+$/, '');
+  const params = new URLSearchParams(search || '');
+  const matched = parseRouteSegments(cleanPath, params);
+  return matched || { path: '/' };
+}
+
+function parseRouteSegments(main: string, params: URLSearchParams): AppRoute | null {
+  if (!main || main === '') return { path: '/' };
 
   // Owner Routes
   if (main === 'owner/login' || main === 'owner-login') {
@@ -145,86 +160,102 @@ function parseHash(hash: string): AppRoute {
   return { path: '/' };
 }
 
-function routeToHash(route: AppRoute): string {
+function routeToUrl(route: AppRoute): string {
   switch (route.path) {
     case '/':
-      return '#/';
+      return '/';
     case '/shop': {
       const params = new URLSearchParams();
       if (route.category) params.set('category', route.category);
       if (route.search) params.set('search', route.search);
       const str = params.toString();
-      return str ? `#/shop?${str}` : '#/shop';
+      return str ? `/shop?${str}` : '/shop';
     }
     case '/categories':
-      return '#/categories';
+      return '/categories';
     case '/product':
-      return `#/product/${route.slug}`;
+      return `/product/${route.slug}`;
     case '/cart':
-      return '#/cart';
+      return '/cart';
     case '/checkout':
-      return '#/checkout';
+      return '/checkout';
     case '/profile':
-      return '#/profile';
+      return '/profile';
     case '/orders':
-      return route.tab ? `#/orders?tab=${encodeURIComponent(route.tab)}` : '#/orders';
+      return route.tab ? `/orders?tab=${encodeURIComponent(route.tab)}` : '/orders';
     case '/about':
-      return '#/about';
+      return '/about';
     case '/contact':
-      return '#/contact';
+      return '/contact';
     case '/order-success':
-      return `#/order-success/${route.orderId}`;
+      return `/order-success/${route.orderId}`;
     case '/owner/login':
-      return '#/owner/login';
+      return '/owner/login';
     case '/owner/dashboard':
-      return '#/owner/dashboard';
+      return '/owner/dashboard';
     case '/owner/products':
-      return '#/owner/products';
+      return '/owner/products';
     case '/owner/products/new':
-      return '#/owner/products/new';
+      return '/owner/products/new';
     case '/owner/products/edit':
-      return `#/owner/products/edit/${route.productId}`;
+      return `/owner/products/edit/${route.productId}`;
     case '/owner/outlets':
-      return '#/owner/outlets';
+      return '/owner/outlets';
     case '/owner/outlets/new':
-      return '#/owner/outlets/new';
+      return '/owner/outlets/new';
     case '/owner/outlets/edit':
-      return `#/owner/outlets/edit/${route.outletId}`;
+      return `/owner/outlets/edit/${route.outletId}`;
     case '/owner/delivery-zones':
-      return '#/owner/delivery-zones';
+      return '/owner/delivery-zones';
     case '/owner/coupons':
-      return '#/owner/coupons';
+      return '/owner/coupons';
     case '/manager/dashboard':
-      return '#/manager/dashboard';
+      return '/manager/dashboard';
     default:
-      return '#/';
+      return '/';
   }
 }
 
 export const NavigationProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentRoute, setCurrentRoute] = useState<AppRoute>(() => {
-    if (typeof window !== 'undefined' && window.location.hash) {
-      return parseHash(window.location.hash);
+    if (typeof window !== 'undefined') {
+      return parseCurrentLocation(window.location.pathname, window.location.search, window.location.hash);
     }
-    return { path: '/contact' };
+    return { path: '/' };
   });
 
   useEffect(() => {
-    const handleHashChange = () => {
-      const newRoute = parseHash(window.location.hash);
+    const handleLocationChange = () => {
+      const newRoute = parseCurrentLocation(window.location.pathname, window.location.search, window.location.hash);
       setCurrentRoute(newRoute);
       window.scrollTo({ top: 0, behavior: 'smooth' });
     };
 
-    window.addEventListener('hashchange', handleHashChange);
-    return () => window.removeEventListener('hashchange', handleHashChange);
+    window.addEventListener('popstate', handleLocationChange);
+    window.addEventListener('hashchange', handleLocationChange);
+
+    // If initial URL had an old hash (e.g. #/shop or #/contact), clean it up to standard pathname
+    if (typeof window !== 'undefined' && window.location.hash && window.location.hash.startsWith('#/')) {
+      const cleanTarget = routeToUrl(parseCurrentLocation(window.location.pathname, window.location.search, window.location.hash));
+      window.history.replaceState({}, '', cleanTarget);
+    }
+
+    return () => {
+      window.removeEventListener('popstate', handleLocationChange);
+      window.removeEventListener('hashchange', handleLocationChange);
+    };
   }, []);
 
   const navigate = (route: AppRoute) => {
     setCurrentRoute(route);
-    const hash = routeToHash(route);
-    if (window.location.hash !== hash) {
-      window.location.hash = hash;
+    const targetUrl = routeToUrl(route);
+    
+    // Use HTML5 pushState to create clean URLs without '#'
+    if (typeof window !== 'undefined') {
+      const currentFull = window.location.pathname + window.location.search;
+      if (currentFull !== targetUrl || window.location.hash) {
+        window.history.pushState({}, '', targetUrl);
+      }
     }
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };

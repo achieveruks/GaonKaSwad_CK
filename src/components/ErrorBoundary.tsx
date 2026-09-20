@@ -49,7 +49,7 @@ export class ErrorBoundary extends Component<Props, State> {
             <button
               onClick={() => {
                 this.setState({ hasError: false, errorMessage: '' });
-                window.location.hash = '#/';
+                window.location.href = '/';
               }}
               className="w-full py-3 px-4 rounded-xl bg-amber-800 hover:bg-amber-900 text-white font-semibold text-sm transition-colors shadow-sm"
             >

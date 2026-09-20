@@ -40,14 +40,30 @@ export const ContactPage: React.FC = () => {
     return outlets.filter((o) => o.isActive);
   }, [outlets]);
 
+  // Fallback default outlet to prevent null reference errors while outlets load
+  const fallbackOutlet: Outlet = useMemo(() => ({
+    id: 'gks-bbsr-jv',
+    name: 'Jayadev Vihar Kitchen',
+    city: 'Bhubaneswar',
+    state: 'Odisha',
+    address: 'Plot No. 1202, Jayadev Vihar, Bhubaneswar, Odisha',
+    phone: '+91 94370 12345',
+    email: 'bhubaneswar@gaonkaswad.com',
+    pinCodes: ['751013', '751012'],
+    operatingHours: '11:00 AM - 11:00 PM',
+    avgCookingTime: '25-35 mins',
+    isActive: true,
+    fssaiLicId: 12023999000142
+  }), []);
+
   // Current outlet for the left-side Kitchen Concierge & Helpline card
-  const currentHub: Outlet | undefined = useMemo(() => {
-    return currentOutlet || availableOutlets[0];
-  }, [currentOutlet, availableOutlets]);
+  const currentHub: Outlet = useMemo(() => {
+    return currentOutlet || availableOutlets[0] || fallbackOutlet;
+  }, [currentOutlet, availableOutlets, fallbackOutlet]);
 
   // Target outlet chosen by the user in the right-hand inquiry form
   const [targetOutletId, setTargetOutletId] = useState<string>(() => {
-    return currentHub?.id || (availableOutlets[0]?.id ?? 'blr-hsr');
+    return currentHub?.id || fallbackOutlet.id;
   });
 
   // Sync default target outlet when current outlet changes if user hasn't explicitly changed it
@@ -57,13 +73,14 @@ export const ContactPage: React.FC = () => {
     }
   }, [currentHub?.id]);
 
-  const targetOutlet: Outlet | undefined = useMemo(() => {
+  const targetOutlet: Outlet = useMemo(() => {
     return (
       availableOutlets.find((o) => o.id === targetOutletId) ||
       currentHub ||
-      availableOutlets[0]
+      availableOutlets[0] ||
+      fallbackOutlet
     );
-  }, [availableOutlets, targetOutletId, currentHub]);
+  }, [availableOutlets, targetOutletId, currentHub, fallbackOutlet]);
 
   // City calculation for the "Active Cloud Kitchen Network" card (current city only)
   const currentCity = currentHub?.city || 'Bangalore';
