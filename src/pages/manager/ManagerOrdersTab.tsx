@@ -45,6 +45,7 @@ import {
   OrderDateFilterType,
 } from '../../utils/dateUtils';
 import { fetchSupabaseOrders, updateSupabaseOrderStatus, formatDisplayOrderId } from '../../lib/supabaseService';
+import { isSupabaseConfigured } from '../../lib/supabase';
 import { ManagerOrderDetailsModal } from './ManagerOrderDetailsModal';
 import { CancelOrderModal } from './CancelOrderModal';
 
@@ -160,28 +161,29 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
         let fetchedList: Order[] = [];
 
         // 1. Fetch from Supabase
+        let supaSuccess = false;
         try {
-          fetchedList = await fetchSupabaseOrders(currentOutlet.id);
+          if (isSupabaseConfigured()) {
+            fetchedList = await fetchSupabaseOrders(currentOutlet.id);
+            supaSuccess = true;
+          }
         } catch (e) {
           console.warn('Supabase orders fetch notice:', e);
         }
 
-        // 2. Fetch/merge from Express backend API
-        try {
-          const res = await fetch(`/api/orders?outletId=${currentOutlet.id}`);
-          if (res.ok) {
-            const data = await res.json();
-            if (data.success && Array.isArray(data.orders)) {
-              const existingIds = new Set(fetchedList.map((o) => o.orderId || o.id));
-              for (const o of data.orders) {
-                if (!existingIds.has(o.orderId || o.id)) {
-                  fetchedList.push(o);
-                }
+        // 2. Fetch/merge from Express backend API (only fallback or supplemental if Supabase is offline)
+        if (!supaSuccess) {
+          try {
+            const res = await fetch(`/api/orders?outletId=${currentOutlet.id}`);
+            if (res.ok) {
+              const data = await res.json();
+              if (data.success && Array.isArray(data.orders)) {
+                fetchedList = data.orders;
               }
             }
+          } catch (e) {
+            console.warn('API orders fetch notice:', e);
           }
-        } catch (e) {
-          console.warn('API orders fetch notice:', e);
         }
 
         // Sort descending by placedAt/createdAt (received date)

@@ -143,7 +143,6 @@ const DATA_DIR = path.join(process.cwd(), 'data');
 const PRODUCTS_FILE = path.join(DATA_DIR, 'products_store.json');
 const OUTLETS_FILE = path.join(DATA_DIR, 'outlets_store.json');
 const ZONES_FILE = path.join(DATA_DIR, 'zones_store.json');
-const ORDERS_FILE = path.join(DATA_DIR, 'orders_store.json');
 const CUSTOMERS_FILE = path.join(DATA_DIR, 'customers_store.json');
 const CUSTOMER_ADDRESSES_FILE = path.join(DATA_DIR, 'customer_addresses_store.json');
 const COUPONS_FILE = path.join(DATA_DIR, 'coupons_store.json');
@@ -240,7 +239,7 @@ class AppStorage {
     this.zones = [];
     this.abouts = [];
     this.products = [];
-    this.orders = safeReadJson<Order[]>(ORDERS_FILE, []);
+    this.orders = []; // Orders are exclusively persisted in Supabase database
     this.customers = safeReadJson<Customer[]>(CUSTOMERS_FILE, []);
     this.customerAddresses = safeReadJson<CustomerAddress[]>(CUSTOMER_ADDRESSES_FILE, []);
 
@@ -280,12 +279,7 @@ class AppStorage {
   private saveZones() {}
 
   private saveOrders() {
-    try {
-      if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-      fs.writeFileSync(ORDERS_FILE, JSON.stringify(this.orders, null, 2), 'utf-8');
-    } catch (e) {
-      console.warn('Warning: Could not save orders to disk.', e);
-    }
+    // No-op: Orders are strictly persisted in Supabase database; no local file writes
   }
 
   private saveSwadCoinRewards() {
@@ -1469,6 +1463,12 @@ class AppStorage {
       this.saveOrders();
     }
     return deleted;
+  }
+
+  public clearAllOrders(): void {
+    this.init();
+    this.orders = [];
+    this.saveOrders();
   }
 
   // =====================

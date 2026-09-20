@@ -4357,115 +4357,117 @@ async function startServer() {
       const now = new Date().toISOString();
       const norm = (status || '').toLowerCase().trim();
 
-      // 1. Immediately update in-memory storage array item
-      let updated = productStorage.updateOrderStatus(orderIdentifier, status, cancellationReason);
+      // 1. Prepare Supabase update payload
+      const supaUpdate: any = {
+        updated_at: now,
+      };
 
-      // If order is not yet present in in-memory storage, fetch from Supabase and upsert directly into in-memory array
-      if (!updated) {
-        try {
-          const { data: supaOrder } = await serverSupabase
-            .from('orders')
-            .select('*')
-            .or(`order_id.eq.${orderIdentifier},order_number.eq.${orderIdentifier},id.eq.${orderIdentifier}`)
-            .maybeSingle();
-
-          if (supaOrder) {
-            updated = productStorage.upsertOrder({
-              ...supaOrder,
-              status,
-              orderStatus: norm,
-              updatedAt: now,
-              deliveredAt: (norm === 'delivered' || norm === 'picked up') ? now : (supaOrder.delivered_at || undefined),
-              cancelledAt: norm === 'cancelled' ? now : undefined,
-              cancellationReason: norm === 'cancelled' ? cancellationReason : undefined,
-            });
-          }
-        } catch (fetchErr) {
-          console.warn('Supabase fetch for order upsert notice:', fetchErr);
+      if (norm === 'received') {
+        supaUpdate.order_status = 'received';
+      } else if (norm === 'confirmed') {
+        supaUpdate.order_status = 'confirmed';
+        supaUpdate.confirmed_at = now;
+      } else if (norm === 'preparing' || norm === 'in kitchen' || norm === 'preparing in kitchen') {
+        supaUpdate.order_status = 'preparing';
+        supaUpdate.preparing_at = now;
+      } else if (norm === 'ready' || norm === 'ready for pickup' || norm === 'ready for dispatch') {
+        supaUpdate.order_status = 'ready';
+        supaUpdate.ready_at = now;
+      } else if (norm === 'out_for_delivery' || norm === 'out for delivery') {
+        supaUpdate.order_status = 'out_for_delivery';
+        supaUpdate.out_for_delivery_at = now;
+      } else if (norm === 'delivered' || norm === 'picked up') {
+        supaUpdate.order_status = 'delivered';
+        supaUpdate.delivered_at = now;
+      } else if (norm === 'cancelled') {
+        supaUpdate.order_status = 'cancelled';
+        supaUpdate.cancelled_at = now;
+        if (cancellationReason) {
+          supaUpdate.cancellation_reason = cancellationReason;
         }
+        // Automatic Swad Coin refund on cancellation
+        try {
+          await refundOrderSwadCoins(orderIdentifier, cancellationReason || 'Order cancelled');
+        } catch (refErr) {
+          console.warn('Swad Coin refund warning on order cancel:', refErr);
+        }
+      } else {
+        supaUpdate.order_status = norm || 'received';
       }
 
-      // 2. Sync status update & corresponding transition timestamps to Supabase
+      // 2. Perform database update
+      let updatedRow: any = null;
       try {
-        const supaUpdate: any = {
-          updated_at: now,
-        };
-
-        if (norm === 'received') {
-          supaUpdate.order_status = 'received';
-        } else if (norm === 'confirmed') {
-          supaUpdate.order_status = 'confirmed';
-          supaUpdate.confirmed_at = now;
-        } else if (norm === 'preparing' || norm === 'in kitchen' || norm === 'preparing in kitchen') {
-          supaUpdate.order_status = 'preparing';
-          supaUpdate.preparing_at = now;
-        } else if (norm === 'ready' || norm === 'ready for pickup' || norm === 'ready for dispatch') {
-          supaUpdate.order_status = 'ready';
-          supaUpdate.ready_at = now;
-        } else if (norm === 'out_for_delivery' || norm === 'out for delivery') {
-          supaUpdate.order_status = 'out_for_delivery';
-          supaUpdate.out_for_delivery_at = now;
-        } else if (norm === 'delivered' || norm === 'picked up') {
-          supaUpdate.order_status = 'delivered';
-          supaUpdate.delivered_at = now;
-        } else if (norm === 'cancelled') {
-          supaUpdate.order_status = 'cancelled';
-          supaUpdate.cancelled_at = now;
-          if (cancellationReason) {
-            supaUpdate.cancellation_reason = cancellationReason;
-          }
-          // Automatic Swad Coin refund on cancellation across Supabase & local storage
-          try {
-            await refundOrderSwadCoins(orderIdentifier, cancellationReason || 'Order cancelled');
-          } catch (refErr) {
-            console.warn('Swad Coin refund warning on order cancel:', refErr);
-          }
-        } else {
-          supaUpdate.order_status = norm || 'received';
-        }
-
-        await serverSupabase
+        const { data: supaUpdated, error: supaErr } = await serverSupabase
           .from('orders')
           .update(supaUpdate)
-          .or(`order_id.eq.${orderIdentifier},order_number.eq.${orderIdentifier},id.eq.${orderIdentifier}`);
+          .or(`order_id.eq.${orderIdentifier},order_number.eq.${orderIdentifier},id.eq.${orderIdentifier}`)
+          .select()
+          .maybeSingle();
+
+        if (supaUpdated) {
+          updatedRow = supaUpdated;
+        } else if (supaErr) {
+          console.warn('Supabase order status update notice:', supaErr.message);
+        }
       } catch (syncErr) {
         console.warn('Supabase order status sync notice:', syncErr);
       }
 
-      if (!updated) {
-        return res.status(404).json({ success: false, error: 'Order not found' });
+      if (!updatedRow) {
+        return res.status(404).json({ success: false, error: 'Order not found in database' });
       }
-      return res.json({ success: true, order: updated });
+
+      return res.json({ success: true, order: mapDbOrderRow(updatedRow) });
     } catch (err: any) {
       console.error('Update order status error:', err);
       return res.status(500).json({ success: false, error: 'Failed to update order status' });
     }
   });
 
-  // 21c. Orders: Delete/Cancel Order
+  // 21c. Orders: Delete/Cancel Order or Clear All Orders
+  app.delete('/api/orders/all', async (req, res) => {
+    try {
+      try {
+        const { error } = await serverSupabase.from('orders').delete().neq('id', 'placeholder-keep-none');
+        if (error) {
+          console.warn('Supabase clear all orders error:', error.message);
+        }
+      } catch (e) {
+        console.warn('Supabase clear all orders notice:', e);
+      }
+      return res.json({ success: true, message: 'All orders cleared successfully from database' });
+    } catch (err: any) {
+      console.error('Clear all orders error:', err);
+      return res.status(500).json({ success: false, error: 'Failed to clear all orders' });
+    }
+  });
+
   app.delete('/api/orders/:orderId', async (req, res) => {
     try {
+      const orderIdParam = decodeURIComponent(req.params.orderId);
+      const cleanParam = orderIdParam.replace(/^#+/, '');
+
       // Auto-refund Swad Coins on deletion if redeemed
       try {
-        await refundOrderSwadCoins(req.params.orderId, 'Order deleted / cancelled');
+        await refundOrderSwadCoins(cleanParam, 'Order deleted / cancelled');
       } catch (rErr) {
         console.warn('Refund on delete order notice:', rErr);
       }
 
-      const deleted = productStorage.deleteOrder(req.params.orderId);
-      // Sync delete to Supabase
+      // Delete directly from Supabase
       try {
-        await serverSupabase
+        const { error } = await serverSupabase
           .from('orders')
           .delete()
-          .or(`order_id.eq.${req.params.orderId},id.eq.${req.params.orderId}`);
+          .or(`order_id.eq.${orderIdParam},id.eq.${orderIdParam},order_number.eq.${orderIdParam},order_id.eq.${cleanParam},order_number.eq.${cleanParam}`);
+        if (error) {
+          console.warn('Supabase order delete error:', error.message);
+        }
       } catch (e) {
         console.warn('Supabase order delete notice:', e);
       }
 
-      if (!deleted) {
-        return res.status(404).json({ success: false, error: 'Order not found' });
-      }
       return res.json({ success: true, message: 'Order removed successfully' });
     } catch (err: any) {
       console.error('Delete order error:', err);
@@ -4484,7 +4486,7 @@ async function startServer() {
         : (cleanParam.includes('GKSWAD-') ? cleanParam.replace('GKSWAD-', 'GKSWAD-#') : cleanParam);
 
       try {
-        const { data } = await serverSupabase
+        const { data, error } = await serverSupabase
           .from('orders')
           .select('*')
           .or(`order_number.eq.${param},order_id.eq.${param},id.eq.${param},order_number.eq.${cleanParam},order_id.eq.${cleanParam},order_number.eq.${altParam},order_id.eq.${altParam}`)
@@ -4493,15 +4495,14 @@ async function startServer() {
         if (data) {
           return res.json({ success: true, order: mapDbOrderRow(data) });
         }
+        if (!error) {
+          return res.status(404).json({ success: false, error: 'Order not found' });
+        }
       } catch (e) {
         console.warn('Supabase get order notice:', e);
       }
 
-      const order = productStorage.getOrderById(param) || productStorage.getOrderById(cleanParam) || productStorage.getOrderById(altParam);
-      if (!order) {
-        return res.status(404).json({ success: false, error: 'Order not found' });
-      }
-      return res.json({ success: true, order });
+      return res.status(404).json({ success: false, error: 'Order not found' });
     } catch (err: any) {
       console.error('Fetch order error:', err);
       return res.status(500).json({ success: false, error: 'Failed to fetch order' });
@@ -4530,23 +4531,24 @@ async function startServer() {
         }
 
         const { data, error } = await supaQuery;
-        if (!error && data && data.length > 0) {
-          let mapped = data.map(mapDbOrderRow);
-          if (status) {
-            const normStatus = status.toLowerCase().replace(/\s+/g, '_');
-            mapped = mapped.filter((o: any) =>
-              (o.orderStatus || '').toLowerCase() === normStatus ||
-              (o.status || '').toLowerCase() === status.toLowerCase()
-            );
-          }
-          return res.json({ success: true, orders: mapped, count: mapped.length });
+        if (error) {
+          console.warn('GET /api/orders Supabase query error:', error.message);
+          return res.status(500).json({ success: false, error: error.message });
         }
-      } catch (supaErr) {
-        console.warn('GET /api/orders Supabase query notice:', supaErr);
-      }
 
-      const orders = productStorage.getAllOrders(outletId, status);
-      return res.json({ success: true, orders, count: orders.length });
+        let mapped = (data || []).map(mapDbOrderRow);
+        if (status) {
+          const normStatus = status.toLowerCase().replace(/\s+/g, '_');
+          mapped = mapped.filter((o: any) =>
+            (o.orderStatus || '').toLowerCase() === normStatus ||
+            (o.status || '').toLowerCase() === status.toLowerCase()
+          );
+        }
+        return res.json({ success: true, orders: mapped, count: mapped.length });
+      } catch (supaErr) {
+        console.error('GET /api/orders Supabase query exception:', supaErr);
+        return res.status(500).json({ success: false, error: 'Failed to retrieve orders from database' });
+      }
     } catch (err: any) {
       console.error('Fetch orders error:', err);
       return res.status(500).json({ success: false, error: 'Failed to retrieve orders' });
@@ -4602,37 +4604,6 @@ async function startServer() {
         }
       } catch (supaErr) {
         console.warn('GET /api/analytics/outlet-bestsellers Supabase query error:', supaErr);
-      }
-
-      // Also incorporate any local in-memory storage orders for this outlet if present
-      try {
-        const localOrders = productStorage.getAllOrders(outletId);
-        const cutoffTime = Date.now() - days * 24 * 60 * 60 * 1000;
-        for (const order of localOrders) {
-          const orderTime = new Date(order.createdAt || (order as any).placedAt || 0).getTime();
-          const isCancelled = (order.orderStatus || (order as any).status || '').toLowerCase() === 'cancelled';
-          if (orderTime >= cutoffTime && !isCancelled && Array.isArray(order.items)) {
-            for (const item of order.items) {
-              const rawItem = item as any;
-              const pid = String(rawItem.productId || rawItem.product?.id || rawItem.id || '').trim();
-              if (!pid) continue;
-              const qty = Math.max(1, Number(rawItem.quantity) || 1);
-              if (!salesMap[pid]) {
-                salesMap[pid] = {
-                  productId: pid,
-                  totalSold: qty,
-                  orderCount: 1,
-                  name: rawItem.name || rawItem.product?.name,
-                };
-              } else {
-                salesMap[pid].totalSold += qty;
-                salesMap[pid].orderCount += 1;
-              }
-            }
-          }
-        }
-      } catch (localErr) {
-        // ignore
       }
 
       const sales = Object.values(salesMap).sort(
@@ -4755,24 +4726,6 @@ async function startServer() {
         }
       } catch (dbErr) {
         console.error('Fetch order from Supabase error:', dbErr);
-      }
-
-      // If not in Supabase, check storage for order metadata (e.g. guest checkout placed before DB sync)
-      if (!orderRow) {
-        const localOrd: any = productStorage.getOrderById(rawOrderId) || productStorage.getOrderById(noHashOrderId);
-        if (localOrd) {
-          orderRow = {
-            id: localOrd.id,
-            order_id: localOrd.orderId || localOrd.id,
-            status: localOrd.status,
-            order_status: localOrd.status,
-            items: localOrd.items,
-            outlet_id: localOrd.outletId,
-            delivered_at: localOrd.statusTimeline?.find((t: any) => t.status?.toLowerCase() === 'delivered')?.timestamp || localOrd.createdAt,
-            placed_at: localOrd.createdAt,
-            created_at: localOrd.createdAt,
-          };
-        }
       }
 
       if (!orderRow) {
