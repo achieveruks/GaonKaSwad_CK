@@ -927,33 +927,33 @@ export async function deleteZoneApi(id: string, token: string): Promise<boolean>
 }
 
 export async function createOrderApi(orderData: any): Promise<any> {
+  try {
+    const res = await fetch('/api/orders', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(orderData),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && data.order) {
+        return data.order;
+      }
+    }
+  } catch (err) {
+    console.warn('API createOrder error, falling back to direct Supabase:', err);
+  }
+
   if (isSupabaseConfigured()) {
     try {
-      const created = await createSupabaseOrder(orderData);
-      try {
-        fetch('/api/orders', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(orderData),
-        }).catch(() => {});
-      } catch {}
+      const created = await createSupabaseOrder(orderData, true);
       return created;
     } catch (err) {
-      console.warn('Supabase createOrder error, falling back to API:', err);
+      console.warn('Supabase createOrder fallback error:', err);
     }
   }
 
-  const res = await fetch('/api/orders', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(orderData),
-  });
-
-  const data = await res.json();
-  if (!res.ok || !data.success) {
-    throw new Error(data.error || 'Failed to submit order');
-  }
-  return data.order;
+  throw new Error('Failed to submit order');
 }

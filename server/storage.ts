@@ -664,6 +664,7 @@ class AppStorage {
         isFeatured: item.isFeatured,
         isBestseller: item.isBestseller,
         isChefSpecial: item.isChefSpecial,
+        portionsLeft: item.portionsLeft,
       });
     });
 
@@ -1280,44 +1281,6 @@ class AppStorage {
       normalizedInputId && normalizedInputId.startsWith('GKSWAD-')
         ? normalizedInputId
         : `GKSWAD-${String(nextSeq).padStart(5, '0')}`;
-
-    // Atomically decrement portions in products for this outlet
-    if (orderData.items && Array.isArray(orderData.items)) {
-      let anyStockChanged = false;
-      for (const item of orderData.items) {
-        const productId = item.product?.id || (item as any).productId || (item as any).id;
-        const qty = Number(item.quantity) || 1;
-        if (!productId) continue;
-
-        const prod = this.products.find((p) => String(p.id) === String(productId));
-        if (prod && Array.isArray(prod.outlets)) {
-          for (const outletCfg of prod.outlets) {
-            const oId = outletCfg.outletId;
-            if (
-              oId === orderData.outletId &&
-              outletCfg.portionsLeft !== null &&
-              outletCfg.portionsLeft !== undefined
-            ) {
-              const currentPortions = Number(outletCfg.portionsLeft);
-              if (!isNaN(currentPortions)) {
-                const nextPortions = Math.max(0, currentPortions - qty);
-                outletCfg.portionsLeft = nextPortions;
-                if (nextPortions <= 0) {
-                  outletCfg.inStock = false;
-                }
-                anyStockChanged = true;
-              }
-            }
-          }
-          if (anyStockChanged) {
-            prod.inStock = prod.outlets.some((o) => o.inStock);
-          }
-        }
-      }
-      if (anyStockChanged) {
-        this.saveProducts();
-      }
-    }
 
     const newOrder: Order = {
       orderId: formattedOrderId,

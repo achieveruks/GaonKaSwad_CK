@@ -12,6 +12,8 @@ import {
   updateOutletProductConfig as apiUpdateOutletProductConfig,
   batchUpdateOutletProducts as apiBatchUpdateOutletProducts,
 } from '../lib/products';
+import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { mapDbProductToProduct } from '../lib/supabaseService';
 import { useAuth } from './AuthContext';
 import { useLocation } from './LocationContext';
 import {
@@ -50,7 +52,14 @@ interface ProductContextType {
   updateOutletProduct: (
     outletId: string,
     productId: string | number,
-    config: { inStock?: boolean; isFeatured?: boolean; isBestseller?: boolean; isChefSpecial?: boolean; isAssigned?: boolean }
+    config: {
+      inStock?: boolean;
+      isFeatured?: boolean;
+      isBestseller?: boolean;
+      isChefSpecial?: boolean;
+      isAssigned?: boolean;
+      portionsLeft?: number | null;
+    }
   ) => Promise<Product>;
   batchUpdateOutletProducts: (
     outletId: string,
@@ -61,6 +70,7 @@ interface ProductContextType {
       isFeatured?: boolean;
       isBestseller?: boolean;
       isChefSpecial?: boolean;
+      portionsLeft?: number | null;
     }[]
   ) => Promise<Product[]>;
 }
@@ -75,8 +85,10 @@ export const ProductProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchProductList = useCallback(async () => {
-    setIsLoading(true);
+  const fetchProductList = useCallback(async (isSilent = false) => {
+    if (!isSilent) {
+      setIsLoading(true);
+    }
     setError(null);
     try {
       // Fetch products and categories in parallel from database
@@ -88,14 +100,95 @@ export const ProductProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setDbCategories(categoriesData);
     } catch (err: any) {
       console.error('Failed to load products in ProductProvider:', err);
-      setError('Could not load products. Please check your connection.');
+      if (!isSilent) {
+        setError('Could not load products. Please check your connection.');
+      }
     } finally {
-      setIsLoading(false);
+      if (!isSilent) {
+        setIsLoading(false);
+      }
     }
   }, [isAuthenticated, token]);
 
   useEffect(() => {
     fetchProductList();
+  }, [fetchProductList]);
+
+  // Real-time synchronization for products & orders (auto-sync portion decrements and stock changes)
+  useEffect(() => {
+    // 1. Supabase Realtime channel subscription
+    let channel: any = null;
+    if (isSupabaseConfigured()) {
+      channel = supabase
+        .channel('public:inventory:realtime')
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'products' },
+          (payload) => {
+            if (payload.eventType === 'UPDATE' && payload.new) {
+              try {
+                const updatedProduct = mapDbProductToProduct(payload.new);
+                setProducts((prev) => {
+                  const exists = prev.some((p) => String(p.id) === String(updatedProduct.id));
+                  if (exists) {
+                    return prev.map((p) =>
+                      String(p.id) === String(updatedProduct.id) ? updatedProduct : p
+                    );
+                  }
+                  return [...prev, updatedProduct];
+                });
+              } catch (err) {
+                console.warn('Realtime product update parse notice:', err);
+              }
+            } else if (payload.eventType === 'INSERT' && payload.new) {
+              try {
+                const newProduct = mapDbProductToProduct(payload.new);
+                setProducts((prev) => {
+                  if (prev.some((p) => String(p.id) === String(newProduct.id))) return prev;
+                  return [...prev, newProduct];
+                });
+              } catch (err) {
+                console.warn('Realtime product insert parse notice:', err);
+              }
+            } else if (payload.eventType === 'DELETE' && payload.old) {
+              const deletedId = String((payload.old as any).id);
+              setProducts((prev) => prev.filter((p) => String(p.id) !== deletedId));
+            }
+          }
+        )
+        // When any order is placed or updated in Supabase, auto-refresh products so portion counts update immediately
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'orders' },
+          () => {
+            fetchProductList(true);
+          }
+        )
+        .subscribe();
+    }
+
+    // 2. Periodic background refresh (every 5 seconds) to ensure all customers and managers stay synchronized
+    const interval = setInterval(() => {
+      fetchProductList(true);
+    }, 5000);
+
+    // 3. Immediately refresh whenever user returns or switches to this browser tab/window
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        fetchProductList(true);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleVisibilityChange);
+
+    return () => {
+      if (channel) {
+        supabase.removeChannel(channel);
+      }
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleVisibilityChange);
+    };
   }, [fetchProductList]);
 
   // Active customer-facing products
@@ -256,7 +349,14 @@ export const ProductProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const updateOutletProduct = async (
     outletId: string,
     productId: string | number,
-    config: { inStock?: boolean; isFeatured?: boolean; isBestseller?: boolean; isChefSpecial?: boolean; isAssigned?: boolean }
+    config: {
+      inStock?: boolean;
+      isFeatured?: boolean;
+      isBestseller?: boolean;
+      isChefSpecial?: boolean;
+      isAssigned?: boolean;
+      portionsLeft?: number | null;
+    }
   ): Promise<Product> => {
     if (!token) throw new Error('Authentication required');
     const updated = await apiUpdateOutletProductConfig(outletId, productId, config, token);
@@ -275,6 +375,7 @@ export const ProductProvider: React.FC<{ children: React.ReactNode }> = ({ child
       isFeatured?: boolean;
       isBestseller?: boolean;
       isChefSpecial?: boolean;
+      portionsLeft?: number | null;
     }[]
   ): Promise<Product[]> => {
     if (!token) throw new Error('Authentication required');

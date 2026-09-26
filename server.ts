@@ -1429,8 +1429,34 @@ async function startServer() {
   });
 
   // =====================
-  // PRODUCTS ENDPOINTS
+  // PRODUCTS & DASHBOARD STATS ENDPOINTS
   // =====================
+
+  // Dashboard Metrics & Stats endpoint
+  app.get('/api/stats', async (req, res) => {
+    try {
+      const allProds = productStorage.getAllProducts(true);
+      const totalProducts = allProds.length;
+      const activeProducts = allProds.filter((p) => p.active !== false).length;
+      const outOfStockProducts = allProds.filter((p) => p.inStock === false).length;
+      const featuredProducts = allProds.filter((p) => p.featured && p.active !== false).length;
+      const bestsellerProducts = allProds.filter((p) => p.bestseller && p.active !== false).length;
+
+      return res.json({
+        success: true,
+        stats: {
+          totalProducts,
+          activeProducts,
+          outOfStockProducts,
+          featuredProducts,
+          bestsellerProducts,
+        },
+      });
+    } catch (err: any) {
+      console.error('Fetch dashboard stats error:', err);
+      return res.status(500).json({ success: false, error: 'Failed to fetch dashboard stats' });
+    }
+  });
 
   // 4. Products: List All (Optional: ?outletId=... & ?includeInactive=true)
   app.get('/api/products', (req, res) => {
@@ -4128,51 +4154,52 @@ async function startServer() {
           console.warn('Supabase orders table insert notice (table might be newly recreated):', res1.error.message);
         }
 
-        // Atomically decrement portions in Supabase products table
-        if (order.items && Array.isArray(order.items) && order.items.length > 0) {
+        // The Supabase PostgreSQL trigger 'trg_decrement_portions_on_order' has already
+        // atomically decremented portions in the database upon order insertion.
+        // Synchronize in-memory productStorage so local memory matches the database.
+        if (res1?.data && order.items && Array.isArray(order.items) && order.items.length > 0) {
           for (const item of order.items) {
-            const productId = item.product?.id || (item as any).productId || (item as any).id;
-            const qty = Number(item.quantity) || 1;
-            if (!productId) continue;
+            const rawProdId = item.product?.id || (item as any).productId || (item as any).id;
+            if (rawProdId === undefined || rawProdId === null || rawProdId === '') continue;
 
-            const { data: prodData } = await serverSupabase
-              .from('products')
-              .select('id, outlets')
-              .eq('id', String(productId))
-              .single();
+            const strId = String(rawProdId);
+            try {
+              const { data: prodData } = await serverSupabase
+                .from('products')
+                .select('id, outlets')
+                .eq('id', strId)
+                .maybeSingle();
 
-            if (prodData && Array.isArray(prodData.outlets)) {
-              let changed = false;
-              const updatedOutlets = prodData.outlets.map((outletCfg: any) => {
-                const oId = outletCfg.outletId || outletCfg.outlet_id;
-                if (
-                  oId === order.outletId &&
-                  outletCfg.portionsLeft !== null &&
-                  outletCfg.portionsLeft !== undefined &&
-                  outletCfg.portionsLeft !== ''
-                ) {
-                  const currentPortions = Number(outletCfg.portionsLeft);
-                  if (!isNaN(currentPortions)) {
-                    const nextPortions = Math.max(0, currentPortions - qty);
-                    changed = true;
-                    return {
-                      ...outletCfg,
-                      portionsLeft: nextPortions,
-                      inStock: nextPortions <= 0 ? false : outletCfg.inStock !== false,
-                    };
-                  }
+              if (prodData && Array.isArray(prodData.outlets)) {
+                const targetConfig = prodData.outlets.find(
+                  (o: any) => String(o.outletId || o.outlet_id) === String(order.outletId)
+                );
+                if (targetConfig) {
+                  productStorage.updateOutletProductConfig(order.outletId, prodData.id, {
+                    portionsLeft: targetConfig.portionsLeft,
+                    inStock: targetConfig.inStock,
+                  });
                 }
-                return outletCfg;
-              });
-
-              if (changed) {
-                await serverSupabase
-                  .from('products')
-                  .update({
-                    outlets: updatedOutlets,
-                    updated_at: new Date().toISOString(),
-                  })
-                  .eq('id', String(productId));
+              }
+            } catch (memSyncErr) {
+              console.warn('In-memory productStorage stock sync notice:', memSyncErr);
+            }
+          }
+        } else if (!res1?.data && order.items && Array.isArray(order.items) && order.items.length > 0) {
+          // Offline/local fallback only: if database order insertion did not happen, decrement local memory
+          for (const item of order.items) {
+            const rawProdId = item.product?.id || (item as any).productId || (item as any).id;
+            const qty = Number(item.quantity) || 1;
+            if (!rawProdId) continue;
+            const curProd = productStorage.getProductById(rawProdId);
+            if (curProd && Array.isArray(curProd.outlets)) {
+              const cfg = curProd.outlets.find((o) => String(o.outletId) === String(order.outletId));
+              if (cfg && cfg.portionsLeft !== null && cfg.portionsLeft !== undefined) {
+                const nextPortions = Math.max(0, Number(cfg.portionsLeft) - qty);
+                productStorage.updateOutletProductConfig(order.outletId, rawProdId, {
+                  portionsLeft: nextPortions,
+                  inStock: nextPortions <= 0 ? false : cfg.inStock !== false,
+                });
               }
             }
           }

@@ -234,8 +234,8 @@ export const NavigationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     window.addEventListener('popstate', handleLocationChange);
     window.addEventListener('hashchange', handleLocationChange);
 
-    // If initial URL had an old hash (e.g. #/shop or #/contact), clean it up to standard pathname
-    if (typeof window !== 'undefined' && window.location.hash && window.location.hash.startsWith('#/')) {
+    // If URL has any '#' (e.g. #/shop, #shop, #/contact, #contact), clean it up immediately to standard clean pathname (/, /shop, /contact)
+    if (typeof window !== 'undefined' && window.location.hash) {
       const cleanTarget = routeToUrl(parseCurrentLocation(window.location.pathname, window.location.search, window.location.hash));
       window.history.replaceState({}, '', cleanTarget);
     }

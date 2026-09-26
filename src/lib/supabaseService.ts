@@ -1788,7 +1788,10 @@ export async function deleteSupabaseOrder(orderId: string): Promise<boolean> {
   }
 }
 
-export async function createSupabaseOrder(orderData: Partial<Order>): Promise<Order> {
+export async function createSupabaseOrder(
+  orderData: Partial<Order>,
+  shouldDecrementStock: boolean = false
+): Promise<Order> {
   if (!isSupabaseConfigured()) throw new Error('Supabase not configured');
 
   const id = `order-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
@@ -1933,12 +1936,9 @@ export async function createSupabaseOrder(orderData: Partial<Order>): Promise<Or
     }
   }
 
-  // Atomically decrement portions in Supabase products
-  if (orderData.outletId && orderData.items && orderData.items.length > 0) {
-    decrementProductPortionsInSupabase(orderData.outletId, orderData.items).catch((e) =>
-      console.warn('Portion decrement background notice:', e)
-    );
-  }
+  // Note: The Supabase PostgreSQL database trigger 'trg_decrement_portions_on_order'
+  // automatically and atomically decrements portions on public.orders INSERT.
+  // Do not perform an additional manual decrement here to prevent double deduction.
 
   if (data) {
     return mapDbOrderToOrder(data);

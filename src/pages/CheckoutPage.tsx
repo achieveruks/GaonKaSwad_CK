@@ -3,6 +3,7 @@ import { useCart } from '../context/CartContext';
 import { useNavigation } from '../context/NavigationContext';
 import { useLocation } from '../context/LocationContext';
 import { useCustomer } from '../context/CustomerContext';
+import { useProducts } from '../context/ProductContext';
 import { CheckoutFormData, Order, Coupon } from '../types';
 import { computeScheduledIsoTimestamp, formatScheduledAt } from '../utils/dateUtils';
 import {
@@ -171,6 +172,7 @@ export const CheckoutPage: React.FC = () => {
   } = useCart();
 
   const { goToHome, goToShop, goToProfile } = useNavigation();
+  const { refreshProducts } = useProducts();
   const {
     selectedLocation,
     outlets,
@@ -1573,13 +1575,16 @@ export const CheckoutPage: React.FC = () => {
     // Direct Supabase persistence fallback (e.g. for static hosting like Vercel)
     if (!orderPersisted && isSupabaseConfigured()) {
       try {
-        const directSaved = await createSupabaseOrder({
-          ...newOrder,
-          swadCoinsUsed: coinsToUse,
-          customerId: resolvedCustId || newOrder.customerId,
-          addressId: isSelfPickup ? null : (resolvedAddrId || newOrder.addressId || null),
-          deliveryAddressSnapshot: isSelfPickup ? null : (newOrder.deliveryAddressSnapshot || null),
-        });
+        const directSaved = await createSupabaseOrder(
+          {
+            ...newOrder,
+            swadCoinsUsed: coinsToUse,
+            customerId: resolvedCustId || newOrder.customerId,
+            addressId: isSelfPickup ? null : (resolvedAddrId || newOrder.addressId || null),
+            deliveryAddressSnapshot: isSelfPickup ? null : (newOrder.deliveryAddressSnapshot || null),
+          },
+          true
+        );
         if (directSaved) {
           savedOrderObj = directSaved;
           orderPersisted = true;
@@ -1614,6 +1619,8 @@ export const CheckoutPage: React.FC = () => {
       setSwadCoinBalance((prev) => Math.max(0, prev - coinsToUse));
     }
     clearCart();
+    // Immediately refresh products so portion decrements reflect in the customer's state without page refresh
+    refreshProducts().catch((e) => console.warn('Product refresh notice after checkout:', e));
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 

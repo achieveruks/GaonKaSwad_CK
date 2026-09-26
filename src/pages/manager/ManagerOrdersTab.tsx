@@ -45,7 +45,7 @@ import {
   OrderDateFilterType,
 } from '../../utils/dateUtils';
 import { fetchSupabaseOrders, updateSupabaseOrderStatus, formatDisplayOrderId } from '../../lib/supabaseService';
-import { isSupabaseConfigured } from '../../lib/supabase';
+import { supabase, isSupabaseConfigured } from '../../lib/supabase';
 import { ManagerOrderDetailsModal } from './ManagerOrderDetailsModal';
 import { CancelOrderModal } from './CancelOrderModal';
 
@@ -219,14 +219,48 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
     [currentOutlet, isLoading, playChime, showFeedback]
   );
 
-  // Initial load and periodic polling (every 15 seconds)
+  // Real-time synchronization and polling for orders
   useEffect(() => {
     loadOrders();
+
+    // 1. Supabase Realtime channel for instant order arrivals/updates
+    let channel: any = null;
+    if (isSupabaseConfigured()) {
+      channel = supabase
+        .channel(`manager:orders:${currentOutlet?.id || 'all'}`)
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'orders' },
+          () => {
+            loadOrders();
+          }
+        )
+        .subscribe();
+    }
+
+    // 2. Periodic background poll (every 5 seconds)
     const interval = setInterval(() => {
       loadOrders();
-    }, 15000);
-    return () => clearInterval(interval);
-  }, [loadOrders]);
+    }, 5000);
+
+    // 3. Tab visibility listener (refresh instantly when manager switches back to tab)
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        loadOrders();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('focus', handleVisibility);
+
+    return () => {
+      if (channel) {
+        supabase.removeChannel(channel);
+      }
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('focus', handleVisibility);
+    };
+  }, [loadOrders, currentOutlet?.id]);
 
   // Handle status update
   const handleStatusTransition = async (

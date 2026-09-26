@@ -140,12 +140,13 @@ export const ManagerDashboardPage: React.FC = () => {
   }, [authLoading, isAuthenticated, ownerUser, profile, goToOwnerLogin]);
 
   // Load Data
-  const fetchData = useCallback(async () => {
-    setIsLoading(true);
+  const fetchData = useCallback(async (isSilent = false) => {
+    if (!isSilent) setIsLoading(true);
     try {
       const [fetchedOutlets, fetchedZones] = await Promise.all([
         getOutlets(true, token || undefined),
         getDeliveryZones(true, token || undefined),
+        refreshProducts(),
       ]);
       const safeO = Array.isArray(fetchedOutlets) ? fetchedOutlets : [];
       const safeZ = Array.isArray(fetchedZones) ? fetchedZones : [];
@@ -162,12 +163,35 @@ export const ManagerDashboardPage: React.FC = () => {
     } catch (err) {
       console.error('Error fetching manager outlet data:', err);
     } finally {
-      setIsLoading(false);
+      if (!isSilent) setIsLoading(false);
     }
-  }, [token, ownerUser, profile]);
+  }, [token, ownerUser, profile, refreshProducts]);
 
   useEffect(() => {
     fetchData();
+  }, [fetchData]);
+
+  // Real-time automatic background synchronization for Manager dashboard
+  useEffect(() => {
+    // 1. Periodic poll every 5 seconds so portion updates and outlet changes appear live without manual refresh
+    const interval = setInterval(() => {
+      fetchData(true);
+    }, 5000);
+
+    // 2. Refresh immediately when manager switches back to tab or focuses window
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        fetchData(true);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleVisibilityChange);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleVisibilityChange);
+    };
   }, [fetchData]);
 
   // Dynamic scoping for the logged-in manager (Single vs. Multiple outlets)
@@ -300,6 +324,7 @@ export const ManagerDashboardPage: React.FC = () => {
   // Open Manage Menu Modal
   const handleOpenMenuModal = () => {
     if (!currentOutlet) return;
+    refreshProducts().catch(() => {});
     const states: Record<string | number, OutletProductItemState> = {};
     const outletId = currentOutlet.id;
     const assignedIds = Array.isArray(currentOutlet.assignedProductIds)
@@ -329,6 +354,64 @@ export const ManagerDashboardPage: React.FC = () => {
     setModalMenuTab('menu');
     setIsMenuModalOpen(true);
   };
+
+  // Keep open Manage Menu modal synchronized with realtime product and portion updates
+  useEffect(() => {
+    if (!isMenuModalOpen || !currentOutlet) return;
+    const outletId = currentOutlet.id;
+    const assignedIds = Array.isArray(currentOutlet.assignedProductIds)
+      ? currentOutlet.assignedProductIds.map(String)
+      : [];
+    const hasAssignedIds = assignedIds.length > 0;
+
+    setOutletItemStates((prev) => {
+      let hasChanges = false;
+      const next = { ...prev };
+
+      allProducts.forEach((p) => {
+        const cur = next[p.id];
+        const isAssigned = hasAssignedIds
+          ? assignedIds.includes(String(p.id))
+          : isProductServedAtOutlet(p, outletId);
+        const livePortions = getProductPortionsLeftAtOutlet(p, outletId);
+        const liveInStock = isProductInStockAtOutlet(p, outletId);
+        const liveFeatured = isProductFeaturedAtOutlet(p, outletId);
+        const liveBestseller = isProductBestsellerAtOutlet(p, outletId);
+        const liveChefSpecial = isProductChefSpecialAtOutlet(p, outletId);
+
+        if (!cur) {
+          next[p.id] = {
+            productId: p.id,
+            isAssigned,
+            inStock: liveInStock,
+            isFeatured: liveFeatured,
+            isBestseller: liveBestseller,
+            isChefSpecial: liveChefSpecial,
+            portionsLeft: livePortions,
+          };
+          hasChanges = true;
+        } else if (
+          cur.portionsLeft !== livePortions ||
+          cur.inStock !== liveInStock ||
+          cur.isFeatured !== liveFeatured ||
+          cur.isBestseller !== liveBestseller ||
+          cur.isChefSpecial !== liveChefSpecial
+        ) {
+          next[p.id] = {
+            ...cur,
+            portionsLeft: livePortions,
+            inStock: liveInStock,
+            isFeatured: liveFeatured,
+            isBestseller: liveBestseller,
+            isChefSpecial: liveChefSpecial,
+          };
+          hasChanges = true;
+        }
+      });
+
+      return hasChanges ? next : prev;
+    });
+  }, [allProducts, isMenuModalOpen, currentOutlet]);
 
   const handleToggleItemAssigned = (productId: string | number) => {
     setOutletItemStates((prev) => {
@@ -827,7 +910,7 @@ export const ManagerDashboardPage: React.FC = () => {
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={fetchData}
+                  onClick={() => fetchData()}
                   className="px-3 py-1.5 bg-white border border-stone-200 hover:bg-stone-50 text-stone-700 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-2xs transition-colors cursor-pointer"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />

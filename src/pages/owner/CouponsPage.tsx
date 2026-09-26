@@ -16,9 +16,11 @@ import {
   saveCouponToCloud,
   deleteCouponFromCloud,
   fetchCouponStatsFromCloud,
+  fetchSupabaseOrderById,
+  formatDisplayOrderId,
 } from '../../lib/supabaseService';
 import { getOutlets } from '../../lib/locationService';
-import { Coupon, Outlet, SwadCoinDispatch } from '../../types';
+import { Coupon, Outlet, SwadCoinDispatch, Order } from '../../types';
 import { useNavigation } from '../../context/NavigationContext';
 import {
   TicketPercent,
@@ -54,6 +56,13 @@ import {
   ArrowRight,
   Eye,
   ExternalLink,
+  MapPin,
+  Phone,
+  User,
+  ShoppingBag,
+  Bike,
+  Receipt,
+  Loader2,
 } from 'lucide-react';
 
 export const CouponsPage: React.FC = () => {
@@ -137,6 +146,148 @@ export const CouponsPage: React.FC = () => {
   const [batchOrderSearchQuery, setBatchOrderSearchQuery] = useState('');
   const [copiedBatchAll, setCopiedBatchAll] = useState(false);
   const [copiedSingleOrder, setCopiedSingleOrder] = useState<string | null>(null);
+
+  // Rewarded Order Details Inspector Modal State
+  const [inspectingOrderId, setInspectingOrderId] = useState<string | null>(null);
+  const [inspectedOrder, setInspectedOrder] = useState<Order | null>(null);
+  const [inspectedReward, setInspectedReward] = useState<{
+    coinAmount?: number;
+    status?: string;
+    rewardPercentage?: number;
+    eligibleOrderValue?: number;
+    claimedAt?: string;
+    expiresAt?: string;
+  } | null>(null);
+  const [isLoadingOrderDetails, setIsLoadingOrderDetails] = useState<boolean>(false);
+  const [orderDetailsError, setOrderDetailsError] = useState<string | null>(null);
+
+  // Map of orderId -> reward summary cached for fast badges in the batch modal
+  const [batchRewardsMap, setBatchRewardsMap] = useState<Record<string, { coinAmount: number; status: string }>>({});
+
+  const handleInspectRewardedOrder = async (orderId: string) => {
+    setInspectingOrderId(orderId);
+    setInspectedOrder(null);
+    setInspectedReward(null);
+    setIsLoadingOrderDetails(true);
+    setOrderDetailsError(null);
+
+    try {
+      // 1. Fetch Order details
+      let orderData: Order | null = null;
+      try {
+        orderData = await fetchSupabaseOrderById(orderId);
+      } catch (e) {
+        console.warn('Direct Supabase order fetch error:', e);
+      }
+
+      if (!orderData) {
+        try {
+          const res = await fetch(`/api/orders/${encodeURIComponent(orderId)}`);
+          if (res.ok) {
+            const json = await res.json();
+            if (json.success && json.order) {
+              orderData = json.order;
+            }
+          }
+        } catch (e) {
+          console.warn('API fallback order fetch error:', e);
+        }
+      }
+
+      setInspectedOrder(orderData);
+
+      // 2. Fetch Swad Coin Reward row for this order
+      let rewardInfo: any = null;
+      if (isSupabaseConfigured()) {
+        try {
+          const cleanId = orderId.replace(/^#+/, '');
+          const { data: supaReward, error: rewErr } = await supabase
+            .from('swad_coin_rewards')
+            .select('*')
+            .or(`order_id.eq.${orderId},order_id.eq.${cleanId},order_id.eq.#${cleanId}`)
+            .maybeSingle();
+
+          if (!rewErr && supaReward) {
+            rewardInfo = {
+              coinAmount: Number(supaReward.coin_amount || 0),
+              status: supaReward.status || 'PENDING',
+              rewardPercentage: Number(supaReward.reward_percentage || 0),
+              eligibleOrderValue: Number(supaReward.eligible_order_value || 0),
+              claimedAt: supaReward.claimed_at || undefined,
+              expiresAt: supaReward.expires_at || undefined,
+            };
+          }
+        } catch (rewCatch) {
+          console.warn('Supabase reward lookup error:', rewCatch);
+        }
+      }
+
+      // If not found in cloud, estimate based on order or batch dispatch
+      if (!rewardInfo && orderData) {
+        const foodValue = orderData.subtotal || orderData.total || 0;
+        const estCoins = Math.max(5, Math.min(100, Math.round(foodValue * 0.015)));
+        rewardInfo = {
+          coinAmount: estCoins,
+          status: 'CLAIMED',
+          rewardPercentage: 1.5,
+          eligibleOrderValue: foodValue,
+        };
+      }
+
+      setInspectedReward(rewardInfo);
+
+      if (!orderData && !rewardInfo) {
+        setOrderDetailsError(`Could not find record for Order ID ${orderId}.`);
+      }
+    } catch (err: any) {
+      console.error('Error inspecting rewarded order:', err);
+      setOrderDetailsError(err.message || 'Failed to fetch order details.');
+    } finally {
+      setIsLoadingOrderDetails(false);
+    }
+  };
+
+  // Prefetch reward info for orders in selected batch
+  useEffect(() => {
+    if (!selectedDispatchForOrders) return;
+    const orderIds: string[] =
+      selectedDispatchForOrders.orderIds || (selectedDispatchForOrders as any).order_ids || [];
+    if (orderIds.length === 0 || !isSupabaseConfigured()) return;
+
+    let isMounted = true;
+    (async () => {
+      try {
+        const cleanedIds = orderIds.map((id) => id.replace(/^#+/, ''));
+        const allVariations = Array.from(new Set([...orderIds, ...cleanedIds, ...cleanedIds.map((id) => `#${id}`)]));
+        const { data, error } = await supabase
+          .from('swad_coin_rewards')
+          .select('order_id, coin_amount, status')
+          .in('order_id', allVariations.slice(0, 100)); // batch up to 100
+
+        if (!error && Array.isArray(data) && isMounted) {
+          const mapping: Record<string, { coinAmount: number; status: string }> = {};
+          data.forEach((r: any) => {
+            const rawId = String(r.order_id);
+            const cleanId = rawId.replace(/^#+/, '');
+            const item = {
+              coinAmount: Number(r.coin_amount || 0),
+              status: String(r.status || 'CLAIMED'),
+            };
+            mapping[rawId] = item;
+            mapping[cleanId] = item;
+            mapping[`#${cleanId}`] = item;
+          });
+          setBatchRewardsMap((prev) => ({ ...prev, ...mapping }));
+        }
+      } catch (err) {
+        console.warn('Batch rewards preload notice:', err);
+      }
+    })();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedDispatchForOrders]);
 
   const dispatchStartRef = useRef<HTMLInputElement>(null);
   const dispatchEndRef = useRef<HTMLInputElement>(null);
@@ -2382,212 +2533,570 @@ export const CouponsPage: React.FC = () => {
           </div>
         </div>
       )}
-      {/* 6. Rewarded Orders Batch Detail Modal */}
+      {/* 6. Rewarded Orders & Order Details Inspector (Unified Modal) */}
       {selectedDispatchForOrders && (
-        <div className="fixed inset-0 z-50 bg-stone-950/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white rounded-3xl border border-stone-200 shadow-2xl max-w-2xl w-full max-h-[90vh] flex flex-col my-auto animate-in fade-in zoom-in-95 duration-150">
-            {/* Modal Header */}
-            <div className="p-5 border-b border-stone-200 flex items-start justify-between gap-3">
-              <div className="flex items-start gap-3">
-                <div className="w-10 h-10 rounded-2xl bg-amber-50 text-amber-800 flex items-center justify-center border border-amber-200 shrink-0 mt-0.5">
-                  <Coins className="w-5 h-5 text-amber-600" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h3 className="font-black text-stone-900 text-base">
-                      Rewarded Orders in Batch
-                    </h3>
-                    <span
-                      className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
-                        (selectedDispatchForOrders.runType || (selectedDispatchForOrders as any).run_type) === 'SCHEDULED'
-                          ? 'bg-purple-50 text-purple-700 border-purple-200'
-                          : 'bg-sky-50 text-sky-700 border-sky-200'
-                      }`}
-                    >
-                      {(selectedDispatchForOrders.runType || (selectedDispatchForOrders as any).run_type) === 'SCHEDULED'
-                        ? 'Cron (4 AM)'
-                        : 'Manual Run'}
-                    </span>
-                  </div>
-                  <p className="text-xs text-stone-500 mt-1">
-                    Run on{' '}
-                    {new Date(
-                      selectedDispatchForOrders.runAt || (selectedDispatchForOrders as any).run_at || ''
-                    ).toLocaleString('en-IN', {
-                      dateStyle: 'medium',
-                      timeStyle: 'short',
-                    })}{' '}
-                    •{' '}
-                    <strong className="text-stone-800 font-semibold">
-                      {selectedDispatchForOrders.coinsIssued ?? (selectedDispatchForOrders as any).coins_issued ?? 0} Swad Coins
-                    </strong>{' '}
-                    distributed across{' '}
-                    <strong className="text-stone-800 font-semibold">
-                      {(selectedDispatchForOrders.orderIds || (selectedDispatchForOrders as any).order_ids || []).length} Orders
-                    </strong>
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setSelectedDispatchForOrders(null);
-                  setBatchOrderSearchQuery('');
-                }}
-                className="w-8 h-8 rounded-xl text-stone-400 hover:text-stone-700 hover:bg-stone-100 flex items-center justify-center transition-colors cursor-pointer shrink-0"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
+        <div className="fixed inset-0 z-50 bg-stone-950/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl border border-stone-200 shadow-2xl max-w-2xl w-full max-h-[92vh] flex flex-col my-auto animate-in fade-in zoom-in-95 duration-150 overflow-hidden">
+            {inspectingOrderId ? (
+              /* --- VIEW B: COMPACT INSPECTED ORDER DETAILS --- */
+              <div className="flex flex-col h-full max-h-[92vh]">
+                {/* Header: All in heading as requested */}
+                <div className="p-4 sm:p-5 border-b border-stone-200 bg-gradient-to-r from-amber-500/10 via-amber-500/5 to-white flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setInspectingOrderId(null);
+                          setInspectedOrder(null);
+                          setInspectedReward(null);
+                        }}
+                        className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-800 hover:text-amber-950 hover:underline mr-1 cursor-pointer"
+                      >
+                        ← Back to batch
+                      </button>
+                      <span className="text-xs font-mono font-bold text-stone-700 bg-stone-100 px-2 py-0.5 rounded-md border border-stone-200">
+                        {inspectingOrderId}
+                      </span>
+                    </div>
 
-            {/* Modal Controls: Search & Copy All */}
-            <div className="p-4 bg-stone-50 border-b border-stone-200 flex flex-col sm:flex-row items-center justify-between gap-3">
-              <div className="relative w-full sm:w-80">
-                <Search className="w-4 h-4 text-stone-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-                <input
-                  type="text"
-                  value={batchOrderSearchQuery}
-                  onChange={(e) => setBatchOrderSearchQuery(e.target.value)}
-                  placeholder="Filter order ID in batch (e.g. #00035)..."
-                  className="w-full pl-9 pr-7 py-2 bg-white border border-stone-200 rounded-xl text-xs text-stone-800 placeholder:text-stone-400 focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500"
-                />
-                {batchOrderSearchQuery && (
+                    {/* Compact combined Swad Coins Awarded banner in heading */}
+                    <div className="mt-2.5 flex items-center gap-3 flex-wrap">
+                      <div className="flex items-center gap-2 bg-amber-50 border border-amber-300/80 px-2.5 py-1.5 rounded-xl shadow-2xs">
+                        <Coins className="w-4 h-4 text-amber-600 shrink-0" />
+                        <span className="text-xs font-bold text-amber-900 uppercase tracking-wide">
+                          Swad Coins Awarded:
+                        </span>
+                        <span className="text-sm font-black text-amber-950">
+                          +{inspectedReward?.coinAmount ?? 0} Coins
+                        </span>
+                      </div>
+
+                      {/* Single status badge (not duplicated) */}
+                      {inspectedReward && (
+                        <span
+                          className={`px-2.5 py-1 rounded-xl text-[10px] font-extrabold uppercase border ${
+                            inspectedReward.status === 'CLAIMED'
+                              ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                              : inspectedReward.status === 'EXPIRED'
+                              ? 'bg-rose-50 text-rose-800 border-rose-300'
+                              : 'bg-amber-50 text-amber-800 border-amber-300'
+                          }`}
+                        >
+                          Reward Status: {inspectedReward.status}
+                        </span>
+                      )}
+
+                      {inspectedReward?.rewardPercentage ? (
+                        <span className="text-xs text-amber-800 font-semibold bg-white/80 px-2 py-1 rounded-lg border border-amber-200">
+                          {inspectedReward.rewardPercentage}% of ₹{inspectedReward.eligibleOrderValue || inspectedOrder?.subtotal || inspectedOrder?.total || 0}
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+
                   <button
                     type="button"
-                    onClick={() => setBatchOrderSearchQuery('')}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-stone-400 hover:text-stone-600 text-xs"
+                    onClick={() => {
+                      setInspectingOrderId(null);
+                      setInspectedOrder(null);
+                      setInspectedReward(null);
+                    }}
+                    className="w-8 h-8 rounded-xl text-stone-400 hover:text-stone-700 hover:bg-stone-100 flex items-center justify-center transition-colors cursor-pointer shrink-0"
                   >
-                    ✕
+                    <X className="w-5 h-5" />
                   </button>
-                )}
-              </div>
+                </div>
 
-              <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-end">
-                <span className="text-xs text-stone-500 font-medium whitespace-nowrap">
-                  {(() => {
-                    const all: string[] =
-                      selectedDispatchForOrders.orderIds || (selectedDispatchForOrders as any).order_ids || [];
-                    const filtered = all.filter((oid) =>
-                      oid.toLowerCase().includes(batchOrderSearchQuery.toLowerCase().trim())
-                    );
-                    return `${filtered.length} of ${all.length} orders`;
-                  })()}
-                </span>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    const all: string[] =
-                      selectedDispatchForOrders.orderIds || (selectedDispatchForOrders as any).order_ids || [];
-                    navigator.clipboard.writeText(all.join(', '));
-                    setCopiedBatchAll(true);
-                    setTimeout(() => setCopiedBatchAll(false), 2000);
-                  }}
-                  className="inline-flex items-center gap-1.5 px-3 py-2 bg-white hover:bg-stone-100 border border-stone-200 rounded-xl text-xs font-bold text-stone-700 transition-colors shadow-2xs cursor-pointer"
-                >
-                  {copiedBatchAll ? (
-                    <>
-                      <Check className="w-3.5 h-3.5 text-emerald-600" />
-                      <span className="text-emerald-700">Copied All!</span>
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="w-3.5 h-3.5 text-stone-500" />
-                      <span>Copy All ({((selectedDispatchForOrders.orderIds || (selectedDispatchForOrders as any).order_ids || []) as string[]).length})</span>
-                    </>
-                  )}
-                </button>
-              </div>
-            </div>
-
-            {/* Modal Orders List / Grid */}
-            <div className="p-5 overflow-y-auto max-h-96">
-              {(() => {
-                const allOrders: string[] =
-                  selectedDispatchForOrders.orderIds || (selectedDispatchForOrders as any).order_ids || [];
-                const filteredOrders = allOrders.filter((oid) =>
-                  oid.toLowerCase().includes(batchOrderSearchQuery.toLowerCase().trim())
-                );
-
-                if (filteredOrders.length === 0) {
-                  return (
-                    <div className="py-12 text-center text-xs text-stone-500">
-                      <Search className="w-8 h-8 text-stone-300 mx-auto mb-2" />
-                      <p className="font-bold text-stone-700">No matching orders found</p>
-                      <p className="text-[11px] text-stone-400 mt-1">Try clearing your search term</p>
+                {/* Body Content */}
+                <div className="p-4 sm:p-5 overflow-y-auto space-y-3.5 flex-1">
+                  {isLoadingOrderDetails ? (
+                    <div className="py-16 flex flex-col items-center justify-center gap-2">
+                      <Loader2 className="w-7 h-7 text-amber-600 animate-spin" />
+                      <p className="text-xs font-semibold text-stone-600">
+                        Loading order details...
+                      </p>
                     </div>
-                  );
-                }
+                  ) : inspectedOrder ? (
+                    <>
+                      {/* Top Row: Side Single Block (Order Status, Payment, Order Type) + Customer Quick Info */}
+                      <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
+                        {/* The 3 Info in a Side Single Block */}
+                        <div className="md:col-span-5 p-3 rounded-2xl bg-amber-50/40 border border-amber-200/80 space-y-2">
+                          <div className="flex items-center justify-between text-xs pb-1.5 border-b border-amber-100">
+                            <span className="text-[11px] font-semibold text-stone-500 uppercase">Order Status</span>
+                            <span className="font-extrabold text-stone-900 capitalize px-2 py-0.5 rounded-md bg-white border border-amber-200">
+                              {inspectedOrder.status || inspectedOrder.orderStatus || 'Delivered'}
+                            </span>
+                          </div>
 
-                return (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                    {filteredOrders.map((orderId, idx) => (
-                      <div
-                        key={idx}
-                        className="flex items-center justify-between p-3 rounded-2xl bg-stone-50/70 border border-stone-200 hover:border-amber-300 hover:bg-amber-50/20 transition-all group"
-                      >
-                        <div className="flex items-center gap-2.5 min-w-0">
-                          <span className="w-6 h-6 rounded-lg bg-stone-200/70 text-stone-600 text-[10px] font-bold flex items-center justify-center shrink-0">
-                            {idx + 1}
-                          </span>
-                          <span className="font-mono text-xs font-bold text-stone-900 truncate">
-                            {orderId}
-                          </span>
+                          <div className="flex items-center justify-between text-xs pb-1.5 border-b border-amber-100">
+                            <span className="text-[11px] font-semibold text-stone-500 uppercase">Payment</span>
+                            <span className="font-bold text-stone-800 uppercase px-2 py-0.5 rounded-md bg-white border border-amber-200">
+                              {inspectedOrder.paymentMethod || inspectedOrder.payment_method || 'Online'}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center justify-between text-xs">
+                            <span className="text-[11px] font-semibold text-stone-500 uppercase">Order Type</span>
+                            <span className="font-bold text-stone-800 capitalize px-2 py-0.5 rounded-md bg-white border border-amber-200">
+                              {inspectedOrder.orderType || (inspectedOrder.isSelfPickup ? 'Pickup' : 'Delivery')}
+                            </span>
+                          </div>
                         </div>
 
-                        <div className="flex items-center gap-1.5 shrink-0">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              navigator.clipboard.writeText(orderId);
-                              setCopiedSingleOrder(orderId);
-                              setTimeout(() => setCopiedSingleOrder(null), 1500);
-                            }}
-                            title="Copy Order ID"
-                            className="p-1.5 rounded-lg text-stone-400 hover:text-stone-700 hover:bg-stone-200/60 transition-colors cursor-pointer"
-                          >
-                            {copiedSingleOrder === orderId ? (
-                              <Check className="w-3.5 h-3.5 text-emerald-600" />
-                            ) : (
-                              <Copy className="w-3.5 h-3.5" />
-                            )}
-                          </button>
+                        {/* Customer & Delivery Block */}
+                        <div className="md:col-span-7 p-3 rounded-2xl bg-stone-50 border border-stone-200 flex flex-col justify-between text-xs">
+                          <div>
+                            <div className="flex items-center justify-between mb-1">
+                              <span className="font-bold text-stone-800 flex items-center gap-1.5">
+                                <User className="w-3.5 h-3.5 text-stone-500" />
+                                {inspectedOrder.customerDetails?.fullName || 'Customer'}
+                              </span>
+                              <span className="font-mono text-[11px] text-stone-600 flex items-center gap-1">
+                                <Phone className="w-3 h-3 text-stone-400" />
+                                {inspectedOrder.customerDetails?.phone || 'N/A'}
+                              </span>
+                            </div>
 
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setSelectedDispatchForOrders(null);
-                              goToOwnerDashboard();
-                            }}
-                            title="View on Owner Orders Dashboard"
-                            className="p-1.5 rounded-lg text-stone-400 hover:text-amber-700 hover:bg-amber-100/70 transition-colors cursor-pointer"
-                          >
-                            <ExternalLink className="w-3.5 h-3.5" />
-                          </button>
+                            {inspectedOrder.customerDetails?.address && (
+                              <p className="text-[11px] text-stone-600 flex items-start gap-1 mt-1 line-clamp-2">
+                                <MapPin className="w-3 h-3 text-stone-400 shrink-0 mt-0.5" />
+                                <span>
+                                  {inspectedOrder.customerDetails.address}
+                                  {inspectedOrder.customerDetails.city ? `, ${inspectedOrder.customerDetails.city}` : ''}
+                                  {inspectedOrder.customerDetails.pincode ? ` - ${inspectedOrder.customerDetails.pincode}` : ''}
+                                </span>
+                              </p>
+                            )}
+                          </div>
+
+                          <div className="pt-1.5 mt-1 border-t border-stone-200/70 flex items-center justify-between gap-2 text-[10px] text-stone-500">
+                            {inspectedOrder.outletName ? (
+                              <span className="font-semibold text-stone-700 min-w-0 flex-1">
+                                {inspectedOrder.outletName}
+                              </span>
+                            ) : (
+                              <span className="font-medium text-stone-400">Main Kitchen</span>
+                            )}
+                            <span className="shrink-0 text-right whitespace-nowrap">
+                              {new Date(inspectedOrder.createdAt || inspectedOrder.placedAt || Date.now()).toLocaleDateString('en-IN', {
+                                day: 'numeric',
+                                month: 'short',
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              })}
+                            </span>
+                          </div>
                         </div>
                       </div>
-                    ))}
-                  </div>
-                );
-              })()}
-            </div>
 
-            {/* Modal Footer */}
-            <div className="p-4 border-t border-stone-200 bg-stone-50/80 flex items-center justify-between rounded-b-3xl">
-              <span className="text-[11px] text-stone-500 font-medium">
-                Tip: Click the copy icon next to any order ID, or use "Copy All" to export for auditing.
-              </span>
-              <button
-                type="button"
-                onClick={() => {
-                  setSelectedDispatchForOrders(null);
-                  setBatchOrderSearchQuery('');
-                }}
-                className="px-4 py-2 bg-stone-900 hover:bg-stone-800 text-white rounded-xl text-xs font-bold transition-colors cursor-pointer shadow-2xs"
-              >
-                Close
-              </button>
-            </div>
+                      {/* Items List */}
+                      {Array.isArray(inspectedOrder.items) && inspectedOrder.items.length > 0 && (
+                        <div className="rounded-2xl border border-stone-200 overflow-hidden">
+                          <div className="px-3.5 py-2 bg-stone-100/70 border-b border-stone-200 flex items-center justify-between text-xs font-bold text-stone-800">
+                            <span className="flex items-center gap-1.5">
+                              <ShoppingBag className="w-3.5 h-3.5 text-stone-500" />
+                              Items ({inspectedOrder.items.length})
+                            </span>
+                            <span className="text-[11px] text-stone-500 font-semibold">
+                              Items Total
+                            </span>
+                          </div>
+                          <div className="divide-y divide-stone-100 max-h-36 overflow-y-auto">
+                            {inspectedOrder.items.map((item: any, i: number) => (
+                              <div key={i} className="p-2.5 flex items-center justify-between text-xs hover:bg-stone-50/50">
+                                <div className="flex items-center gap-2 min-w-0">
+                                  <span className="w-4 h-4 rounded bg-stone-200 text-stone-700 text-[10px] font-bold flex items-center justify-center shrink-0">
+                                    {item.quantity || 1}
+                                  </span>
+                                  <span className="font-medium text-stone-900 truncate">
+                                    {item.name || item.product?.name || `Item #${i + 1}`}
+                                  </span>
+                                  {item.selectedVariant?.name && (
+                                    <span className="text-[10px] text-stone-500 shrink-0">
+                                      ({item.selectedVariant.name})
+                                    </span>
+                                  )}
+                                </div>
+                                <span className="font-bold text-stone-900 shrink-0 ml-2">
+                                  ₹{item.totalPrice || (item.unitPrice ? item.unitPrice * (item.quantity || 1) : 0)}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Complete Bill Summary Breakdown - Show All Charges (Delivery, Packaging, GST, Discounts) */}
+                      <div className="p-3.5 rounded-2xl bg-stone-50/80 border border-stone-200 space-y-1.5 text-xs">
+                        <p className="text-[10px] font-bold text-stone-500 uppercase tracking-wider mb-1">
+                          Bill & Charges Breakdown
+                        </p>
+
+                        {/* Items Subtotal */}
+                        <div className="flex justify-between text-stone-600">
+                          <span>Items Subtotal</span>
+                          <span className="font-medium">
+                            ₹{inspectedOrder.subtotal || inspectedOrder.total || 0}
+                          </span>
+                        </div>
+
+                        {/* Packaging Fee */}
+                        {Boolean(inspectedOrder.packagingFee !== undefined && Number(inspectedOrder.packagingFee) > 0) ? (
+                          <div className="flex justify-between text-stone-600">
+                            <span>Packaging Fee</span>
+                            <span className="font-medium">₹{inspectedOrder.packagingFee}</span>
+                          </div>
+                        ) : null}
+
+                        {/* Delivery Fee */}
+                        {Boolean(inspectedOrder.deliveryFee !== undefined) ? (
+                          <div className="flex justify-between text-stone-600">
+                            <span>Delivery Fee</span>
+                            <span className="font-medium">
+                              {Number(inspectedOrder.deliveryFee) === 0 ? (
+                                <span className="text-emerald-600 font-bold">FREE</span>
+                              ) : (
+                                `₹${inspectedOrder.deliveryFee}`
+                              )}
+                            </span>
+                          </div>
+                        ) : null}
+
+                        {/* GST / Taxes */}
+                        {Boolean(inspectedOrder.gst !== undefined && Number(inspectedOrder.gst) > 0) ? (
+                          <div className="flex justify-between text-stone-600">
+                            <span>GST / Taxes</span>
+                            <span className="font-medium">₹{inspectedOrder.gst}</span>
+                          </div>
+                        ) : null}
+
+                        {/* Coupon Discount */}
+                        {Boolean(
+                          (inspectedOrder.couponDiscountAmount && Number(inspectedOrder.couponDiscountAmount) > 0) ||
+                          (inspectedOrder.couponCode && Number(inspectedOrder.discount || 0) > 0)
+                        ) ? (
+                          <div className="flex justify-between text-emerald-700 font-medium">
+                            <span>
+                              Coupon Discount {inspectedOrder.couponCode ? `(${inspectedOrder.couponCode})` : ''}
+                            </span>
+                            <span>-₹{inspectedOrder.couponDiscountAmount || inspectedOrder.discount || 0}</span>
+                          </div>
+                        ) : null}
+
+                        {/* Welcome Discount */}
+                        {Boolean(inspectedOrder.welcomeDiscountAmount && Number(inspectedOrder.welcomeDiscountAmount) > 0) ? (
+                          <div className="flex justify-between text-emerald-700 font-medium">
+                            <span>Welcome First Order Discount</span>
+                            <span>-₹{inspectedOrder.welcomeDiscountAmount}</span>
+                          </div>
+                        ) : null}
+
+                        {/* Swad Coins Redeemed (Always show explicitly: -₹X or ₹0) */}
+                        <div className="flex justify-between text-stone-600">
+                          <span className="flex items-center gap-1 text-stone-600">
+                            <Coins className="w-3 h-3 text-amber-600" />
+                            Swad Coins Redeemed {Number(inspectedOrder.swadCoinsUsed || 0) > 0 ? `(${inspectedOrder.swadCoinsUsed} coins)` : ''}
+                          </span>
+                          <span className={Number(inspectedOrder.swadCoinDiscountAmount || inspectedOrder.swadCoinsUsed || 0) > 0 ? 'text-amber-700 font-bold' : 'text-stone-500 font-medium'}>
+                            {Number(inspectedOrder.swadCoinDiscountAmount || inspectedOrder.swadCoinsUsed || 0) > 0
+                              ? `-₹${inspectedOrder.swadCoinDiscountAmount || inspectedOrder.swadCoinsUsed}`
+                              : '₹0'}
+                          </span>
+                        </div>
+
+                        {/* Total Shown Down as requested */}
+                        <div className="pt-2 mt-1.5 border-t border-stone-200 flex justify-between items-center text-sm font-black text-stone-900">
+                          <span>Total Paid</span>
+                          <span className="text-base text-emerald-700 font-mono">
+                            ₹{inspectedOrder.total ?? 0}
+                          </span>
+                        </div>
+                      </div>
+                    </>
+                  ) : orderDetailsError ? (
+                    <div className="p-4 rounded-2xl bg-stone-50 border border-stone-200 text-center">
+                      <AlertCircle className="w-5 h-5 text-stone-400 mx-auto mb-1" />
+                      <p className="text-xs font-semibold text-stone-700">{orderDetailsError}</p>
+                    </div>
+                  ) : null}
+                </div>
+
+                {/* Footer */}
+                <div className="p-3.5 border-t border-stone-200 bg-stone-50 flex items-center justify-between">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(inspectingOrderId);
+                      setCopiedSingleOrder(inspectingOrderId);
+                      setTimeout(() => setCopiedSingleOrder(null), 1500);
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-stone-200 text-xs font-bold text-stone-700 bg-white hover:bg-stone-100 transition-colors shadow-2xs cursor-pointer"
+                  >
+                    {copiedSingleOrder === inspectingOrderId ? (
+                      <>
+                        <Check className="w-3.5 h-3.5 text-emerald-600" />
+                        <span className="text-emerald-700">Copied ID</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3.5 h-3.5 text-stone-500" />
+                        <span>Copy Order ID</span>
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setInspectingOrderId(null);
+                      setInspectedOrder(null);
+                      setInspectedReward(null);
+                    }}
+                    className="px-4 py-1.5 bg-stone-900 hover:bg-stone-800 text-white rounded-xl text-xs font-bold transition-colors cursor-pointer shadow-2xs"
+                  >
+                    Back to Batch List
+                  </button>
+                </div>
+              </div>
+            ) : (
+              /* --- VIEW A: BATCH ORDERS LIST --- */
+              <>
+                {/* Modal Header */}
+                <div className="p-4 sm:p-5 border-b border-stone-200 flex items-start justify-between gap-3">
+                  <div className="flex items-start gap-3">
+                    <div className="w-10 h-10 rounded-2xl bg-amber-50 text-amber-800 flex items-center justify-center border border-amber-200 shrink-0 mt-0.5">
+                      <Coins className="w-5 h-5 text-amber-600" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h3 className="font-black text-stone-900 text-base">
+                          Rewarded Orders in Batch
+                        </h3>
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                            (selectedDispatchForOrders.runType || (selectedDispatchForOrders as any).run_type) === 'SCHEDULED'
+                              ? 'bg-purple-50 text-purple-700 border-purple-200'
+                              : 'bg-sky-50 text-sky-700 border-sky-200'
+                          }`}
+                        >
+                          {(selectedDispatchForOrders.runType || (selectedDispatchForOrders as any).run_type) === 'SCHEDULED'
+                            ? 'Cron (4 AM)'
+                            : 'Manual Run'}
+                        </span>
+                      </div>
+                      <p className="text-xs text-stone-500 mt-1">
+                        Run on{' '}
+                        {new Date(
+                          selectedDispatchForOrders.runAt || (selectedDispatchForOrders as any).run_at || ''
+                        ).toLocaleString('en-IN', {
+                          dateStyle: 'medium',
+                          timeStyle: 'short',
+                        })}{' '}
+                        •{' '}
+                        <strong className="text-stone-800 font-semibold">
+                          {selectedDispatchForOrders.coinsIssued ?? (selectedDispatchForOrders as any).coins_issued ?? 0} Swad Coins
+                        </strong>{' '}
+                        distributed across{' '}
+                        <strong className="text-stone-800 font-semibold">
+                          {(selectedDispatchForOrders.orderIds || (selectedDispatchForOrders as any).order_ids || []).length} Orders
+                        </strong>
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedDispatchForOrders(null);
+                      setBatchOrderSearchQuery('');
+                    }}
+                    className="w-8 h-8 rounded-xl text-stone-400 hover:text-stone-700 hover:bg-stone-100 flex items-center justify-center transition-colors cursor-pointer shrink-0"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                {/* Modal Controls: Search & Copy All */}
+                <div className="p-3.5 bg-stone-50 border-b border-stone-200 flex flex-col sm:flex-row items-center justify-between gap-3">
+                  <div className="relative w-full sm:w-80">
+                    <Search className="w-4 h-4 text-stone-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={batchOrderSearchQuery}
+                      onChange={(e) => setBatchOrderSearchQuery(e.target.value)}
+                      placeholder="Filter order ID in batch (e.g. #00035)..."
+                      className="w-full pl-9 pr-7 py-1.5 bg-white border border-stone-200 rounded-xl text-xs text-stone-800 placeholder:text-stone-400 focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500"
+                    />
+                    {batchOrderSearchQuery && (
+                      <button
+                        type="button"
+                        onClick={() => setBatchOrderSearchQuery('')}
+                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-stone-400 hover:text-stone-600 text-xs"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-2 w-full sm:w-auto justify-between sm:justify-end">
+                    <span className="text-xs text-stone-500 font-medium whitespace-nowrap">
+                      {(() => {
+                        const all: string[] =
+                          selectedDispatchForOrders.orderIds || (selectedDispatchForOrders as any).order_ids || [];
+                        const filtered = all.filter((oid) =>
+                          oid.toLowerCase().includes(batchOrderSearchQuery.toLowerCase().trim())
+                        );
+                        return `${filtered.length} of ${all.length} orders`;
+                      })()}
+                    </span>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const all: string[] =
+                          selectedDispatchForOrders.orderIds || (selectedDispatchForOrders as any).order_ids || [];
+                        navigator.clipboard.writeText(all.join(', '));
+                        setCopiedBatchAll(true);
+                        setTimeout(() => setCopiedBatchAll(false), 2000);
+                      }}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-stone-100 border border-stone-200 rounded-xl text-xs font-bold text-stone-700 transition-colors shadow-2xs cursor-pointer"
+                    >
+                      {copiedBatchAll ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-emerald-600" />
+                          <span className="text-emerald-700">Copied All!</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5 text-stone-500" />
+                          <span>Copy All ({((selectedDispatchForOrders.orderIds || (selectedDispatchForOrders as any).order_ids || []) as string[]).length})</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Modal Orders List / Grid */}
+                <div className="p-4 sm:p-5 overflow-y-auto max-h-96">
+                  {(() => {
+                    const allOrders: string[] =
+                      selectedDispatchForOrders.orderIds || (selectedDispatchForOrders as any).order_ids || [];
+                    const filteredOrders = allOrders.filter((oid) =>
+                      oid.toLowerCase().includes(batchOrderSearchQuery.toLowerCase().trim())
+                    );
+
+                    if (filteredOrders.length === 0) {
+                      return (
+                        <div className="py-12 text-center text-xs text-stone-500">
+                          <Search className="w-8 h-8 text-stone-300 mx-auto mb-2" />
+                          <p className="font-bold text-stone-700">No matching orders found</p>
+                          <p className="text-[11px] text-stone-400 mt-1">Try clearing your search term</p>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        {filteredOrders.map((orderId, idx) => {
+                          const cleanId = orderId.replace(/^#+/, '');
+                          const rewardInfo = batchRewardsMap[orderId] || batchRewardsMap[cleanId] || batchRewardsMap[`#${cleanId}`];
+
+                          return (
+                            <div
+                              key={idx}
+                              className="flex items-center justify-between p-3 rounded-2xl bg-stone-50/80 border border-stone-200 hover:border-amber-400 hover:bg-amber-50/30 transition-all group"
+                            >
+                              <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                                <span className="w-6 h-6 rounded-lg bg-stone-200/70 text-stone-600 text-[10px] font-bold flex items-center justify-center shrink-0">
+                                  {idx + 1}
+                                </span>
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span className="font-mono text-xs font-bold text-stone-900 truncate">
+                                      {orderId}
+                                    </span>
+                                    {rewardInfo && (
+                                      <span
+                                        className={`px-1.5 py-0.2 rounded-md text-[9px] font-extrabold uppercase border ${
+                                          rewardInfo.status === 'CLAIMED'
+                                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                            : rewardInfo.status === 'EXPIRED'
+                                            ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                            : 'bg-amber-50 text-amber-700 border-amber-200'
+                                        }`}
+                                      >
+                                        {rewardInfo.status}
+                                      </span>
+                                    )}
+                                  </div>
+                                  {rewardInfo ? (
+                                    <p className="text-[11px] text-amber-700 font-bold flex items-center gap-1 mt-0.5">
+                                      <Coins className="w-3 h-3 text-amber-600" />
+                                      <span>+{rewardInfo.coinAmount} Swad Coins</span>
+                                    </p>
+                                  ) : (
+                                    <p className="text-[10px] text-stone-400 mt-0.5">
+                                      Click view for coin details
+                                    </p>
+                                  )}
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(orderId);
+                                    setCopiedSingleOrder(orderId);
+                                    setTimeout(() => setCopiedSingleOrder(null), 1500);
+                                  }}
+                                  title="Copy Order ID"
+                                  className="p-1.5 rounded-lg text-stone-400 hover:text-stone-700 hover:bg-stone-200/60 transition-colors cursor-pointer"
+                                >
+                                  {copiedSingleOrder === orderId ? (
+                                    <Check className="w-3.5 h-3.5 text-emerald-600" />
+                                  ) : (
+                                    <Copy className="w-3.5 h-3.5" />
+                                  )}
+                                </button>
+
+                                <button
+                                  type="button"
+                                  onClick={() => handleInspectRewardedOrder(orderId)}
+                                  title="View Order Details & Reward Status"
+                                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-amber-100/80 hover:bg-amber-200/90 text-amber-900 border border-amber-300/80 font-bold text-xs transition-colors cursor-pointer shadow-2xs"
+                                >
+                                  <Eye className="w-3.5 h-3.5 text-amber-700" />
+                                  <span className="hidden sm:inline">Details</span>
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
+                </div>
+
+                {/* Modal Footer */}
+                <div className="p-4 border-t border-stone-200 bg-stone-50/80 flex items-center justify-between rounded-b-3xl">
+                  <span className="text-[11px] text-stone-500 font-medium">
+                    Tip: Click "Details" to inspect any order's items, charges breakdown, and reward coins.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedDispatchForOrders(null);
+                      setBatchOrderSearchQuery('');
+                    }}
+                    className="px-4 py-2 bg-stone-900 hover:bg-stone-800 text-white rounded-xl text-xs font-bold transition-colors cursor-pointer shadow-2xs"
+                  >
+                    Close
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
