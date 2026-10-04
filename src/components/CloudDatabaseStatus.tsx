@@ -130,7 +130,6 @@ CREATE TABLE IF NOT EXISTS public.products (
   calories INTEGER,
   active BOOLEAN DEFAULT TRUE NOT NULL,
   outlets JSONB DEFAULT '[]'::jsonb NOT NULL,
-  outlet_ids JSONB DEFAULT '[]'::jsonb NOT NULL,
   variants JSONB DEFAULT '[]'::jsonb,
   addons JSONB DEFAULT '[]'::jsonb,
   ingredients JSONB DEFAULT '[]'::jsonb,
@@ -140,6 +139,7 @@ CREATE TABLE IF NOT EXISTS public.products (
 );
 
 -- Quick migration if table was already created with old columns:
+ALTER TABLE IF EXISTS public.products DROP COLUMN IF EXISTS outlet_ids;
 ALTER TABLE IF EXISTS public.products DROP COLUMN IF EXISTS featured;
 ALTER TABLE IF EXISTS public.products DROP COLUMN IF EXISTS bestseller;
 ALTER TABLE IF EXISTS public.products DROP COLUMN IF EXISTS new_arrival;

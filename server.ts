@@ -1,5 +1,6 @@
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
 import cron from 'node-cron';
 import { createServer as createViteServer } from 'vite';
 import { createClient } from '@supabase/supabase-js';
@@ -47,6 +48,17 @@ async function startServer() {
   // Health Check
   app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  });
+
+  // PRD PDF Download / View Endpoint
+  app.get(['/api/prd-pdf', '/PRD_Multi_Outlet_Cloud_Kitchen.pdf'], (req, res) => {
+    const filePath = path.join(process.cwd(), 'public', 'PRD_Multi_Outlet_Cloud_Kitchen.pdf');
+    if (fs.existsSync(filePath)) {
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', 'inline; filename="PRD_Multi_Outlet_Cloud_Kitchen.pdf"');
+      return res.sendFile(filePath);
+    }
+    return res.status(404).json({ error: 'PRD PDF file not found' });
   });
 
   // 1. Auth: Owner Login

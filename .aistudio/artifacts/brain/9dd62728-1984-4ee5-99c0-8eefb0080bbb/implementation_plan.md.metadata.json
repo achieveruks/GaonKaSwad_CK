@@ -1,0 +1,6 @@
+{
+  "summary":  "Completed the removal of the redundant 'outlet_ids' column from the products table and all application references, establishing 'outlets' (ProductOutletConfig[]) as the sole canonical source of truth while keeping 'outlet_ids' in public.coupons intact.",
+  "updatedAt":  "2026-10-04T08:29:34.006979023Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}

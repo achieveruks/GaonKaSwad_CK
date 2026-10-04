@@ -380,9 +380,6 @@ class AppStorage {
         if (p.outlets && Array.isArray(p.outlets) && p.outlets.length > 0) {
           return p.outlets.some((o) => o.outletId === outletId);
         }
-        if (p.outletIds && Array.isArray(p.outletIds) && p.outletIds.length > 0) {
-          return p.outletIds.includes(outletId);
-        }
         return true;
       });
     }
@@ -453,15 +450,6 @@ class AppStorage {
               portionsLeft: o.portionsLeft !== undefined && o.portionsLeft !== null && o.portionsLeft !== '' ? Number(o.portionsLeft) : null,
             }
       );
-    } else if (Array.isArray(data.outletIds) && data.outletIds.length > 0) {
-      outletsConfig = data.outletIds.map((oid) => ({
-        outletId: oid,
-        inStock: data.inStock !== false,
-        isFeatured: !!data.featured,
-        isBestseller: !!data.bestseller,
-        isChefSpecial: !!data.chefSpecial,
-        portionsLeft: null,
-      }));
     } else {
       outletsConfig = activeOutletIds.map((oid) => ({
         outletId: oid,
@@ -472,8 +460,6 @@ class AppStorage {
         portionsLeft: null,
       }));
     }
-
-    const assignedOutletIds = outletsConfig.map((o) => o.outletId);
 
     const newProduct: Product = {
       id: newId,
@@ -506,7 +492,6 @@ class AppStorage {
       active: data.active !== false,
       inStock: data.inStock !== false,
       outlets: outletsConfig,
-      outletIds: assignedOutletIds,
       ingredients: Array.isArray(data.ingredients) && data.ingredients.length > 0
         ? data.ingredients
         : ['Pure Cow Ghee', 'Heirloom Spices', 'Fresh Ingredients'],
@@ -553,15 +538,7 @@ class AppStorage {
               portionsLeft: o.portionsLeft !== undefined && o.portionsLeft !== null && o.portionsLeft !== '' ? Number(o.portionsLeft) : null,
             }
       );
-    } else if (data.outletIds !== undefined) {
-      // Retain configurations for kept outletIds, add new defaults if added
-      updatedOutlets = data.outletIds.map((oid) => {
-        const prev = existing.outlets?.find((o) => o.outletId === oid);
-        return prev || { outletId: oid, inStock: true, isFeatured: false, isBestseller: false, isChefSpecial: false, portionsLeft: null };
-      });
     }
-
-    const updatedOutletIds = updatedOutlets.map((o) => o.outletId);
 
     const updated: Product = {
       ...existing,
@@ -577,7 +554,6 @@ class AppStorage {
       featured: data.featured !== undefined ? !!data.featured : existing.featured,
       bestseller: data.bestseller !== undefined ? !!data.bestseller : existing.bestseller,
       outlets: updatedOutlets,
-      outletIds: updatedOutletIds,
       image: data.image !== undefined ? data.image.trim() : existing.image,
       description: data.description !== undefined ? data.description.trim() : existing.description,
       shortDescription: data.shortDescription !== undefined ? data.shortDescription.trim() : existing.shortDescription,
@@ -633,11 +609,9 @@ class AppStorage {
       }
     }
 
-    const outletIds = outlets.map((o) => o.outletId);
     this.products[index] = {
       ...product,
       outlets,
-      outletIds,
     };
 
     this.saveProducts();
@@ -801,10 +775,20 @@ class AppStorage {
     }
 
     // Auto-assign existing products to this new outlet if requested or keep products accessible
-    this.products = this.products.map((p) => ({
-      ...p,
-      outletIds: p.outletIds ? [...new Set([...p.outletIds, newOutlet.id])] : [newOutlet.id],
-    }));
+    this.products = this.products.map((p) => {
+      const outlets = Array.isArray(p.outlets) ? [...p.outlets] : [];
+      if (!outlets.some((o) => o.outletId === newOutlet.id)) {
+        outlets.push({
+          outletId: newOutlet.id,
+          inStock: true,
+          isFeatured: false,
+          isBestseller: false,
+          isChefSpecial: false,
+          portionsLeft: null,
+        });
+      }
+      return { ...p, outlets };
+    });
     this.saveProducts();
 
     return newOutlet;
@@ -863,10 +847,10 @@ class AppStorage {
     this.zones = this.zones.filter((z) => z.outletId !== id);
     this.saveZones();
 
-    // Remove from products outletIds
+    // Remove from products outlets
     this.products = this.products.map((p) => ({
       ...p,
-      outletIds: Array.isArray(p.outletIds) ? p.outletIds.filter((oid) => oid !== id) : [],
+      outlets: Array.isArray(p.outlets) ? p.outlets.filter((o) => o.outletId !== id) : [],
     }));
     this.saveProducts();
 

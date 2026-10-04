@@ -354,25 +354,15 @@ export function isProductServedAtOutlet(product: Product, outletId?: string): bo
     }
   }
 
-  // 2. Check outletIds array on product
-  if (product.outletIds && Array.isArray(product.outletIds) && product.outletIds.length > 0) {
-    if (product.outletIds.includes(outletId)) {
-      return true;
-    }
-  }
-
-  // 3. Check outlet's assignedProductIds list
+  // 2. Check outlet's assignedProductIds list
   const outlet = cachedOutlets.find((o) => o.id === outletId);
   if (outlet && Array.isArray(outlet.assignedProductIds) && outlet.assignedProductIds.length > 0) {
     const prodIdStr = String(product.id);
     return outlet.assignedProductIds.some((id) => String(id) === prodIdStr);
   }
 
-  // 4. If product has empty outlet restrictions
-  if (
-    (!product.outlets || product.outlets.length === 0) &&
-    (!product.outletIds || product.outletIds.length === 0)
-  ) {
+  // 3. If product has empty outlet restrictions
+  if (!product.outlets || product.outlets.length === 0) {
     return true;
   }
 

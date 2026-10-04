@@ -20,7 +20,6 @@ export function mapDbProductToProduct(row: any): Product {
             : (o.portions_left !== undefined && o.portions_left !== null && o.portions_left !== '' ? Number(o.portions_left) : null),
       }))
     : [];
-  const outletIds = Array.isArray(row.outlet_ids) ? row.outlet_ids : [];
 
   return {
     id: row.id,
@@ -49,7 +48,6 @@ export function mapDbProductToProduct(row: any): Product {
     active: row.active !== false,
     inStock: outlets.length > 0 ? outlets.some((o: any) => o.inStock) : true,
     outlets,
-    outletIds,
     variants: Array.isArray(row.variants) ? row.variants : [],
     addons: Array.isArray(row.addons) ? row.addons : [],
     ingredients: Array.isArray(row.ingredients) ? row.ingredients : [],
@@ -85,7 +83,6 @@ export function mapProductToDbProduct(p: Partial<Product>): any {
   if (p.calories !== undefined) dbObj.calories = p.calories ? Number(p.calories) : null;
   if (p.active !== undefined) dbObj.active = !!p.active;
   if (p.outlets !== undefined) dbObj.outlets = p.outlets;
-  if (p.outletIds !== undefined) dbObj.outlet_ids = p.outletIds;
   if (p.variants !== undefined) dbObj.variants = p.variants;
   if (p.addons !== undefined) dbObj.addons = p.addons;
   if (p.ingredients !== undefined) dbObj.ingredients = p.ingredients;
@@ -499,13 +496,10 @@ export async function updateSupabaseOutletProductConfig(
     }
   }
 
-  const outletIds = outlets.map((o) => o.outletId);
-
   const { data, error } = await supabase
     .from('products')
     .update({
       outlets,
-      outlet_ids: outletIds,
       updated_at: new Date().toISOString(),
     })
     .eq('id', String(productId))
@@ -567,13 +561,10 @@ export async function batchUpdateSupabaseOutletProducts(
       }
     }
 
-    const outletIds = outlets.map((o) => o.outletId);
-
     await supabase
       .from('products')
       .update({
         outlets,
-        outlet_ids: outletIds,
         updated_at: new Date().toISOString(),
       })
       .eq('id', String(prod.id));

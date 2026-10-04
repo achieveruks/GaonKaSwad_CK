@@ -92,7 +92,6 @@ CREATE TABLE IF NOT EXISTS public.products (
   calories INTEGER,
   active BOOLEAN DEFAULT TRUE NOT NULL,
   outlets JSONB DEFAULT '[]'::jsonb NOT NULL,
-  outlet_ids JSONB DEFAULT '[]'::jsonb NOT NULL,
   variants JSONB DEFAULT '[]'::jsonb,
   addons JSONB DEFAULT '[]'::jsonb,
   ingredients JSONB DEFAULT '[]'::jsonb,
@@ -101,9 +100,16 @@ CREATE TABLE IF NOT EXISTS public.products (
   updated_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL
 );
 
--- Safe Column Migrations for public.products (Drop deprecated rating and reviews columns)
+-- Safe Column Migrations for public.products (Drop redundant outlet_ids and deprecated rating/reviews columns)
 DO $$
 BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns 
+    WHERE table_schema = 'public' AND table_name = 'products' AND column_name = 'outlet_ids'
+  ) THEN
+    ALTER TABLE public.products DROP COLUMN outlet_ids;
+  END IF;
+
   IF EXISTS (
     SELECT 1 FROM information_schema.columns 
     WHERE table_schema = 'public' AND table_name = 'products' AND column_name = 'rating'

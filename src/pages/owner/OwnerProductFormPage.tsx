@@ -170,16 +170,6 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
               isChefSpecial: oc ? !!oc.isChefSpecial : false,
               portionsLeft: oc && oc.portionsLeft !== undefined ? oc.portionsLeft : null,
             };
-          } else if (Array.isArray(found.outletIds)) {
-            const isAssigned = found.outletIds.includes(o.id);
-            configs[o.id] = {
-              isAssigned,
-              inStock: found.inStock !== false,
-              isFeatured: !!found.featured,
-              isBestseller: !!found.bestseller,
-              isChefSpecial: false,
-              portionsLeft: null,
-            };
           } else {
             // Default assigned
             configs[o.id] = {
@@ -353,7 +343,6 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
       active,
       inStock: assignedOutletsList.some((o) => o.inStock),
       outlets: assignedOutletsList,
-      outletIds: assignedOutletIds,
       ingredients: ingredients.length > 0 ? ingredients : ['Pure Cow Ghee', 'Heirloom Spices'],
     };
 

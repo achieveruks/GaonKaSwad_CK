@@ -221,7 +221,6 @@ export interface Product {
   chefSpecial?: boolean;
   active?: boolean;
   inStock?: boolean; // Legacy/fallback compatibility
-  outletIds?: string[]; // Legacy/quick lookup compatibility
   outlets: ProductOutletConfig[]; // Source of truth for per-outlet stock, featured, and bestseller
   variants?: ProductVariant[];
   addons?: ProductAddon[];

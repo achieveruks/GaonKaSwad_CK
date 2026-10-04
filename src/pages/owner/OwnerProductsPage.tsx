@@ -114,8 +114,6 @@ export const OwnerProductsPage: React.FC = () => {
       if (selectedOutlet !== 'all') {
         const productOutlets = Array.isArray(product.outlets)
           ? product.outlets.map((o) => o.outletId)
-          : Array.isArray(product.outletIds)
-          ? product.outletIds
           : [];
         if (!productOutlets.includes(selectedOutlet)) {
           return false;
@@ -177,15 +175,6 @@ export const OwnerProductsPage: React.FC = () => {
           isBestseller: oc ? !!oc.isBestseller : false,
           isChefSpecial: oc ? !!oc.isChefSpecial : false,
         };
-      } else if (Array.isArray(product.outletIds)) {
-        const isAssigned = product.outletIds.includes(o.id);
-        configs[o.id] = {
-          isAssigned,
-          inStock: product.inStock !== false,
-          isFeatured: !!product.featured,
-          isBestseller: !!product.bestseller,
-          isChefSpecial: false,
-        };
       } else {
         configs[o.id] = {
           isAssigned: true,
@@ -215,7 +204,6 @@ export const OwnerProductsPage: React.FC = () => {
 
       await editProduct(productForOutletConfig.id, {
         outlets: assignedOutlets,
-        outletIds: assignedOutlets.map((o) => o.outletId),
       });
 
       showNotification(`Updated outlet configurations for "${productForOutletConfig.name}"`);
@@ -234,14 +222,6 @@ export const OwnerProductsPage: React.FC = () => {
     let assignedList: ProductOutletConfig[] = [];
     if (Array.isArray(product.outlets)) {
       assignedList = product.outlets;
-    } else if (Array.isArray(product.outletIds)) {
-      assignedList = product.outletIds.map((id) => ({
-        outletId: id,
-        inStock: product.inStock !== false,
-        isFeatured: !!product.featured,
-        isBestseller: !!product.bestseller,
-        isChefSpecial: !!product.chefSpecial,
-      }));
     } else {
       assignedList = outlets.map((o) => ({
         outletId: o.id,
