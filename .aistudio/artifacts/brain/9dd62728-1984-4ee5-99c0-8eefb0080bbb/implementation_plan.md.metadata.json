@@ -1,6 +1,6 @@
 {
-  "summary":  "Completed the removal of the redundant 'outlet_ids' column from the products table and all application references, establishing 'outlets' (ProductOutletConfig[]) as the sole canonical source of truth while keeping 'outlet_ids' in public.coupons intact.",
-  "updatedAt":  "2026-10-04T08:29:34.006979023Z",
+  "summary":  "Production implementation plan to deploy the existing Gaon Ka Swad application to AWS for https://swadclick.com/ using CloudFront, S3, API Gateway HTTP API, Lambda (Node.js 20 + serverless-express), EventBridge for 4:00 AM IST daily rewards, and S3 for media/PDFs, while keeping Supabase fully intact.",
+  "updatedAt":  "2026-10-05T15:28:13.430078795Z",
   "requestFeedback":  true,
   "userFacing":  true
 }

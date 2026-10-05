@@ -2,7 +2,6 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import cron from 'node-cron';
-import { createServer as createViteServer } from 'vite';
 import { createClient } from '@supabase/supabase-js';
 import { productStorage, sanitizeOrderItem, deserializeOrderItem, maskCustomerName, normalizePhone } from './server/storage';
 import {
@@ -35,13 +34,12 @@ const isUUID = (str?: string | null): boolean => {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str.trim());
 };
 
-async function startServer() {
-  const app = express();
-  const PORT = 3000;
+// Express App instance exported for AWS Lambda (@codegenie/serverless-express) and local server
+export const app = express();
 
-  // Global Middlewares
-  app.use(express.json({ limit: '5mb' }));
-  app.use(express.urlencoded({ extended: true, limit: '5mb' }));
+// Global Middlewares
+app.use(express.json({ limit: '5mb' }));
+app.use(express.urlencoded({ extended: true, limit: '5mb' }));
 
   // --- API Routes ---
 
@@ -51,7 +49,20 @@ async function startServer() {
   });
 
   // PRD PDF Download / View Endpoint
-  app.get(['/api/prd-pdf', '/PRD_Multi_Outlet_Cloud_Kitchen.pdf'], (req, res) => {
+  app.get(['/api/prd-pdf', '/PRD_Multi_Outlet_Cloud_Kitchen.pdf'], async (req, res) => {
+    // If running in AWS Lambda with S3 Media Bucket configured, serve via S3 Presigned URL
+    if (process.env.S3_MEDIA_BUCKET && (process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.LAMBDA_TASK_ROOT)) {
+      try {
+        const { getPresignedDownloadUrl } = await import('./server/s3Storage');
+        const presignedUrl = await getPresignedDownloadUrl('documents/PRD_Multi_Outlet_Cloud_Kitchen.pdf');
+        if (presignedUrl) {
+          return res.redirect(presignedUrl);
+        }
+      } catch (s3Err) {
+        console.warn('[PDF S3] Fallback to static disk file:', s3Err);
+      }
+    }
+
     const filePath = path.join(process.cwd(), 'public', 'PRD_Multi_Outlet_Cloud_Kitchen.pdf');
     if (fs.existsSync(filePath)) {
       res.setHeader('Content-Type', 'application/pdf');
@@ -3215,7 +3226,7 @@ async function startServer() {
   });
 
   // Helper to run daily rewards and conditionally log to swad_coins_dispatch
-  async function executeSwadCoinDailyRewards(runType: 'MANUAL' | 'SCHEDULED' = 'MANUAL') {
+  export async function executeSwadCoinDailyRewards(runType: 'MANUAL' | 'SCHEDULED' = 'MANUAL') {
     let supaOrders: any[] = [];
     try {
       const { data } = await serverSupabase
@@ -5291,47 +5302,54 @@ async function startServer() {
     }
   });
 
-  // --- Vite Dev Middleware or Static Production Serving ---
-  if (process.env.NODE_ENV !== 'production') {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+  // --- Local Development & Standalone Server Startup ---
+  export async function startServer() {
+    const PORT = Number(process.env.PORT) || 3000;
+
+    // Vite Dev Middleware or Static Production Serving
+    if (process.env.NODE_ENV !== 'production') {
+      const { createServer: createViteServer } = await import('vite');
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: 'spa',
+      });
+      app.use(vite.middlewares);
+    } else {
+      const distPath = path.join(process.cwd(), 'dist');
+      app.use(express.static(distPath));
+      app.get('*', (req, res) => {
+        res.sendFile(path.join(distPath, 'index.html'));
+      });
+    }
+
+    // Automated Scheduled Jobs (Only when running local / standalone server, not in AWS Lambda)
+    if (!process.env.AWS_LAMBDA_FUNCTION_NAME && !process.env.LAMBDA_TASK_ROOT) {
+      cron.schedule(
+        '0 4 * * *',
+        async () => {
+          console.log('[Swad Coins] Executing daily 04:00 AM IST reward generation job...');
+          try {
+            const cronResult = await executeSwadCoinDailyRewards('SCHEDULED');
+            console.log(`[Swad Coins] Daily scheduled job completed: ${cronResult.message}`);
+          } catch (cronErr) {
+            console.error('[Swad Coins] Error during daily reward cron execution:', cronErr);
+          }
+        },
+        {
+          timezone: 'Asia/Kolkata',
+        }
+      );
+    }
+
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`Gaon Ka Swad server running on http://localhost:${PORT}`);
     });
   }
 
-  // --- Automated Scheduled Jobs ---
-  // Daily Swad Coin Reward Generation at 04:00 AM IST (Asia/Kolkata)
-  // Only runs automatically once per day at 4:00 AM IST. Never triggers automatically on individual orders.
-  // Admins can trigger reward generation manually at any time from the Admin Dashboard.
-  cron.schedule(
-    '0 4 * * *',
-    async () => {
-      console.log('[Swad Coins] Executing daily 04:00 AM IST reward generation job...');
-      try {
-        const cronResult = await executeSwadCoinDailyRewards('SCHEDULED');
-        console.log(`[Swad Coins] Daily scheduled job completed: ${cronResult.message}`);
-      } catch (cronErr) {
-        console.error('[Swad Coins] Error during daily reward cron execution:', cronErr);
-      }
-    },
-    {
-      timezone: 'Asia/Kolkata',
-    }
-  );
-
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Gaon Ka Swad server running on http://localhost:${PORT}`);
-  });
-}
-
-startServer().catch((err) => {
-  console.error('Fatal server startup error:', err);
-  process.exit(1);
-});
+  // Only start HTTP listener if executed directly (e.g. tsx server.ts), not when imported by lambda.ts
+  if (!process.env.AWS_LAMBDA_FUNCTION_NAME && !process.env.LAMBDA_TASK_ROOT) {
+    startServer().catch((err) => {
+      console.error('Fatal server startup error:', err);
+      process.exit(1);
+    });
+  }

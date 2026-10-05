@@ -1,0 +1,318 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Gaon Ka Swad - Serverless Production Infrastructure for https://swadclick.com/
+  CloudFront + S3 Frontend + API Gateway (v2) + Lambda (Node.js 20) + EventBridge (4:00 AM IST Cron) + Supabase
+
+Parameters:
+  DomainName:
+    Type: String
+    Default: swadclick.com
+    Description: Production apex domain name
+
+  DomainAliases:
+    Type: CommaDelimitedList
+    Default: 'swadclick.com,www.swadclick.com'
+    Description: List of domain aliases for CloudFront
+
+  AcmCertificateArn:
+    Type: String
+    Default: ''
+    Description: ARN of the ACM SSL Certificate in us-east-1 for swadclick.com (leave empty for testing with CloudFront domain)
+
+  SupabaseUrl:
+    Type: String
+    Default: https://ifthfunawntmqjupafxp.supabase.co
+    Description: Supabase project URL
+
+  SupabaseAnonKey:
+    Type: String
+    NoEcho: true
+    Default: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlmdGhmdW5hd250bXFqdXBhZnhwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODcyMjc4NTQsImV4cCI6MjEwMjgwMzg1NH0.xS74LsNci-I_v-p13O3rzzhflOuOZaHLDcVLgEi9Yzw
+    Description: Supabase anonymous public key
+
+  SupabaseServiceRoleKey:
+    Type: String
+    NoEcho: true
+    Default: ''
+    Description: Supabase service role secret key (backend Lambda only)
+
+  JwtSecret:
+    Type: String
+    NoEcho: true
+    Default: swadclick-production-jwt-secret-key-replace-me
+    Description: JWT secret key for owner and manager session authentication
+
+Conditions:
+  HasCustomCertificate: !Not [!Equals [!Ref AcmCertificateArn, '']]
+
+Resources:
+  # ============================================================================
+  # 1. S3 BUCKETS
+  # ============================================================================
+
+  # Frontend static React/Vite distribution bucket
+  FrontendBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'swadclick-frontend-${AWS::AccountId}-${AWS::Region}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  # S3 Media & Document Storage (Food photos, generated PDFs, customer uploads)
+  MediaBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'swadclick-media-${AWS::AccountId}-${AWS::Region}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders: ['*']
+            AllowedMethods: [GET, PUT, POST, HEAD]
+            AllowedOrigins:
+              - 'https://swadclick.com'
+              - 'https://www.swadclick.com'
+              - 'http://localhost:3000'
+            MaxAge: 3600
+
+  # ============================================================================
+  # 2. CLOUDFRONT ORIGIN ACCESS CONTROL (OAC) & POLICIES
+  # ============================================================================
+
+  CloudFrontOAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub 'swadclick-oac-${AWS::StackName}'
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  FrontendBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FrontendBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowCloudFrontServicePrincipalReadOnly
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub '${FrontendBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${CloudFrontDistribution}'
+
+  # ============================================================================
+  # 3. API GATEWAY HTTP API (v2)
+  # ============================================================================
+
+  SwadClickHttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      CorsConfiguration:
+        AllowMethods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+          - OPTIONS
+          - PATCH
+        AllowHeaders:
+          - '*'
+        AllowOrigins:
+          - 'https://swadclick.com'
+          - 'https://www.swadclick.com'
+          - 'http://localhost:3000'
+        MaxAge: 600
+
+  # ============================================================================
+  # 4. LAMBDA FUNCTIONS (Node.js 20)
+  # ============================================================================
+
+  # API Function: Handles all /api/* routes via serverless-express
+  SwadClickApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: dist-lambda/api/
+      Handler: index.handler
+      Runtime: nodejs20.x
+      MemorySize: 1024
+      Timeout: 30
+      Description: Express API backend for swadclick.com running on AWS Lambda
+      Environment:
+        Variables:
+          NODE_ENV: production
+          SUPABASE_URL: !Ref SupabaseUrl
+          SUPABASE_ANON_KEY: !Ref SupabaseAnonKey
+          SUPABASE_SERVICE_ROLE_KEY: !Ref SupabaseServiceRoleKey
+          JWT_SECRET: !Ref JwtSecret
+          S3_MEDIA_BUCKET: !Ref MediaBucket
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Sub 'swadclick-media-${AWS::AccountId}-${AWS::Region}'
+      Events:
+        ApiProxy:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SwadClickHttpApi
+            Path: /api/{proxy+}
+            Method: ANY
+        ApiRoot:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SwadClickHttpApi
+            Path: /api
+            Method: ANY
+
+  # Scheduled Cron Function: 04:00 AM IST Daily Swad Coin Rewards
+  SwadClickCronFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: dist-lambda/cron/
+      Handler: index.handler
+      Runtime: nodejs20.x
+      MemorySize: 512
+      Timeout: 60
+      Description: EventBridge scheduled worker for daily 4:00 AM IST Swad Coin rewards
+      Environment:
+        Variables:
+          NODE_ENV: production
+          SUPABASE_URL: !Ref SupabaseUrl
+          SUPABASE_ANON_KEY: !Ref SupabaseAnonKey
+          SUPABASE_SERVICE_ROLE_KEY: !Ref SupabaseServiceRoleKey
+      Events:
+        DailyRewardCron:
+          Type: Schedule
+          Properties:
+            # 22:30 UTC = 04:00 AM IST daily
+            Schedule: cron(30 22 * * ? *)
+            Name: SwadCoinDailyRewardsSchedule
+            Description: Automated daily Swad Coin rewards calculation at 4:00 AM IST
+
+  # ============================================================================
+  # 5. CLOUDFRONT DISTRIBUTION
+  # ============================================================================
+
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Comment: !Sub 'Production CloudFront distribution for ${DomainName}'
+        Enabled: true
+        HttpVersion: http2and3
+        Aliases: !If [HasCustomCertificate, !Ref DomainAliases, !Ref 'AWS::NoValue']
+        DefaultRootObject: index.html
+
+        # Viewer Certificate: ACM SSL Certificate if provided, else CloudFront default
+        ViewerCertificate: !If
+          - HasCustomCertificate
+          - AcmCertificateArn: !Ref AcmCertificateArn
+            SslSupportMethod: sni-only
+            MinimumProtocolVersion: TLSv1.2_2021
+          - CloudFrontDefaultCertificate: true
+
+        # Custom Error Responses for React Router SPA (Client-side routing)
+        # Prevents 403 / 404 errors on direct navigation to /menu, /cart, /checkout, /owner
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 0
+
+        # Origins: 1. Frontend S3 Bucket (OAC), 2. API Gateway HTTP API
+        Origins:
+          # S3 Frontend Origin
+          - Id: S3FrontendOrigin
+            DomainName: !GetAtt FrontendBucket.RegionalDomainName
+            OriginAccessControlId: !GetAtt CloudFrontOAC.Id
+            S3OriginConfig: {}
+
+          # API Gateway Origin
+          - Id: ApiGatewayOrigin
+            DomainName: !Sub '${SwadClickHttpApi}.execute-api.${AWS::Region}.amazonaws.com'
+            CustomOriginConfig:
+              HTTPSPort: 443
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols:
+                - TLSv1.2
+
+        # Default Cache Behavior: All frontend pages and static assets (/*)
+        DefaultCacheBehavior:
+          TargetOriginId: S3FrontendOrigin
+          ViewerProtocolPolicy: redirect-to-https
+          Compress: true
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          # AWS Managed CachingOptimized Policy
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+
+        # Custom Cache Behavior: /api/* routes forwarded directly to API Gateway
+        CacheBehaviors:
+          - PathPattern: /api/*
+            TargetOriginId: ApiGatewayOrigin
+            ViewerProtocolPolicy: https-only
+            AllowedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+              - PUT
+              - POST
+              - PATCH
+              - DELETE
+            # AWS Managed CachingDisabled Policy (Dynamic API requests must never be cached by CDN)
+            CachePolicyId: 4135ea2d-6df8-44a3-9df3-4b5a84be39ad
+            # AWS Managed AllViewerExceptHostHeader Policy
+            OriginRequestPolicyId: b689b0a8-53d0-40ab-baf2-68738e2966ac
+
+Outputs:
+  ProductionUrl:
+    Description: Production Application URL
+    Value: !Sub 'https://${DomainName}'
+
+  CloudFrontDomain:
+    Description: CloudFront Distribution Domain Name (Point DNS CNAME/ALIAS here)
+    Value: !GetAtt CloudFrontDistribution.DomainName
+
+  CloudFrontDistributionId:
+    Description: CloudFront Distribution ID (Use for cache invalidations)
+    Value: !Ref CloudFrontDistribution
+
+  FrontendBucketName:
+    Description: S3 Bucket Name for uploading the React/Vite dist folder
+    Value: !Ref FrontendBucket
+
+  MediaBucketName:
+    Description: S3 Bucket Name for Media and PDF storage
+    Value: !Ref MediaBucket
+
+  ApiGatewayEndpoint:
+    Description: Direct API Gateway HTTP API Endpoint
+    Value: !Sub 'https://${SwadClickHttpApi}.execute-api.${AWS::Region}.amazonaws.com'
