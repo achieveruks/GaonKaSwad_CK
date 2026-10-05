@@ -6,3 +6,6 @@ coverage/
 *.log
 .env*
 !.env.example
+dist-lambda/
+.aws-sam/
+samconfig.toml

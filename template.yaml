@@ -28,19 +28,16 @@ Parameters:
   SupabaseAnonKey:
     Type: String
     NoEcho: true
-    Default: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlmdGhmdW5hd250bXFqdXBhZnhwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODcyMjc4NTQsImV4cCI6MjEwMjgwMzg1NH0.xS74LsNci-I_v-p13O3rzzhflOuOZaHLDcVLgEi9Yzw
     Description: Supabase anonymous public key
 
   SupabaseServiceRoleKey:
     Type: String
     NoEcho: true
-    Default: ''
     Description: Supabase service role secret key (backend Lambda only)
 
   JwtSecret:
     Type: String
     NoEcho: true
-    Default: swadclick-production-jwt-secret-key-replace-me
     Description: JWT secret key for owner and manager session authentication
 
 Conditions:
