@@ -25,8 +25,8 @@ import { AboutPage } from './pages/AboutPage';
 import { ContactPage } from './pages/ContactPage';
 import { CategoriesPage } from './pages/CategoriesPage';
 
-// Owner Pages
 import { OwnerLoginPage } from './pages/owner/OwnerLoginPage';
+import { OwnerResetPasswordPage } from './pages/owner/OwnerResetPasswordPage';
 import { OwnerDashboardPage } from './pages/owner/OwnerDashboardPage';
 import { OwnerProductsPage } from './pages/owner/OwnerProductsPage';
 import { OwnerProductFormPage } from './pages/owner/OwnerProductFormPage';
@@ -58,6 +58,14 @@ const AppContent: React.FC = () => {
         return (
           <>
             <OwnerLoginPage />
+            <Toast />
+          </>
+        );
+      case '/owner/reset-password':
+      case '/owner/login/reset-password':
+        return (
+          <>
+            <OwnerResetPasswordPage />
             <Toast />
           </>
         );

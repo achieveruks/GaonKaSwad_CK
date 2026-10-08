@@ -49,7 +49,7 @@ export const CloudDatabaseStatus: React.FC = () => {
     }
   };
 
-  const sqlCode = `-- GAON KA SWAD - SUPABASE POSTGRESQL SCHEMA
+  const sqlCode = `-- SWAD CLICK - SUPABASE POSTGRESQL SCHEMA
 -- Run this in Supabase Dashboard -> SQL Editor -> New Query
 
 CREATE TABLE IF NOT EXISTS public.categories (

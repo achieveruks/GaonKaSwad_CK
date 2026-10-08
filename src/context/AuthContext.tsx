@@ -171,7 +171,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       let role: UserRole = prof?.role || (isAchiever ? 'owner' : 'customer');
 
       // Auto-heal / fallback: If profile was missing or defaulted to customer for manager emails
-      if (role === 'customer' && (cleanEmail.startsWith('manager.') || cleanEmail.includes('manager')) && cleanEmail.endsWith('@gaonkaswad.in')) {
+      if (role === 'customer' && (cleanEmail.startsWith('manager.') || cleanEmail.includes('manager')) && cleanEmail.endsWith('@swadclick.com')) {
         try {
           let derivedOutletId: string | null = null;
           if (cleanEmail.includes('hsr')) derivedOutletId = 'blr-hsr';

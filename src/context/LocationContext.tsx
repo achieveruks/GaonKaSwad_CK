@@ -15,7 +15,7 @@ import {
 } from '../lib/locationService';
 import { useAuth } from './AuthContext';
 
-const LOCATION_STORAGE_KEY = 'gaonkaswad_location_v1';
+const LOCATION_STORAGE_KEY = 'swadclick_location_v1';
 
 interface LocationContextType {
   selectedLocation: UserLocationState | null;

@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: >
-  Gaon Ka Swad - Serverless Production Infrastructure for https://swadclick.com/
+  Swad Click - Serverless Production Infrastructure for https://swadclick.com/
   CloudFront + S3 Frontend + API Gateway (v2) + Lambda (Node.js 20) + EventBridge (4:00 AM IST Cron) + Supabase
 
 Parameters:

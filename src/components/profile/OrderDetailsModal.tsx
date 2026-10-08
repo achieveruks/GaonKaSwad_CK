@@ -191,7 +191,7 @@ export const OrderDetailsModal: React.FC<OrderDetailsModalProps> = ({
 
   const { outlets } = useLocation();
 
-  // 4. Resolve Actual Full Outlet Name & Location (e.g. 'Gaon Ka Swad - Khandagiri')
+  // 4. Resolve Actual Full Outlet Name & Location (e.g. 'Swad Click - Khandagiri')
   const resolvedOutlet = resolveOrderOutletInfo(order, outlets);
   const outletDisplayName = resolvedOutlet.outletName;
   const outletPhone =

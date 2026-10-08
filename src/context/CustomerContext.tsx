@@ -98,7 +98,7 @@ interface CustomerContextType {
 
 const CustomerContext = createContext<CustomerContextType | undefined>(undefined);
 
-const STORAGE_KEY_CUSTOMER = 'gaonkaswad_customer_v1';
+const STORAGE_KEY_CUSTOMER = 'swadclick_customer_v1';
 
 // Helper to deduplicate address arrays by ID and normalized text
 const deduplicateAddresses = (addresses: CustomerAddress[]): CustomerAddress[] => {
@@ -140,9 +140,9 @@ export const CustomerProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   // Clear any legacy client-side address cache from previous app versions
   useEffect(() => {
     try {
-      localStorage.removeItem('gaonkaswad_cust_address_v1');
-      localStorage.removeItem('gaonkaswad_cust_all_addresses_v1');
-      localStorage.removeItem('gaonkaswad_address_cache');
+      localStorage.removeItem('swadclick_cust_address_v1');
+      localStorage.removeItem('swadclick_cust_all_addresses_v1');
+      localStorage.removeItem('swadclick_address_cache');
     } catch {}
   }, []);
 
@@ -876,8 +876,8 @@ export const CustomerProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setIsWelcomeDiscountEligible(true);
     localStorage.removeItem(STORAGE_KEY_CUSTOMER);
     try {
-      localStorage.removeItem('gaonkaswad_cust_address_v1');
-      localStorage.removeItem('gaonkaswad_cust_all_addresses_v1');
+      localStorage.removeItem('swadclick_cust_address_v1');
+      localStorage.removeItem('swadclick_cust_all_addresses_v1');
     } catch {}
   };
 

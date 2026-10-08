@@ -71,7 +71,7 @@ interface CartContextType {
 
 const CartContext = createContext<CartContextType | undefined>(undefined);
 
-const CART_STORAGE_KEY = 'gaonkaswad_cart_v1';
+const CART_STORAGE_KEY = 'swadclick_cart_v1';
 
 export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { selectedLocation, currentZone, currentOutlet, setIsLocationModalOpen } = useLocation();
@@ -460,7 +460,7 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // Auto-detect customer credentials from localStorage if not explicitly provided
     if (!resolvedCustomerId || !resolvedCustomerPhone) {
       try {
-        const saved = localStorage.getItem('gaonkaswad_customer_v1');
+        const saved = localStorage.getItem('swadclick_customer_v1');
         if (saved) {
           const parsed = JSON.parse(saved);
           if (!resolvedCustomerId && parsed?.id) resolvedCustomerId = parsed.id;

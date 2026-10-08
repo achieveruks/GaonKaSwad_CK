@@ -48,7 +48,7 @@ export const ContactPage: React.FC = () => {
     state: 'Odisha',
     address: 'Plot No. 1202, Jayadev Vihar, Bhubaneswar, Odisha',
     phone: '+91 94370 12345',
-    email: 'bhubaneswar@gaonkaswad.com',
+    email: 'bhubaneswar@swadclick.com',
     pinCodes: ['751013', '751012'],
     operatingHours: '11:00 AM - 11:00 PM',
     avgCookingTime: '25-35 mins',
@@ -173,7 +173,7 @@ export const ContactPage: React.FC = () => {
             <span>Direct Culinary Concierge</span>
           </div>
           <h1 className="font-extrabold text-2xl sm:text-4xl text-stone-900 tracking-tight">
-            Get in Touch with Gaon Ka Swad
+            Get in Touch with Swad Click
           </h1>
           <p className="text-xs sm:text-sm text-stone-600 max-w-xl mx-auto">
             Have questions about an order, want to arrange royal party catering, or connect with our cloud kitchen hub? We are here to help.
@@ -252,10 +252,10 @@ export const ContactPage: React.FC = () => {
                   <div className="min-w-0 flex-1">
                     <p className="font-bold text-stone-900">Email Inquiries</p>
                     <a
-                      href={`mailto:${currentHub.email || 'orders@gaonkaswad.com'}`}
+                      href={`mailto:${currentHub.email || 'orders@swadclick.com'}`}
                       className="text-stone-800 hover:text-blue-700 font-semibold transition-colors truncate block"
                     >
-                      {currentHub.email || `${currentHub.city.toLowerCase()}@gaonkaswad.com`}
+                      {currentHub.email || `${currentHub.city.toLowerCase()}@swadclick.com`}
                     </a>
                     <p className="text-[10px] text-stone-400">Response within 2 business hours</p>
                   </div>
@@ -331,7 +331,7 @@ export const ContactPage: React.FC = () => {
                   className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white rounded-xl font-bold text-xs flex items-center justify-center gap-2 shadow-xs transition-colors"
                 >
                   <MessageSquare className="w-4 h-4" />
-                  <span>Chat with {currentHub.name.replace('Gaon Ka Swad - ', '')} on WhatsApp</span>
+                  <span>Chat with {currentHub.name.replace(/^Swad Click\s*[-–:]\s*/i, '')} on WhatsApp</span>
                 </a>
               </div>
             </div>
@@ -370,7 +370,7 @@ export const ContactPage: React.FC = () => {
                       className="inline-flex items-center flex-wrap gap-2 text-xs bg-stone-800 text-stone-200 px-3 py-1.5 rounded-lg border border-stone-700 font-medium shadow-xs"
                     >
                       <span className="flex items-center gap-1 text-white font-bold">
-                        📍 {o.name.replace('Gaon Ka Swad - ', '')}
+                        📍 {o.name.replace(/^Swad Click\s*[-–:]\s*/i, '')}
                       </span>
                       {outletPins.length > 0 && (
                         <span className="text-amber-300 font-mono text-[11px] bg-stone-900/90 px-2 py-0.5 rounded border border-stone-700/80">
@@ -544,7 +544,7 @@ export const ContactPage: React.FC = () => {
                     className="w-full py-2.5 bg-amber-800 hover:bg-amber-900 active:bg-amber-950 text-white rounded-xl font-bold text-xs sm:text-sm shadow-xs transition-colors flex items-center justify-center gap-1.5"
                   >
                     <Mail className="w-3.5 h-3.5" />
-                    <span>Send Mail to {targetOutlet.name.replace('Gaon Ka Swad - ', '')}</span>
+                    <span>Send Mail to {targetOutlet.name.replace(/^Swad Click\s*[-–:]\s*/i, '')}</span>
                   </button>
                 </form>
               )}

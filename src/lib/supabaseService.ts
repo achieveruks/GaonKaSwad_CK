@@ -609,7 +609,7 @@ export async function createSupabaseOutlet(outletData: Partial<Outlet>): Promise
   if (!isSupabaseConfigured()) throw new Error('Supabase not configured');
 
   const cleanCity = outletData.city?.trim() || 'Bangalore';
-  let baseId = (outletData.id || `${cleanCity.slice(0, 3).toLowerCase()}-${(outletData.name || 'outlet').replace(/gaon ka swad/gi, '').trim().toLowerCase()}`)
+  let baseId = (outletData.id || `${cleanCity.slice(0, 3).toLowerCase()}-${(outletData.name || 'outlet').replace(/swad click/gi, '').trim().toLowerCase()}`)
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/(^-|-$)/g, '');
 
@@ -1215,27 +1215,25 @@ export async function deleteSupabaseCustomerAddress(addressId: string): Promise<
 
 /**
  * Formats an order ID for UI presentation with a single leading '#'.
- * E.g. 'GKSWAD-00051' -> '#GKSWAD-00051'
- * Legacy 'GKSWAD-#00051' -> '#GKSWAD-00051'
- * '#GKSWAD-00051' -> '#GKSWAD-00051'
+ * E.g. 'SWADCLK-00016' -> '#SWADCLK-00016'
  */
 export function formatDisplayOrderId(orderId?: string | null): string {
   if (!orderId) return '';
-  const clean = String(orderId).trim().replace(/^#+/, '').replace(/GKSWAD-#/i, 'GKSWAD-');
+  const clean = String(orderId).trim().replace(/^#+/, '').replace(/SWADCLK-#/i, 'SWADCLK-').replace(/GKSWAD-#?/i, 'SWADCLK-');
   return clean ? `#${clean}` : '';
 }
 
 /**
- * Normalizes an order ID to clean URL-safe format: GKSWAD-00051
+ * Normalizes an order ID to clean URL-safe format: SWADCLK-00016
  */
 export function normalizeOrderId(orderId?: string | null): string {
   if (!orderId) return '';
-  return String(orderId).trim().replace(/^#+/, '').replace(/GKSWAD-#/i, 'GKSWAD-');
+  return String(orderId).trim().replace(/^#+/, '').replace(/SWADCLK-#/i, 'SWADCLK-').replace(/GKSWAD-#?/i, 'SWADCLK-');
 }
 
 export async function getNextSequentialOrderId(): Promise<string> {
   if (!isSupabaseConfigured()) {
-    return `GKSWAD-00001`;
+    return `SWADCLK-00016`;
   }
   try {
     const { data, error } = await supabase
@@ -1245,14 +1243,14 @@ export async function getNextSequentialOrderId(): Promise<string> {
       .limit(100);
 
     if (error || !data || data.length === 0) {
-      return `GKSWAD-00001`;
+      return `SWADCLK-00016`;
     }
 
     let maxNum = 0;
     for (const row of data) {
       const idToCheck = row.order_number || row.order_id;
       if (idToCheck) {
-        const match = idToCheck.match(/GKSWAD-#?0*(\d+)/i) || idToCheck.match(/GKS-#?0*(\d+)/i);
+        const match = idToCheck.match(/(?:SWADCLK|GKSWAD|GKS)-#?0*(\d+)/i);
         if (match && match[1]) {
           const num = parseInt(match[1], 10);
           if (!isNaN(num) && num > maxNum) {
@@ -1261,10 +1259,10 @@ export async function getNextSequentialOrderId(): Promise<string> {
         }
       }
     }
-    const nextSeq = maxNum + 1;
-    return `GKSWAD-${String(nextSeq).padStart(5, '0')}`;
+    const nextSeq = Math.max(maxNum + 1, 16);
+    return `SWADCLK-${String(nextSeq).padStart(5, '0')}`;
   } catch {
-    return `GKSWAD-00001`;
+    return `SWADCLK-00016`;
   }
 }
 
@@ -1493,27 +1491,27 @@ export function resolveDbOrderOutlet(row: any, allOutlets: Outlet[] = []): { out
   // 2. Fallback heuristic mappings
   const cleanId = rawId.replace(/^outlet-/, '').toLowerCase();
   if (cleanId.includes('kendriya') || cleanId === 'bbsr-kendriyavihar') {
-    return { outletId: 'bbsr-kendriyavihar', outletName: 'Gaon Ka Swad - Kendriya Vihar', kitchenAddress: 'Kendriya Vihar, C.C.S. Complex, Jagamara / Baramunda Road, Bhubaneswar' };
+    return { outletId: 'bbsr-kendriyavihar', outletName: 'Swad Click - Kendriya Vihar', kitchenAddress: 'Kendriya Vihar, C.C.S. Complex, Jagamara / Baramunda Road, Bhubaneswar' };
   }
   if (cleanId.includes('patia') || cleanId === 'bbsr-patia') {
-    return { outletId: 'bbsr-patia', outletName: 'Gaon Ka Swad - Patia', kitchenAddress: 'KIIT Square, Infocity Rd, Patia, Bhubaneswar' };
+    return { outletId: 'bbsr-patia', outletName: 'Swad Click - Patia', kitchenAddress: 'KIIT Square, Infocity Rd, Patia, Bhubaneswar' };
   }
   if (cleanId.includes('khandagiri') || cleanId === 'bbsr-khandagiri') {
-    return { outletId: 'bbsr-khandagiri', outletName: 'Gaon Ka Swad - Khandagiri', kitchenAddress: 'Khandagiri Square, NH-16, Bhubaneswar' };
+    return { outletId: 'bbsr-khandagiri', outletName: 'Swad Click - Khandagiri', kitchenAddress: 'Khandagiri Square, NH-16, Bhubaneswar' };
   }
   if (cleanId.includes('hsr') || cleanId === 'blr-hsr') {
-    return { outletId: 'blr-hsr', outletName: 'Gaon Ka Swad - HSR Layout', kitchenAddress: 'Sector 3, 27th Main Rd, HSR Layout, Bangalore' };
+    return { outletId: 'blr-hsr', outletName: 'Swad Click - HSR Layout', kitchenAddress: 'Sector 3, 27th Main Rd, HSR Layout, Bangalore' };
   }
   if (cleanId.includes('whitefield') || cleanId === 'blr-whitefield') {
-    return { outletId: 'blr-whitefield', outletName: 'Gaon Ka Swad - Whitefield', kitchenAddress: 'ITPL Main Rd, Near Hope Farm, Whitefield, Bangalore' };
+    return { outletId: 'blr-whitefield', outletName: 'Swad Click - Whitefield', kitchenAddress: 'ITPL Main Rd, Near Hope Farm, Whitefield, Bangalore' };
   }
   if (cleanId.includes('indiranagar') || cleanId === 'blr-indiranagar') {
-    return { outletId: 'blr-indiranagar', outletName: 'Gaon Ka Swad - Indiranagar', kitchenAddress: '100 Feet Rd, HAL 2nd Stage, Indiranagar, Bangalore' };
+    return { outletId: 'blr-indiranagar', outletName: 'Swad Click - Indiranagar', kitchenAddress: '100 Feet Rd, HAL 2nd Stage, Indiranagar, Bangalore' };
   }
 
   return {
     outletId: rawId || (allOutlets[0]?.id ?? 'blr-hsr'),
-    outletName: rawName || (allOutlets[0]?.name ?? 'Gaon Ka Swad Kitchen'),
+    outletName: rawName || (allOutlets[0]?.name ?? 'Swad Click Kitchen'),
     kitchenAddress: rawAddress || allOutlets[0]?.address,
   };
 }
@@ -1559,9 +1557,9 @@ export function mapDbOrderToOrder(row: any): Order {
   const resolvedOutlet = resolveDbOrderOutlet(row);
 
   const rawDbOrderId = String(row.order_id || row.order_number || row.id || '');
-  const cleanDbOrderId = rawDbOrderId.replace(/GKSWAD-#/g, 'GKSWAD-');
+  const cleanDbOrderId = rawDbOrderId.replace(/SWADCLK-#/g, 'SWADCLK-').replace(/GKSWAD-#?/g, 'SWADCLK-');
   const rawDbOrderNum = String(row.order_number || row.order_id || cleanDbOrderId);
-  const cleanDbOrderNum = rawDbOrderNum.replace(/GKSWAD-#/g, 'GKSWAD-');
+  const cleanDbOrderNum = rawDbOrderNum.replace(/SWADCLK-#/g, 'SWADCLK-').replace(/GKSWAD-#?/g, 'SWADCLK-');
 
   return {
     id: row.id || cleanDbOrderId,
@@ -1677,15 +1675,12 @@ export async function fetchSupabaseOrderById(orderId: string): Promise<Order | n
   if (!isSupabaseConfigured() || !orderId) return null;
 
   try {
-    const cleanId = orderId.replace(/^#+/, '');
-    const altId = cleanId.includes('GKSWAD-#')
-      ? cleanId.replace('GKSWAD-#', 'GKSWAD-')
-      : (cleanId.includes('GKSWAD-') ? cleanId.replace('GKSWAD-', 'GKSWAD-#') : cleanId);
+    const cleanId = orderId.replace(/^#+/, '').trim();
 
     const { data, error } = await supabase
       .from('orders')
       .select('*')
-      .or(`order_id.eq.${orderId},id.eq.${orderId},order_number.eq.${orderId},order_id.eq.${cleanId},order_number.eq.${cleanId},order_id.eq.${altId},order_number.eq.${altId}`)
+      .or(`order_id.eq.${cleanId},order_number.eq.${cleanId},id.eq.${cleanId},order_id.eq.${orderId},order_number.eq.${orderId}`)
       .maybeSingle();
 
     if (error || !data) return null;
@@ -1736,15 +1731,12 @@ export async function updateSupabaseOrderStatus(
   }
 
   try {
-    const cleanId = orderId.replace(/^#+/, '');
-    const altId = cleanId.includes('GKSWAD-#')
-      ? cleanId.replace('GKSWAD-#', 'GKSWAD-')
-      : (cleanId.includes('GKSWAD-') ? cleanId.replace('GKSWAD-', 'GKSWAD-#') : cleanId);
+    const cleanId = orderId.replace(/^#+/, '').trim();
 
     const { error } = await supabase
       .from('orders')
       .update(updateFields)
-      .or(`order_id.eq.${orderId},id.eq.${orderId},order_number.eq.${orderId},order_id.eq.${cleanId},order_number.eq.${cleanId},order_id.eq.${altId},order_number.eq.${altId}`);
+      .or(`order_id.eq.${cleanId},order_number.eq.${cleanId},id.eq.${cleanId},order_id.eq.${orderId},order_number.eq.${orderId}`);
 
     if (!error && norm === 'cancelled') {
       try {
@@ -1787,7 +1779,7 @@ export async function createSupabaseOrder(
 
   const id = `order-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
   let orderId = orderData.orderId ? normalizeOrderId(orderData.orderId) : '';
-  if (!orderId || !orderId.startsWith('GKSWAD-')) {
+  if (!orderId || !orderId.startsWith('SWADCLK-')) {
     orderId = await getNextSequentialOrderId();
   }
   const now = new Date().toISOString();
@@ -1882,8 +1874,8 @@ export async function createSupabaseOrder(
 
   if (data) {
     const rawOid = String(data.order_id || data.order_number || '');
-    if (rawOid.includes('GKSWAD-#')) {
-      const cleanOid = rawOid.replace(/GKSWAD-#/g, 'GKSWAD-');
+    if (rawOid.includes('SWADCLK-#') || rawOid.includes('GKSWAD')) {
+      const cleanOid = rawOid.replace(/SWADCLK-#/g, 'SWADCLK-').replace(/GKSWAD-#?/g, 'SWADCLK-');
       try {
         await supabase
           .from('orders')

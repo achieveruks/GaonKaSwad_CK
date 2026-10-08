@@ -412,7 +412,7 @@ export const OutletsPage: React.FC = () => {
       address: '',
       fssaiLicId: 11523034000000,
       phone: '9876543210',
-      email: 'kitchen@gaonkaswad.com',
+      email: 'kitchen@swadclick.com',
       isActive: true,
       minimumOrderValue: 200,
       freeDeliveryThreshold: 499,
@@ -1547,7 +1547,7 @@ export const OutletsPage: React.FC = () => {
                             type="email"
                             value={formData.email || ''}
                             onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                            placeholder="e.g. kitchen@gaonkaswad.com"
+                            placeholder="e.g. kitchen@swadclick.com"
                             className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700 focus:bg-white"
                           />
                         </div>
@@ -1916,7 +1916,7 @@ export const OutletsPage: React.FC = () => {
                             onChange={(e) =>
                               setAboutFormData({ ...aboutFormData, heroFireLine: e.target.value.toUpperCase() })
                             }
-                            placeholder="e.g. THE HERITAGE BEHIND GAON KA SWAD"
+                            placeholder="e.g. THE HERITAGE BEHIND SWAD CLICK"
                             className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700 focus:bg-white"
                           />
                         </div>
@@ -2182,7 +2182,7 @@ export const OutletsPage: React.FC = () => {
                               onChange={(e) =>
                                 setAboutFormData({ ...aboutFormData, expLine: e.target.value.toUpperCase() })
                               }
-                              placeholder="e.g. THE GAON KA SWAD EXPERIENCE"
+                              placeholder="e.g. THE SWAD CLICK EXPERIENCE"
                               className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700 focus:bg-white"
                             />
                           </div>

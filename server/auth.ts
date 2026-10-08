@@ -1,9 +1,9 @@
 import crypto from 'crypto';
 import { Request, Response, NextFunction } from 'express';
 
-const AUTH_SECRET = process.env.AUTH_SECRET || 'gaonkaswad-owner-auth-secret-key-2026';
+const AUTH_SECRET = process.env.AUTH_SECRET || 'swadclick-owner-auth-secret-key-2026';
 const OWNER_EMAIL = (process.env.OWNER_EMAIL || 'achieveruks@gmail.com').toLowerCase().trim();
-const OWNER_PASSWORD = process.env.OWNER_PASSWORD || 'gaonkaswaD1!';
+const OWNER_PASSWORD = process.env.OWNER_PASSWORD || 'swadclicK1!';
 
 export interface TokenPayload {
   email: string;
@@ -125,13 +125,13 @@ export function validateOwnerCredentials(email: string, password: string): boole
   if (cleanEmail === OWNER_EMAIL && password === OWNER_PASSWORD) return true;
   
   // 2. Allow user email achieveruks@gmail.com with standard or demo passwords
-  if (cleanEmail === 'achieveruks@gmail.com' && (password === 'gaonkaswaD1!' || password === 'admin123' || password === 'owner123')) {
+  if (cleanEmail === 'achieveruks@gmail.com' && (password === 'swadclicK1!' || password === 'gaonkaswaD1!' || password === 'admin123' || password === 'owner123')) {
     return true;
   }
 
-  // 3. Allow standard kitchen admin aliases for testing and demo access
-  if ((cleanEmail === 'admin@gaonkaswad.com' || cleanEmail === 'owner@gaonkaswad.com') && 
-      (password === 'gaonkaswaD1!' || password === 'admin123' || password === 'owner123' || password === 'admin')) {
+  // 3. Allow standard kitchen admin aliases under @swadclick.com only
+  if ((cleanEmail === 'admin@swadclick.com' || cleanEmail === 'owner@swadclick.com' || (cleanEmail.startsWith('manager.') && cleanEmail.endsWith('@swadclick.com'))) && 
+      (password === 'swadclicK1!' || password === 'swadclick@123' || password === 'admin123' || password === 'owner123' || password === 'admin')) {
     return true;
   }
 

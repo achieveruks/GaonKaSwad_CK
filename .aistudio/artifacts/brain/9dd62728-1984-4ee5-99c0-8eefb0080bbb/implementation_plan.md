@@ -1,188 +1,137 @@
-# Production AWS Deployment Plan: https://swadclick.com/
+# Owner & Staff Authentication Overhaul, In-App Password Change & Recovery
 
-Adapt the existing **Gaon Ka Swad** full-stack cloud kitchen platform for production deployment on AWS using the purchased domain **`https://swadclick.com/`**.
+A focused overhaul of the staff authentication flow: removing demo/auto-fill artifacts from the login portal, enabling authenticated staff password updates from the top-right navbar, and implementing a complete self-service password reset and recovery loop via Supabase Auth.
 
-This plan strictly preserves all existing application logic, multi-outlet management, checkout, Swad Coins, kitchen ordering, and Supabase integration (PostgreSQL, Auth, RLS, and Realtime), making the minimum necessary changes to run on AWS serverless infrastructure.
+## User Review & Critical Decisions
+
+> [!IMPORTANT]
+> Please review the planned UX flows and architecture decisions below before we proceed to implementation.
+
+- **Login Screen Simplification**: Removal of "Quick Owner Sign In" banner, "Fill default" / "Fill pass" helper buttons, and initial prefilled credentials so inputs start clean.
+- **Generic Admin Provisioning Copy**: Replace database-specific terminology ("in Supabase Dashboard") with clean, professional language ("provisioned by the System Administrator").
+- **Top-Right Password Change Flow**: Place a dedicated "Change Password" action in the authenticated top navigation bar for both Owner (`OwnerLayout`) and Manager (`ManagerDashboardPage`). Includes current password verification prior to executing `supabase.auth.updateUser({ password: newPassword })`.
+- **Forgot Password & Recovery Route**: Implement a clean toggle on `/owner/login` for requesting reset links via `supabase.auth.resetPasswordForEmail()`, and create `/owner/reset-password` (with disabled email preview) to finalize updates via `supabase.auth.updateUser()`.
 
 ---
 
-## 1. Target Architecture & Domain Mapping
+## 1. Overview & Core Concept
 
-```text
-Customer Browser
-       │
-       ▼
-https://swadclick.com
-       │
-       ▼
-AWS CloudFront Distribution (ACM SSL Certificate in us-east-1)
-       │
-       ├── /* (Default Cache Behavior) ──────► Amazon S3 Bucket (Private, via OAC)
-       │                                       React / Vite production build (dist/)
-       │                                       [Custom Error: 403/404 -> /index.html 200 OK]
-       │
-       └── /api/* (Zero-Cache Behavior) ────► AWS API Gateway (HTTP API v2)
-                                                   │
-                                                   ▼
-                                        AWS Lambda: API Handler
-                                        (Node.js 20, @codegenie/serverless-express)
-                                                   │
-                                  ┌────────────────┴────────────────┐
-                                  ▼                                 ▼
-                         Supabase PostgreSQL                  Amazon S3 Bucket
-                       (Auth, RLS, Realtime, DB)           (Food Images & PDF Docs)
-                                  ▲
-                                  │
-                   Amazon EventBridge Rule
-                   [Schedule: cron(30 22 * * ? *)] = 04:00 AM IST
-                                  │
-                                  ▼
-                     AWS Lambda: Cron Handler
-                  (swadCoinDailyRewards execution)
+- **What It Does**:
+  1. Cleans the `/owner/login` portal so it operates as a production-grade, secure login without hardcoded demo credentials, 1-click test buttons, or internal vendor names.
+  2. Adds a "Forgot Password?" trigger on the login form that sends a secure reset link to the staff member's email without leaking account existence.
+  3. Provides a dedicated `/owner/reset-password` recovery page that reads the recovery session token, displays the read-only recipient email, and updates the user's password.
+  4. Provides authenticated staff (Owner & Outlet Managers) with a "Change Password" modal accessible from the top-right navbar profile menu.
+- **Target Audience / Persona**: Kitchen Outlet Managers and System Owners accessing the kitchen management and multi-outlet administration dashboards.
+- **Key Value**: Eliminates hardcoded credential risks, gives managers full self-service password control, and provides recovery without database administrator intervention.
+
+---
+
+## 2. User Experience & Visual Design
+
+### Key User Flows
+
+```
+[ Flow 1: Clean Sign In ]
+/owner/login ──> Clean Email & Password Inputs ──> Click "Sign In" ──> Dashboard
+
+[ Flow 2: Forgot Password ]
+/owner/login ──> Click "Forgot Password?" ──> Enter Email ──> Click "Send Reset Link"
+              ──> Generic Confirmation: "If an account exists, a link has been sent"
+              ──> User receives recovery email ──> Clicks reset link
+              ──> Redirected to /owner/reset-password
+              ──> Sees disabled email + enters new password ──> "Password updated successfully"
+              ──> [ Go to Login ]
+
+[ Flow 3: Authenticated Password Change ]
+Logged-in Dashboard ──> Top-right Navbar [Key Icon / Profile Menu] ──> "Change Password"
+                    ──> Modal: Current Password + New Password + Confirm New Password
+                    ──> "Update Password" ──> Toast confirmation & clean modal close
 ```
 
----
-
-## 2. Pre-Implementation Codebase Inspection
-
-| Area | Current State in Codebase | Required AWS Adaptation |
-| :--- | :--- | :--- |
-| **Frontend API URLs** | Already uses clean relative paths (e.g. `/api/swad-coins/...`, `/api/products`, `/api/orders`). | **Zero frontend code changes needed.** CloudFront will seamlessly route `/api/*` to API Gateway and `/*` to S3. |
-| **Express Backend (`server.ts`)** | Contains 5,300+ lines with 50+ routes, currently bundled inside `startServer()` with `app.listen(3000)`. | Extract Express `app` into an exportable module. Keep local `server.ts` for development; add `server/lambda.ts` for AWS Lambda. |
-| **Database & Auth** | Supabase PostgreSQL (`supabase.ts`, `supabaseService.ts`, `serverSupabase`). Uses client anon key in Vite frontend and service key on backend. | **Preserved 100%.** Supabase remains the primary database and auth provider. Backend secrets stored in AWS Secrets Manager / Lambda env. |
-| **Scheduled Jobs** | `node-cron` scheduled at `0 4 * * *` (04:00 AM IST) in `server.ts` (lines 5313–5327). | Remove production dependency on `node-cron`. Deploy a dedicated, lightweight Lambda function triggered by Amazon EventBridge at `22:30 UTC` (4:00 AM IST). |
-| **Local File Generation** | `/api/prd-pdf` generates PDF files to local disk (`public/PRD_Multi_Outlet_Cloud_Kitchen.pdf`). | Adapt PDF generation to stream directly to the response or upload to the private AWS S3 media bucket with presigned download URLs. |
-| **Routing / SPAs** | React Router client-side routes (`/menu`, `/cart`, `/checkout`, `/my-orders`, `/owner`). | Configure CloudFront Custom Error Responses: Map HTTP `403` and `404` from S3 origin to `/index.html` with response code `200`. |
-| **Domain & SSL** | Localhost / test URL. | Provision AWS Certificate Manager (ACM) SSL certificate for `swadclick.com` and `*.swadclick.com` in `us-east-1` and bind to CloudFront. |
+### Visual Identity & Theme
+- **Color Palette & Atmosphere**: Deep stone canvas (`#0C0A09`), warm amber accents (`#92400E` / `#D97706`), clean white form cards with hairline dividers (`border-stone-200`).
+- **Typography & Scale**: Crisp `Plus Jakarta Sans` for labels and helper text; tabular figures for numerical counts; high-contrast focus rings for input accessibility.
+- **Form States**: Uncluttered single-column inputs with inline password visibility toggle (`Eye`/`EyeOff`), subtle spinner states during Supabase API calls, and clean success notifications.
 
 ---
 
-## 3. Implementation Steps (Minimum Required Code Changes)
+## 3. Key Product Decisions & Trade-Offs
 
-### Step 1: Decouple Express App for Lambda & Local Dev
-1. Refactor `server.ts` to export the configured Express `app` instance:
-   - Create `server/app.ts` containing the Express middleware, security headers, and existing 50+ API routes.
-   - `server.ts` simply imports `app` and runs `app.listen(3000)` for local Vite dev / container execution.
-2. Create the Lambda entrypoint: `server/lambda.ts`:
-   ```typescript
-   import serverlessExpress from '@codegenie/serverless-express';
-   import { app } from './app';
-
-   export const handler = serverlessExpress({ app });
-   ```
-3. Create the dedicated EventBridge Cron handler: `server/cron-handler.ts`:
-   ```typescript
-   import { executeSwadCoinDailyRewards } from './swadCoinCron';
-
-   export const handler = async (event: any) => {
-     console.log('[EventBridge] Fired 04:00 AM IST Swad Coin daily reward job');
-     const result = await executeSwadCoinDailyRewards('SCHEDULED');
-     return { statusCode: 200, body: JSON.stringify(result) };
-   };
-   ```
-
-### Step 2: Lambda Packaging with esbuild (Node.js 20)
-1. Add `@codegenie/serverless-express` to `package.json`.
-2. Configure `build-lambda.mjs` using `esbuild`:
-   - Target: `node20`
-   - Platform: `node`
-   - External: `@aws-sdk/*` (available natively in AWS Lambda Node 20 runtime)
-   - Outputs:
-     - `dist-lambda/api.js` (Express API)
-     - `dist-lambda/cron.js` (EventBridge Scheduled Job)
-   - Add script to `package.json`: `"build:lambda": "node scripts/build-lambda.mjs"`
-
-### Step 3: Infrastructure as Code (AWS SAM `template.yaml`)
-Using **AWS SAM** as the single, standard deployment framework:
-1. **Frontend S3 Bucket & Origin Access Control (OAC):**
-   - Private S3 Bucket `swadclick-frontend-prod`.
-   - CloudFront OAC allowing only CloudFront distribution read access.
-2. **Media/Documents S3 Bucket:**
-   - Private S3 Bucket `swadclick-media-prod` for generated PDFs and product images.
-3. **API Gateway HTTP API (v2):**
-   - Routes `ANY /api/{proxy+}` to the API Lambda function.
-   - Configures binary media types (`application/pdf`, `*/*`).
-4. **AWS Lambda Functions (Node.js 20):**
-   - `SwadClickApiFunction`: 1024 MB RAM, 30s timeout, environment variables populated from AWS Secrets Manager (`SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `JWT_SECRET`, `S3_MEDIA_BUCKET`).
-   - `SwadClickCronFunction`: 512 MB RAM, 60s timeout, attached to EventBridge rule.
-5. **Amazon EventBridge Rule:**
-   - Name: `SwadCoinDailyRewardsSchedule`
-   - Schedule Expression: `cron(30 22 * * ? *)` (4:00 AM IST daily).
-   - Target: `SwadClickCronFunction`.
-6. **CloudFront Distribution for `swadclick.com`:**
-   - **Aliases:** `swadclick.com`, `www.swadclick.com`
-   - **Viewer Certificate:** ACM Certificate ARN (in `us-east-1`).
-   - **Default Origin:** S3 Frontend Bucket (OAC enabled).
-   - **Default Cache Behavior (`/*`):** Caching optimized for static web assets.
-   - **Custom Error Responses:**
-     - ErrorCode: `403` -> ResponsePagePath: `/index.html`, ResponseCode: `200`
-     - ErrorCode: `404` -> ResponsePagePath: `/index.html`, ResponseCode: `200`
-   - **API Origin:** API Gateway HTTP API domain.
-   - **API Cache Behavior (`/api/*`):**
-     - AllowedMethods: `GET, HEAD, OPTIONS, PUT, POST, PATCH, DELETE`
-     - CachePolicy: `CachingDisabled` (AWS Managed Policy)
-     - OriginRequestPolicy: `AllViewerExceptHostHeader` (AWS Managed Policy)
-
-### Step 4: S3 Storage & PDF Generation Adapter
-1. In `server/s3Storage.ts`, implement S3 upload and presigned URL helpers using `@aws-sdk/client-s3` and `@aws-sdk/s3-request-presigner`.
-2. In the `/api/prd-pdf` route:
-   - When running in Lambda (`process.env.AWS_LAMBDA_FUNCTION_NAME` is set):
-     - Generate PDF in memory buffer.
-     - Upload to `s3://${S3_MEDIA_BUCKET}/documents/PRD_Multi_Outlet_Cloud_Kitchen.pdf`.
-     - Return an HTTP 302 redirect to a secure 15-minute presigned S3 download URL.
-   - When running locally: continue using local disk/stream.
-
-### Step 5: Route 53 & ACM Domain Setup for `swadclick.com`
-1. Request a public certificate in AWS Certificate Manager in region **`us-east-1`** (CloudFront requires certificates to be in `us-east-1`):
-   - Domain names: `swadclick.com`, `*.swadclick.com`.
-   - Validate via DNS CNAME records in your domain registrar / Route 53.
-2. In Route 53 (or your DNS provider):
-   - Point `swadclick.com` (Apex record / A-Alias) -> CloudFront Distribution domain.
-   - Point `www.swadclick.com` (CNAME) -> `swadclick.com` (or CloudFront domain).
+- **Decision 1: Direct Form Toggle vs Separate Page for Forgot Password**
+  - *Chosen Approach*: In-place view toggle on `/owner/login` (swapping between Login card and "Request Reset Link" card).
+  - *Why*: Keeps the user on the primary auth screen, avoids unnecessary page reloads, and allows easy 1-click return to "Back to Sign In".
+- **Decision 2: Reusable Modal for Authenticated Password Change**
+  - *Chosen Approach*: A shared `ChangePasswordModal` mounted in `OwnerLayout` and `ManagerDashboardPage`.
+  - *Why*: Allows owners and managers to update their password from any active screen (products, outlets, live orders) without losing their filtered view or table state.
+- **Decision 3: Current Password Verification**
+  - *Chosen Approach*: When logged in, verify `currentPassword` using `supabase.auth.signInWithPassword` before calling `supabase.auth.updateUser`.
+  - *Why*: Prevents unauthorized password changes if a physical dashboard workstation was left unattended.
+- **Decision 4: Privacy-Preserving Reset Message**
+  - *Chosen Approach*: Always display `"If an account exists for this email, a password reset link has been sent. Please check your inbox."` regardless of server lookup status.
+  - *Why*: Adheres to standard security guidelines by preventing email enumeration attacks.
 
 ---
 
-## 4. Deployment & Build Sequence
+## 4. Technical Architecture & Data Strategy
 
-### Local Preparation
-```bash
-# 1. Install Lambda serverless adapter
-npm install @codegenie/serverless-express
+### Architecture & Component Diagram
 
-# 2. Build Vite React frontend (creates dist/)
-npm run build
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                        AUTHENTICATION LIFECYCLE                        │
+└────────────────────────────────────────────────────────────────────────┘
 
-# 3. Build Node 20 Lambda bundles (creates dist-lambda/)
-npm run build:lambda
+  1. Login & Recovery Entry:
+  ┌────────────────────────────────────────────────────────────────────┐
+  │                         OwnerLoginPage                             │
+  │  ┌───────────────────────────────┐  ┌───────────────────────────┐  │
+  │  │         Login View            │  │   Forgot Password View    │  │
+  │  │  • Email (empty default)      │  │  • Email input            │  │
+  │  │  • Password (empty default)   │  │  • "Send Reset Link" btn  │  │
+  │  │  • "Forgot Password?" trigger │  │  • Generic success notice │  │
+  │  └──────────────┬────────────────┘  └─────────────┬─────────────┘  │
+  └─────────────────┼─────────────────────────────────┼────────────────┘
+                    │ signInWithPassword              │ resetPasswordForEmail
+                    ▼                                 ▼
+         ┌──────────────────────────────────────────────────┐
+         │                  Supabase Auth                   │
+         └──────────┬─────────────────────────┬─────────────┘
+                    │                         │
+                    ▼                         ▼ (Email Link with token)
+     ┌────────────────────────────┐    ┌─────────────────────────────────┐
+     │   Authenticated Dashboards │    │      OwnerResetPasswordPage     │
+     │   • OwnerLayout            │    │  • Reads recovery session token │
+     │   • ManagerDashboardPage   │    │  • Displays disabled user email │
+     │  ┌──────────────────────┐  │    │  • New & Confirm Password       │
+     │  │ ChangePasswordModal  │  │    │  • supabase.auth.updateUser()   │
+     │  │ • Current Password   │  │    │  • "Go to Login" button         │
+     │  │ • New Password       │  │    └─────────────────────────────────┘
+     │  │ • updateUser()       │  │
+     │  └──────────────────────┘  │
+     └────────────────────────────┘
 ```
 
-### AWS SAM Deployment
-```bash
-# 1. Build SAM artifacts
-sam build
+### Detailed Component & State Strategy
 
-# 2. Deploy infrastructure and Lambda functions
-sam deploy --guided \
-  --stack-name swadclick-production \
-  --parameter-overrides DomainName=swadclick.com CertificateArn=arn:aws:acm:us-east-1:...
+1. **`OwnerLoginPage.tsx` Modifications**:
+   - Remove `Quick Owner Sign In` block and 1-click test button.
+   - Remove `handleFillDefault`, `Fill default`, `Fill pass`, and initialize `email` and `password` as empty strings `''`.
+   - Update banner copy from `"Staff accounts and roles are provisioned by the Administrator directly in Supabase Dashboard."` to `"Staff accounts and roles are provisioned by the System Administrator."`.
+   - Add state `authMode: 'login' | 'forgot_password'`.
+   - Add forgot password form with email input, call `supabase.auth.resetPasswordForEmail(email, { redirectTo: `${window.location.origin}/owner/reset-password` })`, and display the confirmation message.
 
-# 3. Sync frontend assets to S3 and invalidate CloudFront cache
-aws s3 sync dist/ s3://swadclick-frontend-prod/ --delete
-aws cloudfront create-invalidation --distribution-id <DISTRIBUTION_ID> --paths "/*"
-```
+2. **New `OwnerResetPasswordPage.tsx` (`/owner/reset-password` & `/owner/login/reset-password`)**:
+   - Detects recovery session from Supabase client (`supabase.auth.onAuthStateChange` listening for `PASSWORD_RECOVERY` / `SIGNED_IN`).
+   - Retrieves active user email and displays it in a disabled, styled text field.
+   - Accepts New Password and Confirm Password with minimum 8-character validation.
+   - Executes `supabase.auth.updateUser({ password: newPassword })`.
+   - On success, renders a clean success badge and a button navigating back to `/owner/login`.
 
----
+3. **New `ChangePasswordModal.tsx`**:
+   - Accessible via a key/lock icon button beside the user email in the top-right header of `OwnerLayout.tsx` and `ManagerDashboardPage.tsx`.
+   - Fields: Current Password, New Password, Confirm New Password.
+   - Reauthenticates using current credentials, then executes `supabase.auth.updateUser({ password: newPassword })`.
+   - Emits toast notification and closes smoothly.
 
-## 5. Production Validation Checklist
-
-- [ ] **Domain & SSL:** `https://swadclick.com/` loads over HTTPS with a valid certificate.
-- [ ] **Client-side Direct Routes:** Direct navigation to `https://swadclick.com/menu`, `/cart`, `/checkout`, `/my-orders`, `/owner` loads without 404/403.
-- [ ] **Health Check API:** `https://swadclick.com/api/health` returns `{ "status": "ok" }` with 200 OK via CloudFront -> API Gateway -> Lambda.
-- [ ] **Products API:** `https://swadclick.com/api/products` returns active outlet products from Supabase.
-- [ ] **Multi-Outlet Switcher:** Switching between Bangalore and Bhubaneswar outlets reflects immediately.
-- [ ] **Orders & Checkout:** Test cart submission and order creation persists to `public.orders` in Supabase.
-- [ ] **Supabase Realtime:** Kitchen manager dashboard updates live on order placement.
-- [ ] **Swad Coins Loyalty:** Pending rewards, balances, and vault card claims work correctly without 404s.
-- [ ] **Daily EventBridge Cron:** Trigger test event on `SwadClickCronFunction` in AWS Console; verify CloudWatch log output for 4:00 AM IST execution.
-- [ ] **PDF Download:** `https://swadclick.com/api/prd-pdf` returns the PDF document via S3 presigned URL.
-- [ ] **Zero Exposed Secrets:** Verify no service-role keys or database passwords exist in frontend bundles.
+4. **Routing (`App.tsx` & `NavigationContext.tsx`)**:
+   - Register `/owner/reset-password` and `/owner/login/reset-password` routes so external email clicks resolve directly to the new recovery component.

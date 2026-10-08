@@ -22,6 +22,7 @@ export type AppRoute =
   | { path: '/owner/outlets/edit'; outletId: string }
   | { path: '/owner/delivery-zones' }
   | { path: '/owner/coupons' }
+  | { path: '/owner/reset-password' }
   | { path: '/manager/dashboard' };
 
 interface NavigationContextType {
@@ -48,6 +49,7 @@ interface NavigationContextType {
   goToOwnerEditOutlet: (outletId: string) => void;
   goToOwnerDeliveryZones: () => void;
   goToOwnerCoupons: () => void;
+  goToOwnerResetPassword: () => void;
   goToManagerDashboard: () => void;
 }
 
@@ -79,6 +81,14 @@ function parseRouteSegments(main: string, params: URLSearchParams): AppRoute | n
   // Owner Routes
   if (main === 'owner/login' || main === 'owner-login') {
     return { path: '/owner/login' };
+  }
+  if (
+    main === 'owner/reset-password' ||
+    main === 'owner-reset-password' ||
+    main === 'owner/login/reset-password' ||
+    main === 'reset-password'
+  ) {
+    return { path: '/owner/reset-password' };
   }
   if (main === 'owner/dashboard' || main === 'owner-dashboard') {
     return { path: '/owner/dashboard' };
@@ -209,6 +219,8 @@ function routeToUrl(route: AppRoute): string {
       return '/owner/delivery-zones';
     case '/owner/coupons':
       return '/owner/coupons';
+    case '/owner/reset-password':
+      return '/owner/reset-password';
     case '/manager/dashboard':
       return '/manager/dashboard';
     default:
@@ -286,6 +298,7 @@ export const NavigationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     navigate({ path: '/owner/outlets/edit', outletId });
   const goToOwnerDeliveryZones = () => navigate({ path: '/owner/delivery-zones' });
   const goToOwnerCoupons = () => navigate({ path: '/owner/coupons' });
+  const goToOwnerResetPassword = () => navigate({ path: '/owner/reset-password' });
   const goToManagerDashboard = () => navigate({ path: '/manager/dashboard' });
 
   return (
@@ -314,6 +327,7 @@ export const NavigationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         goToOwnerEditOutlet,
         goToOwnerDeliveryZones,
         goToOwnerCoupons,
+        goToOwnerResetPassword,
         goToManagerDashboard,
       }}
     >

@@ -754,7 +754,7 @@ export const HomePage: React.FC = () => {
         </div>
       </section>
 
-      {/* 5. WHY CHOOSE GAON KA SWAD */}
+      {/* 5. WHY CHOOSE SWAD CLICK */}
       <section className="bg-gray-100 border-y border-gray-200 py-12">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center max-w-2xl mx-auto mb-10">

@@ -25,6 +25,7 @@ async function buildLambda() {
     external: [
       'vite',
       'esbuild',
+      'node-cron',
       '@aws-sdk/*',
       '@aws-sdk/client-s3',
       '@aws-sdk/s3-request-presigner',
@@ -49,6 +50,9 @@ async function buildLambda() {
     sourcemap: true,
     outfile: 'dist-lambda/cron/index.js',
     external: [
+      'vite',
+      'esbuild',
+      'node-cron',
       '@aws-sdk/*',
       '@aws-sdk/client-s3',
       '@aws-sdk/s3-request-presigner',

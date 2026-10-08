@@ -35,7 +35,7 @@ export const ManagerOrderDetailsModal: React.FC<ManagerOrderDetailsModalProps> =
   order,
   isOpen,
   onClose,
-  outletName = 'Gaon Ka Swad Kitchen',
+  outletName = 'Swad Click Kitchen',
 }) => {
   const printAreaRef = useRef<HTMLDivElement>(null);
 

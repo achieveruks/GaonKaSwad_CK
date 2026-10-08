@@ -168,11 +168,11 @@ export const OrderCard: React.FC<OrderCardProps> = ({
   const displayItems = isActiveOrder ? items : items.slice(0, 2);
   const remainingCount = isActiveOrder ? 0 : items.length - displayItems.length;
 
-  // Resolve full outlet name (e.g. 'Gaon Ka Swad - Khandagiri')
+  // Resolve full outlet name (e.g. 'Swad Click - Khandagiri')
   const resolvedOutletInfo = resolveOrderOutletInfo(order);
   const resolvedOutletName = resolvedOutletInfo.outletName;
 
-  // Format order ID display: e.g. '#GKSWAD-00033'
+  // Format order ID display: e.g. '#SWADCLK-00033'
   const rawId = (order.orderId || order.id || '').toString().trim();
   const formattedOrderId = formatDisplayOrderId(rawId);
 
@@ -187,7 +187,7 @@ export const OrderCard: React.FC<OrderCardProps> = ({
       {/* Top Bar: Order ID & Status in single line, plus date and outlet */}
       <div className="space-y-2">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 sm:gap-2">
-          {/* Fit in one line on same horizontal baseline/center: #GKSWAD-#00031 Order Received */}
+          {/* Fit in one line on same horizontal baseline/center: #SWADCLK-00031 Order Received */}
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-serif font-bold text-stone-900 text-base sm:text-lg whitespace-nowrap">
               {formattedOrderId}

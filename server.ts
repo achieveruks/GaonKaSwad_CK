@@ -1,7 +1,6 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
-import cron from 'node-cron';
 import { createClient } from '@supabase/supabase-js';
 import { productStorage, sanitizeOrderItem, deserializeOrderItem, maskCustomerName, normalizePhone } from './server/storage';
 import {
@@ -15,8 +14,12 @@ import { generateOTP, formatOtpString, hashOTPSync, isBetaMode } from './src/lib
 
 // Supabase Server Client
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || 'https://ifthfunawntmqjupafxp.supabase.co';
-const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlmdGhmdW5hd250bXFqdXBhZnhwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODcyMjc4NTQsImV4cCI6MjEwMjgwMzg1NH0.xS74LsNci-I_v-p13O3rzzhflOuOZaHLDcVLgEi9Yzw';
-const serverSupabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const SUPABASE_KEY =
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  process.env.SUPABASE_ANON_KEY ||
+  process.env.VITE_SUPABASE_ANON_KEY ||
+  'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlmdGhmdW5hd250bXFqdXBhZnhwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODcyMjc4NTQsImV4cCI6MjEwMjgwMzg1NH0.xS74LsNci-I_v-p13O3rzzhflOuOZaHLDcVLgEi9Yzw';
+const serverSupabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // In-memory OTP cache fallback
 interface MemoryOtpRecord {
@@ -1397,7 +1400,7 @@ app.use(express.urlencoded({ extended: true, limit: '5mb' }));
       try {
         const reviewPayload: any = {
           product_id: pIdStr,
-          order_id: String(resolvedOrderId || 'GKSWAD-VERIFIED'),
+          order_id: String(resolvedOrderId || 'SWADCLK-VERIFIED'),
           order_item_id: `${resolvedOrderId || 'ord'}-${pIdStr}-0`,
           outlet_id: 'bbsr-kendriyavihar',
           rating: numRating,
@@ -3491,14 +3494,14 @@ app.use(express.urlencoded({ extended: true, limit: '5mb' }));
         .limit(100);
 
       if (error || !data || data.length === 0) {
-        return 'GKSWAD-00001';
+        return 'SWADCLK-00016';
       }
 
       let maxNum = 0;
       for (const row of data) {
         const idToCheck = row.order_number || row.order_id;
         if (idToCheck) {
-          const match = idToCheck.match(/GKSWAD-#?0*(\d+)/i) || idToCheck.match(/GKS-#?0*(\d+)/i);
+          const match = idToCheck.match(/(?:SWADCLK|GKSWAD|GKS)-#?0*(\d+)/i);
           if (match && match[1]) {
             const num = parseInt(match[1], 10);
             if (!isNaN(num) && num > maxNum) {
@@ -3507,10 +3510,10 @@ app.use(express.urlencoded({ extended: true, limit: '5mb' }));
           }
         }
       }
-      const nextSeq = maxNum + 1;
-      return `GKSWAD-${String(nextSeq).padStart(5, '0')}`;
+      const nextSeq = Math.max(maxNum + 1, 16);
+      return `SWADCLK-${String(nextSeq).padStart(5, '0')}`;
     } catch {
-      return 'GKSWAD-00001';
+      return 'SWADCLK-00016';
     }
   }
 
@@ -3957,8 +3960,8 @@ app.use(express.urlencoded({ extended: true, limit: '5mb' }));
           }
         }
 
-        let finalOrderId = order.orderId ? String(order.orderId).trim().replace(/^#+/, '').replace(/GKSWAD-#/i, 'GKSWAD-') : '';
-        if (!finalOrderId || !finalOrderId.startsWith('GKSWAD-')) {
+        let finalOrderId = order.orderId ? String(order.orderId).trim().replace(/^#+/, '').replace(/SWADCLK-#/i, 'SWADCLK-').replace(/GKSWAD-#?/i, 'SWADCLK-') : '';
+        if (!finalOrderId || !finalOrderId.startsWith('SWADCLK-')) {
           finalOrderId = await getNextServerOrderId();
         }
 
@@ -4039,10 +4042,10 @@ app.use(express.urlencoded({ extended: true, limit: '5mb' }));
         }
 
         if (res1.data) {
-          // If Supabase trigger forced a GKSWAD-# format, immediately strip the inner #
+          // If Supabase trigger forced an unexpected format or inner #, immediately normalize
           const dbOrderId = String(res1.data.order_id || res1.data.order_number || finalOrderId);
-          if (dbOrderId.includes('GKSWAD-#')) {
-            const cleanOrderId = dbOrderId.replace(/GKSWAD-#/g, 'GKSWAD-');
+          if (dbOrderId.includes('SWADCLK-#') || dbOrderId.includes('GKSWAD')) {
+            const cleanOrderId = dbOrderId.replace(/SWADCLK-#/g, 'SWADCLK-').replace(/GKSWAD-#?/g, 'SWADCLK-');
             try {
               await serverSupabase
                 .from('orders')
@@ -4529,17 +4532,14 @@ app.use(express.urlencoded({ extended: true, limit: '5mb' }));
   app.get('/api/orders/:orderId', async (req, res) => {
     try {
       const rawParam = req.params.orderId;
-      const param = decodeURIComponent(rawParam);
+      const param = decodeURIComponent(rawParam).trim();
       const cleanParam = param.replace(/^#+/, '');
-      const altParam = cleanParam.includes('GKSWAD-#')
-        ? cleanParam.replace('GKSWAD-#', 'GKSWAD-')
-        : (cleanParam.includes('GKSWAD-') ? cleanParam.replace('GKSWAD-', 'GKSWAD-#') : cleanParam);
 
       try {
         const { data, error } = await serverSupabase
           .from('orders')
           .select('*')
-          .or(`order_number.eq.${param},order_id.eq.${param},id.eq.${param},order_number.eq.${cleanParam},order_id.eq.${cleanParam},order_number.eq.${altParam},order_id.eq.${altParam}`)
+          .or(`order_number.eq.${cleanParam},order_id.eq.${cleanParam},id.eq.${cleanParam},order_number.eq.${param},order_id.eq.${param}`)
           .maybeSingle();
 
         if (data) {
@@ -5324,21 +5324,27 @@ app.use(express.urlencoded({ extended: true, limit: '5mb' }));
 
     // Automated Scheduled Jobs (Only when running local / standalone server, not in AWS Lambda)
     if (!process.env.AWS_LAMBDA_FUNCTION_NAME && !process.env.LAMBDA_TASK_ROOT) {
-      cron.schedule(
-        '0 4 * * *',
-        async () => {
-          console.log('[Swad Coins] Executing daily 04:00 AM IST reward generation job...');
-          try {
-            const cronResult = await executeSwadCoinDailyRewards('SCHEDULED');
-            console.log(`[Swad Coins] Daily scheduled job completed: ${cronResult.message}`);
-          } catch (cronErr) {
-            console.error('[Swad Coins] Error during daily reward cron execution:', cronErr);
+      try {
+        const cronModule = await import('node-cron');
+        const cronScheduler = cronModule.default || cronModule;
+        cronScheduler.schedule(
+          '0 4 * * *',
+          async () => {
+            console.log('[Swad Coins] Executing daily 04:00 AM IST reward generation job...');
+            try {
+              const cronResult = await executeSwadCoinDailyRewards('SCHEDULED');
+              console.log(`[Swad Coins] Daily scheduled job completed: ${cronResult.message}`);
+            } catch (cronErr) {
+              console.error('[Swad Coins] Error during daily reward cron execution:', cronErr);
+            }
+          },
+          {
+            timezone: 'Asia/Kolkata',
           }
-        },
-        {
-          timezone: 'Asia/Kolkata',
-        }
-      );
+        );
+      } catch (cronImportErr) {
+        console.warn('[Swad Coins] node-cron not loaded (running in serverless or unbundled mode):', cronImportErr);
+      }
     }
 
     app.listen(PORT, '0.0.0.0', () => {

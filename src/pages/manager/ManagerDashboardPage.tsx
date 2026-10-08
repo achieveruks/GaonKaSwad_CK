@@ -49,9 +49,11 @@ import {
   Filter,
   Layers,
   ShoppingBag,
+  KeyRound,
 } from 'lucide-react';
 
 import { ManagerOrdersTab } from './ManagerOrdersTab';
+import { ChangePasswordModal } from '../../components/owner/ChangePasswordModal';
 
 interface OutletProductItemState {
   productId: string | number;
@@ -119,6 +121,7 @@ export const ManagerDashboardPage: React.FC = () => {
 
   // Toast / Feedback
   const [feedbackMsg, setFeedbackMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
 
   const showFeedback = (type: 'success' | 'error', text: string) => {
     setFeedbackMsg({ type, text });
@@ -748,12 +751,12 @@ export const ManagerDashboardPage: React.FC = () => {
             {/* Brand Logo & Manager Badge */}
             <div className="flex items-center gap-3">
               <div className="w-8 h-8 rounded-lg bg-amber-800 flex items-center justify-center text-white font-black text-sm shadow-2xs">
-                G
+                S
               </div>
               <div>
                 <div className="flex items-center gap-1.5">
                   <span className="font-extrabold text-sm tracking-tight text-white font-heading">
-                    Gaon Ka Swad
+                    Swad Click
                   </span>
                   <span className="text-[10px] font-bold px-1.5 py-0.2 rounded uppercase border bg-blue-950 text-blue-400 border-blue-800">
                     Outlet Manager
@@ -826,8 +829,17 @@ export const ManagerDashboardPage: React.FC = () => {
 
               <div className="flex items-center gap-2 text-xs text-stone-300">
                 <span className="text-[11px] font-medium text-stone-200 hidden md:inline truncate max-w-[140px]">
-                  {ownerUser?.name || ownerUser?.email || 'manager@gaonkaswad.com'}
+                  {ownerUser?.name || ownerUser?.email || 'manager@swadclick.com'}
                 </span>
+                <button
+                  type="button"
+                  onClick={() => setIsChangePasswordOpen(true)}
+                  className="flex items-center gap-1 text-xs text-stone-300 hover:text-white bg-stone-800 hover:bg-stone-700 px-2.5 py-1.5 rounded-lg border border-stone-700 transition-colors cursor-pointer"
+                  title="Change your account password"
+                >
+                  <KeyRound className="w-3.5 h-3.5 text-amber-400" />
+                  <span className="hidden sm:inline">Change Password</span>
+                </button>
                 <button
                   type="button"
                   id="manager-logout-btn"
@@ -1850,6 +1862,12 @@ export const ManagerDashboardPage: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Change Password Modal */}
+      <ChangePasswordModal
+        isOpen={isChangePasswordOpen}
+        onClose={() => setIsChangePasswordOpen(false)}
+      />
     </div>
   );
 };

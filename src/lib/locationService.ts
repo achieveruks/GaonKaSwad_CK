@@ -21,6 +21,8 @@ let cachedZones: DeliveryZone[] = [];
 // Clean up any legacy localStorage keys to avoid confusion
 if (typeof window !== 'undefined') {
   try {
+    localStorage.removeItem('swadclick_outlets_cache_v1');
+    localStorage.removeItem('swadclick_zones_cache_v1');
     localStorage.removeItem('gaonkaswad_outlets_cache_v1');
     localStorage.removeItem('gaonkaswad_zones_cache_v1');
   } catch {}
@@ -275,7 +277,7 @@ export function resolveOrderOutletInfo(
   }
 
   // 2. Direct outlet match by rawName
-  if (rawName && rawName !== 'Gaon Ka Swad Kitchen' && rawName !== 'Gaon Ka Swad' && rawName !== 'Default Outlet' && allOutlets.length > 0) {
+  if (rawName && rawName !== 'Swad Click Kitchen' && rawName !== 'Swad Click' && rawName !== 'Default Outlet' && allOutlets.length > 0) {
     const lowerName = rawName.toLowerCase();
     const foundByName = allOutlets.find(
       (o) => o.name.toLowerCase() === lowerName || o.name.toLowerCase().includes(lowerName) || lowerName.includes(o.name.toLowerCase())
@@ -311,30 +313,30 @@ export function resolveOrderOutletInfo(
   // 4. Fallback heuristics for known kitchen IDs
   const cleanId = rawId.replace(/^outlet-/, '').toLowerCase();
   if (cleanId.includes('kendriya') || cleanId === 'bbsr-kendriyavihar') {
-    return { outletId: 'bbsr-kendriyavihar', outletName: 'Gaon Ka Swad - Kendriya Vihar', kitchenAddress: 'Kendriya Vihar, C.C.S. Complex, Jagamara / Baramunda Road, Bhubaneswar', city: 'Bhubaneswar', phone: '+91-8806068141' };
+    return { outletId: 'bbsr-kendriyavihar', outletName: 'Swad Click - Kendriya Vihar', kitchenAddress: 'Kendriya Vihar, C.C.S. Complex, Jagamara / Baramunda Road, Bhubaneswar', city: 'Bhubaneswar', phone: '+91-8806068141' };
   }
   if (cleanId.includes('patia') || cleanId === 'bbsr-patia') {
-    return { outletId: 'bbsr-patia', outletName: 'Gaon Ka Swad - Patia', kitchenAddress: 'KIIT Square, Infocity Rd, Patia, Bhubaneswar', city: 'Bhubaneswar', phone: '+91 98765 43213' };
+    return { outletId: 'bbsr-patia', outletName: 'Swad Click - Patia', kitchenAddress: 'KIIT Square, Infocity Rd, Patia, Bhubaneswar', city: 'Bhubaneswar', phone: '+91 98765 43213' };
   }
   if (cleanId.includes('khandagiri') || cleanId === 'bbsr-khandagiri') {
-    return { outletId: 'bbsr-khandagiri', outletName: 'Gaon Ka Swad - Khandagiri', kitchenAddress: 'Khandagiri Square, NH-16, Bhubaneswar', city: 'Bhubaneswar', phone: '+91 98765 43214' };
+    return { outletId: 'bbsr-khandagiri', outletName: 'Swad Click - Khandagiri', kitchenAddress: 'Khandagiri Square, NH-16, Bhubaneswar', city: 'Bhubaneswar', phone: '+91 98765 43214' };
   }
   if (cleanId.includes('hsr') || cleanId === 'blr-hsr') {
-    return { outletId: 'blr-hsr', outletName: 'Gaon Ka Swad - HSR Layout', kitchenAddress: 'Sector 3, 27th Main Rd, HSR Layout, Bangalore', city: 'Bangalore', phone: '+91 98765 43210' };
+    return { outletId: 'blr-hsr', outletName: 'Swad Click - HSR Layout', kitchenAddress: 'Sector 3, 27th Main Rd, HSR Layout, Bangalore', city: 'Bangalore', phone: '+91 98765 43210' };
   }
   if (cleanId.includes('whitefield') || cleanId === 'blr-whitefield') {
-    return { outletId: 'blr-whitefield', outletName: 'Gaon Ka Swad - Whitefield', kitchenAddress: 'ITPL Main Rd, Near Hope Farm, Whitefield, Bangalore', city: 'Bangalore', phone: '+91 98765 43211' };
+    return { outletId: 'blr-whitefield', outletName: 'Swad Click - Whitefield', kitchenAddress: 'ITPL Main Rd, Near Hope Farm, Whitefield, Bangalore', city: 'Bangalore', phone: '+91 98765 43211' };
   }
   if (cleanId.includes('indiranagar') || cleanId === 'blr-indiranagar') {
-    return { outletId: 'blr-indiranagar', outletName: 'Gaon Ka Swad - Indiranagar', kitchenAddress: '100 Feet Rd, HAL 2nd Stage, Indiranagar, Bangalore', city: 'Bangalore', phone: '+91 98765 43212' };
+    return { outletId: 'blr-indiranagar', outletName: 'Swad Click - Indiranagar', kitchenAddress: '100 Feet Rd, HAL 2nd Stage, Indiranagar, Bangalore', city: 'Bangalore', phone: '+91 98765 43212' };
   }
 
   // 5. Default fallback from active outlets list
   const defaultOutlet = allOutlets[0];
   return {
     outletId: defaultOutlet?.id || rawId || 'blr-hsr',
-    outletName: defaultOutlet?.name || rawName || 'Gaon Ka Swad Kitchen',
-    kitchenAddress: defaultOutlet?.address || 'Gaon Ka Swad Kitchen',
+    outletName: defaultOutlet?.name || rawName || 'Swad Click Kitchen',
+    kitchenAddress: defaultOutlet?.address || 'Swad Click Kitchen',
     city: defaultOutlet?.city || 'Bangalore',
     phone: defaultOutlet?.phone || '+91 98765 43210',
   };

@@ -1456,7 +1456,7 @@ export const CheckoutPage: React.FC = () => {
     try {
       nextOrderId = await getNextSequentialOrderId();
     } catch {
-      nextOrderId = `GKSWAD-00001`;
+      nextOrderId = `SWADCLK-00016`;
     }
 
     const cleanCustomerPin = (formData.pincode || '').trim();
@@ -1467,7 +1467,7 @@ export const CheckoutPage: React.FC = () => {
       addressId: defaultAddress?.id,
       isGuestCheckout: !isCustomerLoggedIn && !formData.createAccount,
       outletId: selectedLocation?.outletId || currentOutlet?.id || 'outlet-1',
-      outletName: selectedLocation?.outletName || currentOutlet?.name || 'Gaon Ka Swad Kitchen',
+      outletName: selectedLocation?.outletName || currentOutlet?.name || 'Swad Click Kitchen',
       deliveryPinCode: isSelfPickup
         ? (currentOutlet?.pinCode || selectedLocation?.pinCode || cleanCustomerPin)
         : cleanCustomerPin,
@@ -1495,7 +1495,7 @@ export const CheckoutPage: React.FC = () => {
       isSelfPickup,
       kitchenAddress:
         currentOutlet?.address ||
-        `${selectedLocation?.outletName || 'Gaon Ka Swad Kitchen Facility'}, Main Commercial Hub`,
+        `${selectedLocation?.outletName || 'Swad Click Kitchen Facility'}, Main Commercial Hub`,
       deliveryAddressSnapshot: isSelfPickup
         ? undefined
         : {
@@ -1701,7 +1701,7 @@ export const CheckoutPage: React.FC = () => {
           pill: isOrderPickup ? 'Order Picked Up' : 'Order Delivered',
           title: isOrderPickup ? 'Order Picked Up!' : 'Delivered Hot & Fresh!',
           description: isOrderPickup
-            ? 'Your order has been handed over at the counter. Thank you for dining with Gaon Ka Swad!'
+            ? 'Your order has been handed over at the counter. Thank you for dining with Swad Click!'
             : 'Your order has been delivered to your doorstep. Savor every bite!',
         };
       }
@@ -2520,7 +2520,7 @@ export const CheckoutPage: React.FC = () => {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <h4 className="font-bold text-sm text-stone-900">
-                          {currentOutlet?.name || selectedLocation?.outletName || 'Gaon Ka Swad Kitchen'}
+                          {currentOutlet?.name || selectedLocation?.outletName || 'Swad Click Kitchen'}
                         </h4>
                         <span className="bg-emerald-100 text-emerald-800 text-[10px] font-extrabold px-2 py-0.5 rounded-full uppercase">
                           Zero Delivery Fee
@@ -2529,7 +2529,7 @@ export const CheckoutPage: React.FC = () => {
                       <p className="text-xs text-stone-700 mt-1 flex items-start gap-1">
                         <MapPin className="w-3.5 h-3.5 text-amber-800 shrink-0 mt-0.5" />
                         <span>
-                          {currentOutlet?.address || 'Gaon Ka Swad Kitchen Facility, Main Commercial Hub'}
+                          {currentOutlet?.address || 'Swad Click Kitchen Facility, Main Commercial Hub'}
                           {currentOutlet?.city ? `, ${currentOutlet.city}` : ''}
                         </span>
                       </p>
@@ -3638,7 +3638,7 @@ export const CheckoutPage: React.FC = () => {
               )}
 
               <p className="text-center text-[10px] text-gray-400">
-                By placing your order, you agree to Gaon Ka Swad terms & gourmet delivery policy.
+                By placing your order, you agree to Swad Click terms & gourmet delivery policy.
               </p>
             </div>
           </div>

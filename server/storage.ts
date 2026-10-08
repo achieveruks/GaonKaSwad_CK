@@ -726,7 +726,7 @@ class AppStorage {
     if (!data.address || !data.address.trim()) throw new Error('Address is required');
 
     // Generate unique slug id e.g. "blr-sarjapur"
-    let baseId = (data.id || `${cleanCity.slice(0, 3).toLowerCase()}-${data.name.replace(/gaon ka swad/gi, '').trim().toLowerCase()}`)
+    let baseId = (data.id || `${cleanCity.slice(0, 3).toLowerCase()}-${data.name.replace(/swad click/gi, '').trim().toLowerCase()}`)
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/(^-|-$)/g, '');
     if (!baseId) baseId = `outlet-${Date.now()}`;
@@ -874,18 +874,18 @@ class AppStorage {
     const outlet = this.getOutletById(outletId);
     const fallback: OutletAbout = {
       outletId,
-      heroFireLine: outlet?.heroFireLine || (outlet ? `THE HERITAGE BEHIND GAON KA SWAD • ${outlet.name.toUpperCase()}` : 'THE HERITAGE BEHIND GAON KA SWAD'),
+      heroFireLine: outlet?.heroFireLine || (outlet ? `THE HERITAGE BEHIND SWAD CLICK • ${outlet.name.toUpperCase()}` : 'THE HERITAGE BEHIND SWAD CLICK'),
       heroHeader: outlet?.heroHeader || 'Crafting Authentic Culinary Memories',
       heroDescription: outlet?.heroDescription || 'Born out of a deep reverence for forgotten village recipes and slow-cooking traditions.',
       storyLine: 'WHO WE ARE',
       storyTitle: 'A Modern Cloud Kitchen with Heirloom Roots',
-      storyDescription: 'Gaon Ka Swad was founded with a singular conviction: genuine taste cannot be rushed.',
+      storyDescription: 'Swad Click was founded with a singular conviction: genuine taste cannot be rushed.',
       storyHighlight1Title: '100% Pure Desi Ghee',
       storyHighlight1Description: 'Pure Desi Ghee & Raw Spices',
       storyHighlight2Title: '24 Hrs Slow-Simmered',
       storyHighlight2Description: 'Slow-Simmered Dal Bukhara',
       outletImage: 'https://images.unsplash.com/photo-1556910103-1c02745aae4d?q=80&w=1000&auto=format&fit=crop',
-      expLine: 'THE GAON KA SWAD EXPERIENCE',
+      expLine: 'THE SWAD CLICK EXPERIENCE',
       expHeader: 'Food That Feels Like Home',
       expDescription: 'From the way we cook to the way we serve, every detail is designed to make your meal feel a little more special.',
       expCard1Title: '🏠 Familiar Flavours',
@@ -896,7 +896,7 @@ class AppStorage {
       expCard2Description: 'We prepare each order with attention to freshness, consistency, and the little details that make a meal memorable.',
       expCard3Title: '❤️ Your Experience',
       expCard3Header: 'We Listen & Improve',
-      expCard3Description: 'Your feedback helps us get better. Every rating, review, and suggestion helps shape the Gaon Ka Swad experience.',
+      expCard3Description: 'Your feedback helps us get better. Every rating, review, and suggestion helps shape the Swad Click experience.',
     };
     return fallback;
   }
@@ -1247,11 +1247,11 @@ class AppStorage {
       }
     }
 
-    // Generate auto-incrementing Order ID (e.g. GKSWAD-#001, GKSWAD-#002, ...)
-    let nextSeq = 1;
+    // Generate auto-incrementing Order ID (e.g. SWADCLK-00016, SWADCLK-00017, ...)
+    let nextSeq = 16;
     for (const o of this.orders) {
       if (o.orderId) {
-        const match = o.orderId.match(/GKSWAD-#?(\d+)/i) || o.orderId.match(/GKS-#?(\d+)/i);
+        const match = o.orderId.match(/(?:SWADCLK|GKSWAD|GKS)-#?(\d+)/i);
         if (match && match[1]) {
           const num = parseInt(match[1], 10);
           if (!isNaN(num) && num >= nextSeq) {
@@ -1260,11 +1260,11 @@ class AppStorage {
         }
       }
     }
-    const normalizedInputId = orderData.orderId ? orderData.orderId.replace(/^#+/, '').replace(/GKSWAD-#/i, 'GKSWAD-') : '';
+    const normalizedInputId = orderData.orderId ? orderData.orderId.replace(/^#+/, '').replace(/SWADCLK-#/i, 'SWADCLK-').replace(/GKSWAD-#?/i, 'SWADCLK-') : '';
     const formattedOrderId =
-      normalizedInputId && normalizedInputId.startsWith('GKSWAD-')
+      normalizedInputId && normalizedInputId.startsWith('SWADCLK-')
         ? normalizedInputId
-        : `GKSWAD-${String(nextSeq).padStart(5, '0')}`;
+        : `SWADCLK-${String(nextSeq).padStart(5, '0')}`;
 
     const newOrder: Order = {
       orderId: formattedOrderId,
@@ -1272,7 +1272,7 @@ class AppStorage {
       addressId: orderData.addressId || undefined,
       isGuestCheckout: isGuest,
       outletId: orderData.outletId,
-      outletName: outlet?.name || 'Gaon Ka Swad Kitchen',
+      outletName: outlet?.name || 'Swad Click Kitchen',
       deliveryPinCode: orderData.deliveryPinCode,
       createdAt: orderData.createdAt || new Date().toISOString(),
       items: Array.isArray(orderData.items) ? orderData.items.map(sanitizeOrderItem) : [],

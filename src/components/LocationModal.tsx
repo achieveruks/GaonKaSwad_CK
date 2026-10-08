@@ -38,7 +38,7 @@ export const LocationModal: React.FC<LocationModalProps> = ({ isOpen, onClose })
       for (const z of allDeliveryZones) {
         if (!z.isActive) continue;
         const outlet = outlets.find((o) => o.id === z.outletId);
-        const outletName = outlet?.name || 'Gaon Ka Swad Kitchen';
+        const outletName = outlet?.name || 'Swad Click Kitchen';
         const cityArea = outlet ? `${outlet.city}, ${outlet.state || ''}` : 'Active Delivery Area';
 
         for (const p of z.pinCodes || []) {
@@ -149,7 +149,7 @@ export const LocationModal: React.FC<LocationModalProps> = ({ isOpen, onClose })
                 Select Delivery Location
               </h3>
               <p className="text-stone-300 text-xs mt-1 leading-relaxed">
-                Enter your 6-digit delivery PIN code to route your order to the nearest Gaon Ka Swad kitchen.
+                Enter your 6-digit delivery PIN code to route your order to the nearest Swad Click kitchen.
               </p>
             </div>
 

@@ -91,8 +91,8 @@ export const Navbar: React.FC = () => {
     if (!rawName) return { firstPart: 'Select', secondPart: 'Location', full: 'Select Location' };
 
     const cleaned = rawName
-      .replace(/^Gaon\s+Ka\s+Swad\s*[-–:]\s*/i, '')
-      .replace(/^Gaon\s+Ka\s+Swad\s*/i, '')
+      .replace(/^Swad\s+Click\s*[-–:]\s*/i, '')
+      .replace(/^Swad\s+Click\s*/i, '')
       .replace(/\bOutlet\s+Name\b/gi, '')
       .trim();
 
@@ -150,12 +150,12 @@ export const Navbar: React.FC = () => {
             <div
               onClick={goToHome}
               className="relative w-12 h-12 sm:w-13 sm:h-13 md:w-14 md:h-14 rounded-2xl p-0.5 bg-gradient-to-br from-amber-200 via-amber-700/40 to-stone-400 shadow-sm hover:shadow-md hover:scale-105 transition-all shrink-0 cursor-pointer select-none"
-              title="Gaon Ka Swad - Home"
+              title="Swad Click - Home"
             >
               <div className="w-full h-full rounded-[14px] overflow-hidden bg-amber-50">
                 <img
                   src={gksSquareLogo}
-                  alt="Gaon Ka Swad"
+                  alt="Swad Click"
                   className="w-full h-full object-cover"
                   referrerPolicy="no-referrer"
                 />
@@ -201,7 +201,7 @@ export const Navbar: React.FC = () => {
               <div className="mt-1">
                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-50 text-amber-900 border border-amber-200/80 text-[10px] sm:text-[10.5px] font-semibold tracking-wide whitespace-nowrap shadow-2xs">
                   <span className="w-1.5 h-1.5 rounded-full bg-amber-700 inline-block shrink-0 animate-pulse" />
-                  A Gaon Ka Swad Kitchen
+                  A Swad Click Kitchen
                 </span>
               </div>
             </div>
@@ -506,7 +506,7 @@ export const Navbar: React.FC = () => {
                     <div className="w-full h-full rounded-[10px] overflow-hidden bg-amber-50">
                       <img
                         src={gksSquareLogo}
-                        alt="Gaon Ka Swad"
+                        alt="Swad Click"
                         className="w-full h-full object-cover"
                         referrerPolicy="no-referrer"
                       />
@@ -521,7 +521,7 @@ export const Navbar: React.FC = () => {
                     </div>
                     <div className="flex items-center gap-1 mt-0.5">
                       <span className="inline-flex items-center gap-1 px-1.5 py-0.2 bg-amber-100/70 text-amber-950 rounded-full text-[9.5px] font-semibold">
-                        A Gaon Ka Swad Kitchen
+                        A Swad Click Kitchen
                       </span>
                     </div>
                     <div className="text-[11px] text-stone-700 font-medium flex items-center gap-1 mt-1">

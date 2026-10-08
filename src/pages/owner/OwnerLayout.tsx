@@ -1,6 +1,7 @@
-import React, { useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useNavigation } from '../../context/NavigationContext';
+import { ChangePasswordModal } from '../../components/owner/ChangePasswordModal';
 import {
   LayoutDashboard,
   UtensilsCrossed,
@@ -16,6 +17,7 @@ import {
   Building2,
   Database,
   TicketPercent,
+  KeyRound,
 } from 'lucide-react';
 
 interface OwnerLayoutProps {
@@ -115,6 +117,7 @@ export const OwnerLayout: React.FC<OwnerLayoutProps> = ({
     goToOwnerLogin();
   };
 
+  const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
   const userRole = ownerUser?.role || profile?.role || 'owner';
   const isOwner = userRole === 'owner';
 
@@ -132,12 +135,12 @@ export const OwnerLayout: React.FC<OwnerLayoutProps> = ({
                 className="flex items-center gap-2.5 group text-left cursor-pointer"
               >
                 <div className="w-8 h-8 rounded-lg bg-amber-800 flex items-center justify-center text-white font-black text-sm shadow-2xs group-hover:bg-amber-700 transition-colors">
-                  G
+                  S
                 </div>
                 <div>
                   <div className="flex items-center gap-1.5">
                     <span className="font-extrabold text-sm tracking-tight text-white font-heading">
-                      Gaon Ka Swad
+                      Swad Click
                     </span>
                     <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded uppercase border ${
                       isOwner
@@ -246,6 +249,15 @@ export const OwnerLayout: React.FC<OwnerLayoutProps> = ({
                 </div>
                 <button
                   type="button"
+                  onClick={() => setIsChangePasswordOpen(true)}
+                  className="flex items-center gap-1.5 text-xs text-stone-300 hover:text-white bg-stone-800 hover:bg-stone-700 px-2.5 py-1.5 rounded-lg border border-stone-700 transition-colors cursor-pointer"
+                  title="Change account password"
+                >
+                  <KeyRound className="w-3.5 h-3.5 text-amber-400" />
+                  <span className="hidden lg:inline">Change Password</span>
+                </button>
+                <button
+                  type="button"
                   onClick={handleLogout}
                   className="flex items-center gap-1 text-xs text-rose-400 hover:text-rose-300 hover:bg-rose-950/40 px-2.5 py-1.5 rounded-lg border border-rose-900/50 transition-colors cursor-pointer"
                 >
@@ -352,6 +364,18 @@ export const OwnerLayout: React.FC<OwnerLayoutProps> = ({
                 <span>View Live Storefront</span>
               </button>
 
+              <button
+                type="button"
+                onClick={() => {
+                  setIsChangePasswordOpen(true);
+                  setMobileMenuOpen(false);
+                }}
+                className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-amber-300 hover:bg-stone-800"
+              >
+                <KeyRound className="w-4 h-4 text-amber-400" />
+                <span>Change Password</span>
+              </button>
+
               <div className="pt-2 border-t border-stone-800 flex items-center justify-between px-3">
                 <span className="text-[11px] text-stone-400 truncate">
                   {ownerUser?.email || 'achieveruks@gmail.com'} ({userRole})
@@ -386,6 +410,12 @@ export const OwnerLayout: React.FC<OwnerLayoutProps> = ({
         {/* Content Body */}
         {children}
       </main>
+
+      {/* Change Password Modal */}
+      <ChangePasswordModal
+        isOpen={isChangePasswordOpen}
+        onClose={() => setIsChangePasswordOpen(false)}
+      />
     </div>
   );
 };

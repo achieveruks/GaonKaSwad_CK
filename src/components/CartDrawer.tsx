@@ -168,7 +168,7 @@ export const CartDrawer: React.FC = () => {
                         <div className="truncate">
                           <span className="font-bold text-stone-900">PIN {selectedLocation.pinCode}</span>
                           <span className="text-stone-500 text-[11px] ml-1 truncate">
-                            · {selectedLocation.outletName.replace('Gaon Ka Swad - ', '')}
+                            · {selectedLocation.outletName.replace(/^Swad Click\s*[-–:]\s*/i, '')}
                           </span>
                         </div>
                       ) : (

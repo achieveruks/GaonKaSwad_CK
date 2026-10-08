@@ -135,7 +135,7 @@ export const AboutPage: React.FC = () => {
     ));
   };
 
-  const heroFireLine = aboutData?.heroFireLine || (currentOutlet ? `ARTISANAL CLOUD KITCHEN • ${currentOutlet.name.toUpperCase()}` : 'ARTISANAL CLOUD KITCHEN • GAON KA SWAD');
+  const heroFireLine = aboutData?.heroFireLine || (currentOutlet ? `ARTISANAL CLOUD KITCHEN • ${currentOutlet.name.toUpperCase()}` : 'ARTISANAL CLOUD KITCHEN • SWAD CLICK');
   const heroHeader = aboutData?.heroHeader || currentOutlet?.heroHeader || 'Crafting Authentic Culinary Memories, One Handi at a Time';
   const heroDescription =
     aboutData?.heroDescription ||
@@ -197,7 +197,7 @@ export const AboutPage: React.FC = () => {
                 renderStoryParagraphs(aboutData.storyDescription)
               ) : (
                 <p className="text-xs text-stone-600 leading-relaxed">
-                  Gaon Ka Swad was founded with a singular conviction: genuine taste cannot be rushed. In a world of 10-minute industrial microwave prep, we chose the path of slow-simmered handis, 24-hour charcoal embers, whole stone-ground spices, and pure cow desi ghee.
+                  Swad Click was founded with a singular conviction: genuine taste cannot be rushed. In a world of 10-minute industrial microwave prep, we chose the path of slow-simmered handis, 24-hour charcoal embers, whole stone-ground spices, and pure cow desi ghee.
                 </p>
               )}
             </div>
@@ -239,7 +239,7 @@ export const AboutPage: React.FC = () => {
               Our Core Philosophy
             </span>
             <h2 className="font-extrabold text-xl sm:text-3xl text-white">
-              The 4 Pillars of Gaon Ka Swad
+              The 4 Pillars of Swad Click
             </h2>
             <p className="text-xs text-stone-400">
               Strict culinary standards that define every single order we dispatch.
@@ -303,7 +303,7 @@ export const AboutPage: React.FC = () => {
         <div className="bg-white rounded-2xl border border-stone-200 p-6 sm:p-8 shadow-xs space-y-6">
           <div className="max-w-2xl space-y-1.5">
             <span className="text-orange-600 font-bold text-xs uppercase tracking-wider">
-              {aboutData?.expLine || 'THE GAON KA SWAD EXPERIENCE'}
+              {aboutData?.expLine || 'THE SWAD CLICK EXPERIENCE'}
             </span>
             <h2 className="font-extrabold text-xl sm:text-2xl text-stone-900">
               {aboutData?.expHeader || 'Food That Feels Like Home'}
@@ -353,7 +353,7 @@ export const AboutPage: React.FC = () => {
               </p>
               <p className="text-xs text-stone-500 leading-relaxed">
                 {aboutData?.expCard3Description ||
-                  'Your feedback helps us get better. Every rating, review, and suggestion helps shape the Gaon Ka Swad experience.'}
+                  'Your feedback helps us get better. Every rating, review, and suggestion helps shape the Swad Click experience.'}
               </p>
             </div>
           </div>
