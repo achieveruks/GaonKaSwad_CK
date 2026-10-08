@@ -11,6 +11,7 @@ import {
   AuthenticatedRequest,
 } from './server/auth';
 import { generateOTP, formatOtpString, hashOTPSync, isBetaMode } from './src/lib/otpUtils';
+import { APP_VERSION } from './src/version';
 
 // Supabase Server Client
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || 'https://ifthfunawntmqjupafxp.supabase.co';
@@ -48,7 +49,7 @@ app.use(express.urlencoded({ extended: true, limit: '5mb' }));
 
   // Health Check
   app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', timestamp: new Date().toISOString() });
+    res.json({ status: 'ok', version: APP_VERSION, timestamp: new Date().toISOString() });
   });
 
   // PRD PDF Download / View Endpoint

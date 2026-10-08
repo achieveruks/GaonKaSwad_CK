@@ -3,6 +3,7 @@ import { supabase, isSupabaseConfigured } from '../../lib/supabase';
 import { useAuth } from '../../context/AuthContext';
 import { useNavigation } from '../../context/NavigationContext';
 import { UserRole } from '../../types';
+import { APP_VERSION } from '../../version';
 import {
   Lock,
   Mail,
@@ -428,8 +429,8 @@ export const OwnerLoginPage: React.FC = () => {
             </p>
           </div>
 
-          {/* Back Link */}
-          <div className="text-center pt-2 border-t border-stone-100">
+          {/* Back Link & Version Badge */}
+          <div className="text-center pt-2 border-t border-stone-100 flex flex-col items-center gap-1.5">
             <button
               type="button"
               onClick={goToHome}
@@ -438,6 +439,9 @@ export const OwnerLoginPage: React.FC = () => {
               <ArrowLeft className="w-3.5 h-3.5" />
               <span>Back to Storefront</span>
             </button>
+            <span className="text-[10px] text-stone-400 font-mono tracking-wider">
+              Deployment Release: <strong className="text-amber-800 font-bold">{APP_VERSION}</strong>
+            </span>
           </div>
         </div>
       </div>

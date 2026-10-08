@@ -3,6 +3,7 @@ import { useNavigation } from '../context/NavigationContext';
 import { useCart } from '../context/CartContext';
 import { useLocation } from '../context/LocationContext';
 import { useProducts } from '../context/ProductContext';
+import { APP_VERSION } from '../version';
 import {
   Flame,
   ShieldCheck,
@@ -246,11 +247,11 @@ export const Footer: React.FC = () => {
 
         {/* Bottom copyright and legal */}
         <div className="pt-6 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-gray-500">
-          <p>© {new Date().getFullYear()} Swad Click Cloud Kitchen. All rights reserved.</p>
+          <p>© {new Date().getFullYear()} Swad Click Cloud Kitchen. All rights reserved. <span className="ml-1 text-amber-400 font-mono font-bold bg-amber-950/60 px-1.5 py-0.5 rounded border border-amber-800/40">{APP_VERSION}</span></p>
           <div className="flex items-center gap-3 text-gray-400 text-[11px]">
             <span>Crafted with <Heart className="w-3 h-3 text-rose-500 inline fill-rose-500" /> for food lovers</span>
             <span>•</span>
-            <span>Vercel-Ready Architecture</span>
+            <span className="font-mono text-stone-400">Release {APP_VERSION}</span>
           </div>
         </div>
       </div>
