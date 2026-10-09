@@ -139,7 +139,8 @@ export function deserializeOrderItem(it: any): OrderItem {
 
 export const sanitizeOrderItem = serializeOrderItemForDb;
 
-const DATA_DIR = path.join(process.cwd(), 'data');
+const isLambda = Boolean(process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.LAMBDA_TASK_ROOT);
+const DATA_DIR = isLambda ? path.join('/tmp', 'data') : path.join(process.cwd(), 'data');
 const PRODUCTS_FILE = path.join(DATA_DIR, 'products_store.json');
 const OUTLETS_FILE = path.join(DATA_DIR, 'outlets_store.json');
 const ZONES_FILE = path.join(DATA_DIR, 'zones_store.json');

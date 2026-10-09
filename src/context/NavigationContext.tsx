@@ -57,8 +57,23 @@ const NavigationContext = createContext<NavigationContextType | undefined>(undef
 
 // Helper to parse route from pathname, search, and optional hash
 function parseCurrentLocation(pathname: string, search: string, hash: string): AppRoute {
-  // 1. Backward compatibility: if URL contains a hash route (e.g. #/shop or #contact), parse hash first
-  if (hash && hash.length > 1) {
+  // 0. Detect Supabase Auth callback (Password Recovery, Admin User Invite, or Token Error)
+  // Arrives as e.g. /#access_token=...&type=recovery or /#access_token=...&type=invite
+  // or /?code=... with recovery session or /#error=...
+  const isAuthCallback =
+    hash.includes('type=recovery') ||
+    hash.includes('type=invite') ||
+    search.includes('type=recovery') ||
+    search.includes('type=invite') ||
+    (hash.includes('access_token=') && (hash.includes('recovery') || hash.includes('invite')));
+
+  if (isAuthCallback) {
+    return { path: '/owner/reset-password' };
+  }
+
+  // 1. Backward compatibility: if URL contains a legacy hash route (e.g. #/shop or #contact), parse hash
+  // Never treat Supabase tokens (#access_token=...) as route paths
+  if (hash && hash.length > 1 && !hash.includes('access_token=') && !hash.includes('error=')) {
     const cleanHash = hash.replace(/^#\/?/, '');
     if (cleanHash) {
       const [hashMain, hashQuery] = cleanHash.split('?');
@@ -246,8 +261,14 @@ export const NavigationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     window.addEventListener('popstate', handleLocationChange);
     window.addEventListener('hashchange', handleLocationChange);
 
-    // If URL has any '#' (e.g. #/shop, #shop, #/contact, #contact), clean it up immediately to standard clean pathname (/, /shop, /contact)
-    if (typeof window !== 'undefined' && window.location.hash) {
+    // If URL has any legacy '#' route (e.g. #/shop, #shop), clean it up immediately to standard clean pathname (/, /shop).
+    // NEVER wipe Supabase auth tokens (#access_token=...) or errors (#error=...)!
+    if (
+      typeof window !== 'undefined' &&
+      window.location.hash &&
+      !window.location.hash.includes('access_token=') &&
+      !window.location.hash.includes('error=')
+    ) {
       const cleanTarget = routeToUrl(parseCurrentLocation(window.location.pathname, window.location.search, window.location.hash));
       window.history.replaceState({}, '', cleanTarget);
     }

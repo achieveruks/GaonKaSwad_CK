@@ -1,6 +1,0 @@
-{
-  "summary":  "Implementation plan for Owner & Manager authentication cleanup, logged-in change password modal in top-right navbar, and complete forgot/reset password recovery flow via Supabase Auth.",
-  "updatedAt":  "2026-10-08T04:50:15.071081034Z",
-  "requestFeedback":  true,
-  "userFacing":  true
-}
