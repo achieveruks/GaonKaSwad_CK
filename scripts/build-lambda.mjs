@@ -17,11 +17,11 @@ async function buildLambda() {
     entryPoints: ['server/lambda.ts'],
     bundle: true,
     platform: 'node',
-    target: 'node20',
+    target: 'node22',
     format: 'cjs',
     sourcemap: true,
     outfile: 'dist-lambda/api/index.js',
-    // Exclude @aws-sdk packages as they are pre-installed in AWS Lambda Node.js 20 runtime
+    // Exclude @aws-sdk packages as they are pre-installed in AWS Lambda Node.js 22 runtime
     external: [
       'vite',
       'esbuild',
@@ -45,7 +45,7 @@ async function buildLambda() {
     entryPoints: ['server/cron-handler.ts'],
     bundle: true,
     platform: 'node',
-    target: 'node20',
+    target: 'node22',
     format: 'cjs',
     sourcemap: true,
     outfile: 'dist-lambda/cron/index.js',

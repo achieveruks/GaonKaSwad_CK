@@ -141,7 +141,7 @@ Resources:
         MaxAge: 600
 
   # ============================================================================
-  # 4. LAMBDA FUNCTIONS (Node.js 20)
+  # 4. LAMBDA FUNCTIONS (Node.js 22)
   # ============================================================================
 
   # API Function: Handles all /api/* routes via serverless-express
@@ -150,7 +150,7 @@ Resources:
     Properties:
       CodeUri: dist-lambda/api/
       Handler: index.handler
-      Runtime: nodejs20.x
+      Runtime: nodejs22.x
       MemorySize: 1024
       Timeout: 30
       Description: Express API backend for swadclick.com running on AWS Lambda
@@ -185,7 +185,7 @@ Resources:
     Properties:
       CodeUri: dist-lambda/cron/
       Handler: index.handler
-      Runtime: nodejs20.x
+      Runtime: nodejs22.x
       MemorySize: 512
       Timeout: 60
       Description: EventBridge scheduled worker for daily 4:00 AM IST Swad Coin rewards

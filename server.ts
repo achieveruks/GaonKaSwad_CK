@@ -1511,6 +1511,36 @@ app.use(express.urlencoded({ extended: true, limit: '5mb' }));
     }
   });
 
+  // 4b. Categories: List All (from Supabase)
+  app.get('/api/categories', async (req, res) => {
+    try {
+      const { data, error } = await serverSupabase
+        .from('categories')
+        .select('*')
+        .order('sort_order', { ascending: true });
+
+      if (error) {
+        console.warn('Fetch categories notice:', error.message);
+        return res.json({ success: true, categories: [] });
+      }
+
+      const categories = (data || []).map((row: any) => ({
+        id: row.id,
+        name: row.name,
+        slug: row.slug,
+        tagline: row.tagline || '',
+        image: row.image || '',
+        iconName: row.icon_name || row.iconName || 'Utensils',
+        itemCount: row.item_count || 0,
+      }));
+
+      return res.json({ success: true, categories });
+    } catch (err: any) {
+      console.error('Fetch categories error:', err);
+      return res.status(500).json({ success: false, error: 'Failed to fetch categories' });
+    }
+  });
+
   // 5. Products: Single Item by ID or Slug
   app.get('/api/products/:idOrSlug', (req, res) => {
     try {
@@ -5301,6 +5331,17 @@ app.use(express.urlencoded({ extended: true, limit: '5mb' }));
       console.error('Dashboard stats error:', err);
       return res.status(500).json({ success: false, error: 'Failed to retrieve stats' });
     }
+  });
+
+  // Safe 404 handler for unknown /api/* endpoints (prevents serverless-express crash on missing event emitter)
+  app.all('/api/*', (req, res) => {
+    res.status(404).json({ success: false, error: `Route ${req.method} ${req.path} not found` });
+  });
+
+  // Global Error Handler for API
+  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    console.error('[API Server Error]:', err);
+    res.status(500).json({ success: false, error: err?.message || 'Internal Server Error' });
   });
 
   // --- Local Development & Standalone Server Startup ---
