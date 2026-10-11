@@ -317,13 +317,9 @@ export const CustomerProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         }
       }
 
-      // 2. Server API query with cache-busting timestamp
-      const q = new URLSearchParams();
-      if (targetCustId) q.append('customerId', targetCustId);
-      if (targetPhone) q.append('phone', targetPhone);
-      q.append('_t', Date.now().toString());
-
-      const res = await fetch(`/api/customers/addresses?${q.toString()}`, {
+      // 2. Server API query with cache-busting timestamp (Customer identity resolved strictly via session cookie)
+      const res = await fetch(`/api/customers/addresses?_t=${Date.now()}`, {
+        credentials: 'same-origin',
         headers: { 'Cache-Control': 'no-cache' },
       });
       const data = await res.json();
@@ -935,7 +931,14 @@ export const CustomerProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         return { eligible: false, message: 'Please provide customer mobile number to verify purchase.' };
       }
 
-      const res = await fetch(`/api/reviews/eligibility?productId=${encodeURIComponent(productId)}&phone=${encodeURIComponent(idToCheck)}`);
+      const queryParams = new URLSearchParams({ productId: String(productId) });
+      if (!customer && idToCheck) {
+        queryParams.append('phone', idToCheck);
+      }
+
+      const res = await fetch(`/api/reviews/eligibility?${queryParams.toString()}`, {
+        credentials: 'same-origin',
+      });
       const data = await res.json();
       return {
         eligible: !!data.eligible,

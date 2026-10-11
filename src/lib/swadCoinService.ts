@@ -29,16 +29,9 @@ export interface SwadCoinVaultResult {
   totalCards: number;
 }
 
-export async function fetchVaultRewards(phone: string, customerId?: string): Promise<SwadCoinVaultResult> {
-  if (!phone && !customerId) {
-    return { cards: [], pendingRewards: [], claimedRewards: [], totalCards: 0 };
-  }
+export async function fetchVaultRewards(_phone?: string, _customerId?: string): Promise<SwadCoinVaultResult> {
   try {
-    const params = new URLSearchParams();
-    if (phone) params.append('phone', phone);
-    if (customerId) params.append('customerId', customerId);
-
-    const res = await fetch(`/api/swad-coins/rewards/vault?${params.toString()}`, {
+    const res = await fetch('/api/swad-coins/rewards/vault', {
       credentials: 'same-origin',
     });
     if (!res.ok) return { cards: [], pendingRewards: [], claimedRewards: [], totalCards: 0 };
@@ -58,14 +51,9 @@ export async function fetchVaultRewards(phone: string, customerId?: string): Pro
   }
 }
 
-export async function fetchSwadCoinBalance(phone: string, customerId?: string): Promise<number> {
-  if (!phone && !customerId) return 0;
+export async function fetchSwadCoinBalance(_phone?: string, _customerId?: string): Promise<number> {
   try {
-    const params = new URLSearchParams();
-    if (phone) params.append('phone', phone);
-    if (customerId) params.append('customerId', customerId);
-
-    const res = await fetch(`/api/swad-coins/balance?${params.toString()}`, {
+    const res = await fetch('/api/swad-coins/balance', {
       credentials: 'same-origin',
     });
     if (!res.ok) return 0;
@@ -80,14 +68,9 @@ export async function fetchSwadCoinBalance(phone: string, customerId?: string): 
   }
 }
 
-export async function fetchPendingRewards(phone: string, customerId?: string): Promise<SwadCoinRewardItem[]> {
-  if (!phone && !customerId) return [];
+export async function fetchPendingRewards(_phone?: string, _customerId?: string): Promise<SwadCoinRewardItem[]> {
   try {
-    const params = new URLSearchParams();
-    if (phone) params.append('phone', phone);
-    if (customerId) params.append('customerId', customerId);
-
-    const res = await fetch(`/api/swad-coins/rewards/pending?${params.toString()}`, {
+    const res = await fetch('/api/swad-coins/rewards/pending', {
       credentials: 'same-origin',
     });
     if (!res.ok) return [];
@@ -104,8 +87,8 @@ export async function fetchPendingRewards(phone: string, customerId?: string): P
 
 export async function claimPendingReward(
   rewardId: string,
-  phone: string,
-  customerId?: string
+  _phone?: string,
+  _customerId?: string
 ): Promise<{ success: boolean; message?: string; claimedAmount?: number; newBalance?: number; error?: string }> {
   try {
     const res = await fetch(`/api/swad-coins/rewards/${encodeURIComponent(rewardId)}/claim`, {
@@ -114,7 +97,6 @@ export async function claimPendingReward(
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ phone, customerId }),
     });
 
     const data = await res.json();
@@ -134,14 +116,9 @@ export async function claimPendingReward(
   }
 }
 
-export async function fetchSwadCoinTransactions(phone: string, customerId?: string): Promise<SwadCoinTransactionItem[]> {
-  if (!phone && !customerId) return [];
+export async function fetchSwadCoinTransactions(_phone?: string, _customerId?: string): Promise<SwadCoinTransactionItem[]> {
   try {
-    const params = new URLSearchParams();
-    if (phone) params.append('phone', phone);
-    if (customerId) params.append('customerId', customerId);
-
-    const res = await fetch(`/api/swad-coins/transactions?${params.toString()}`, {
+    const res = await fetch('/api/swad-coins/transactions', {
       credentials: 'same-origin',
     });
     if (!res.ok) return [];

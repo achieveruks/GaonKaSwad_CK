@@ -2633,13 +2633,11 @@ export const recordCouponRedemption = async (
 /**
  * Check if customer is eligible for WELCOME10
  */
-export const checkWelcomeOfferEligibility = async (customerId?: string, customerPhone?: string): Promise<boolean> => {
-  if (!customerId && !customerPhone) return true;
+export const checkWelcomeOfferEligibility = async (_customerId?: string, _customerPhone?: string): Promise<boolean> => {
   try {
-    const params = new URLSearchParams();
-    if (customerId) params.set('customerId', customerId);
-    if (customerPhone) params.set('customerPhone', customerPhone);
-    const res = await fetch(`/api/coupons/available?${params.toString()}`);
+    const res = await fetch('/api/coupons/available', {
+      credentials: 'same-origin',
+    });
     if (res.ok) {
       const data = await res.json();
       if (data.success && Array.isArray(data.coupons)) {
@@ -2661,12 +2659,13 @@ export const fetchAvailableCouponsForCustomer = async (
 ): Promise<Coupon[]> => {
   try {
     const params = new URLSearchParams();
-    if (customerId) params.set('customerId', customerId);
-    if (customerPhone) params.set('customerPhone', customerPhone);
     if (subtotal !== undefined) params.set('subtotal', String(subtotal));
     if (outletId) params.set('outletId', outletId);
 
-    const res = await fetch(`/api/coupons/available?${params.toString()}`);
+    const queryStr = params.toString() ? `?${params.toString()}` : '';
+    const res = await fetch(`/api/coupons/available${queryStr}`, {
+      credentials: 'same-origin',
+    });
     if (res.ok) {
       const data = await res.json();
       if (data.success && Array.isArray(data.coupons)) {

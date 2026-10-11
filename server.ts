@@ -1281,8 +1281,20 @@ app.use('/api', generalApiLimiter);
   app.get('/api/reviews/eligibility', async (req, res) => {
     try {
       const productId = typeof req.query.productId === 'string' ? req.query.productId : '';
-      const phone = typeof req.query.phone === 'string' ? req.query.phone : '';
-      const customerId = typeof req.query.customerId === 'string' ? req.query.customerId : '';
+      let phone = typeof req.query.phone === 'string' ? req.query.phone : '';
+      let customerId = typeof req.query.customerId === 'string' ? req.query.customerId : '';
+
+      // Prefer verified JWT cookie identity when authenticated
+      const token = extractAuthToken(req);
+      if (token) {
+        try {
+          const authUser = verifySessionToken(token);
+          if (authUser) {
+            if (authUser.id) customerId = authUser.id;
+            if (authUser.phone) phone = authUser.phone;
+          }
+        } catch {}
+      }
 
       if (!productId) {
         return res.status(400).json({ success: false, error: 'Product ID is required' });

@@ -81,7 +81,9 @@ export const MyOrdersPage: React.FC = () => {
         }
       }
 
-      const res = await fetch(`/api/orders?phone=${encodeURIComponent(customer.phone)}`);
+      const res = await fetch('/api/orders', {
+        credentials: 'same-origin',
+      });
       const data = await res.json();
       if (data.orders) {
         const sorted = [...data.orders].sort(

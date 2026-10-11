@@ -48,9 +48,10 @@ export const OrderReviewModal: React.FC<OrderReviewModalProps> = ({
       const custPhone = customer?.phone || (order as any).customerDetails?.phone || '';
       
       const res = await fetch(
-        `/api/orders/${encodeURIComponent(orderIdentifier)}/reviewable-items?customerId=${encodeURIComponent(
-          custId
-        )}&customerPhone=${encodeURIComponent(custPhone)}&_t=${Date.now()}`
+        `/api/orders/${encodeURIComponent(orderIdentifier)}/reviewable-items?_t=${Date.now()}`,
+        {
+          credentials: 'same-origin',
+        }
       );
       const data = await res.json();
       if (data.success) {
