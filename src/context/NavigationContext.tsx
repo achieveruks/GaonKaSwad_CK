@@ -11,6 +11,10 @@ export type AppRoute =
   | { path: '/orders'; tab?: 'all' | 'active' | 'delivered' | 'cancelled' }
   | { path: '/about' }
   | { path: '/contact' }
+  | { path: '/privacy-policy' }
+  | { path: '/terms' }
+  | { path: '/refund-policy' }
+  | { path: '/shipping-policy' }
   | { path: '/order-success'; orderId: string }
   | { path: '/owner/login' }
   | { path: '/owner/dashboard' }
@@ -37,6 +41,10 @@ interface NavigationContextType {
   goToOrders: (tab?: 'all' | 'active' | 'delivered' | 'cancelled') => void;
   goToAbout: () => void;
   goToContact: () => void;
+  goToPrivacyPolicy: () => void;
+  goToTerms: () => void;
+  goToRefundPolicy: () => void;
+  goToShippingPolicy: () => void;
   goToCategories: () => void;
   goToOrderSuccess: (orderId: string) => void;
   goToOwnerLogin: () => void;
@@ -176,6 +184,10 @@ function parseRouteSegments(main: string, params: URLSearchParams): AppRoute | n
   }
   if (main === 'about') return { path: '/about' };
   if (main === 'contact') return { path: '/contact' };
+  if (main === 'privacy-policy' || main === 'privacy') return { path: '/privacy-policy' };
+  if (main === 'terms' || main === 'terms-and-conditions' || main === 'terms-of-service') return { path: '/terms' };
+  if (main === 'refund-policy' || main === 'refund' || main === 'cancellation-policy') return { path: '/refund-policy' };
+  if (main === 'shipping-policy' || main === 'shipping' || main === 'delivery-policy') return { path: '/shipping-policy' };
 
   if (main.startsWith('order-success/')) {
     const orderId = main.replace('order-success/', '');
@@ -212,6 +224,14 @@ function routeToUrl(route: AppRoute): string {
       return '/about';
     case '/contact':
       return '/contact';
+    case '/privacy-policy':
+      return '/privacy-policy';
+    case '/terms':
+      return '/terms';
+    case '/refund-policy':
+      return '/refund-policy';
+    case '/shipping-policy':
+      return '/shipping-policy';
     case '/order-success':
       return `/order-success/${route.orderId}`;
     case '/owner/login':
@@ -304,6 +324,10 @@ export const NavigationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     navigate({ path: '/orders', tab });
   const goToAbout = () => navigate({ path: '/about' });
   const goToContact = () => navigate({ path: '/contact' });
+  const goToPrivacyPolicy = () => navigate({ path: '/privacy-policy' });
+  const goToTerms = () => navigate({ path: '/terms' });
+  const goToRefundPolicy = () => navigate({ path: '/refund-policy' });
+  const goToShippingPolicy = () => navigate({ path: '/shipping-policy' });
   const goToCategories = () => navigate({ path: '/categories' });
   const goToOrderSuccess = (orderId: string) =>
     navigate({ path: '/order-success', orderId });
@@ -336,6 +360,10 @@ export const NavigationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         goToOrders,
         goToAbout,
         goToContact,
+        goToPrivacyPolicy,
+        goToTerms,
+        goToRefundPolicy,
+        goToShippingPolicy,
         goToCategories,
         goToOrderSuccess,
         goToOwnerLogin,

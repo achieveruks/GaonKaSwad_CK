@@ -879,6 +879,11 @@ export const CustomerProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       localStorage.removeItem('swadclick_cust_address_v1');
       localStorage.removeItem('swadclick_cust_all_addresses_v1');
     } catch {}
+
+    // Clear server-side HttpOnly cookie session
+    fetch('/api/auth/logout', { method: 'POST' }).catch((err) => {
+      console.warn('Server session logout warning:', err);
+    });
   };
 
   const checkReviewEligibility = async (productId: string | number, phoneOrId?: string) => {

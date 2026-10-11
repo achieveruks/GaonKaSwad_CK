@@ -19,7 +19,18 @@ import {
 } from 'lucide-react';
 
 export const Footer: React.FC = () => {
-  const { goToHome, goToShop, goToCategories, goToAbout, goToContact, goToOwnerLogin } = useNavigation();
+  const {
+    goToHome,
+    goToShop,
+    goToCategories,
+    goToAbout,
+    goToContact,
+    goToPrivacyPolicy,
+    goToTerms,
+    goToRefundPolicy,
+    goToShippingPolicy,
+    goToOwnerLogin
+  } = useNavigation();
   const { showToast } = useCart();
   const { currentOutlet, outlets } = useLocation();
   const { categories } = useProducts();
@@ -87,7 +98,7 @@ export const Footer: React.FC = () => {
 
       {/* Main Footer Links */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-8 pb-10 border-b border-gray-800">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-8 pb-10 border-b border-gray-800">
           {/* Brand Info (2 cols) */}
           <div className="lg:col-span-2 space-y-3">
             <div
@@ -106,10 +117,21 @@ export const Footer: React.FC = () => {
               Swad Click is a modern artisanal cloud kitchen dedicated to reviving rustic village and royal regional recipes with pure desi ghee and heirloom spices.
             </p>
 
-            <div className="pt-1 flex items-center gap-3 text-gray-400 text-xs">
-              <div className="flex items-center gap-1.5 bg-gray-800/80 px-2.5 py-1 rounded-md border border-gray-700 text-[11px]">
+            <div className="pt-1 flex flex-col gap-2 text-gray-400 text-xs">
+              <div className="inline-flex items-center gap-1.5 bg-gray-800/80 px-2.5 py-1 rounded-md border border-gray-700 text-[11px] w-fit">
                 <UtensilsCrossed className="w-3 h-3 text-orange-400" />
                 <span>FSSAI Lic. #{currentFssai}</span>
+              </div>
+              <div className="flex items-center gap-3 text-[11px] text-gray-400">
+                <span className="flex items-center gap-1">
+                  <Phone className="w-3 h-3 text-orange-400" />
+                  +91 94370 12345
+                </span>
+                <span>•</span>
+                <span className="flex items-center gap-1">
+                  <Mail className="w-3 h-3 text-orange-400" />
+                  care@swadclick.com
+                </span>
               </div>
             </div>
           </div>
@@ -152,7 +174,7 @@ export const Footer: React.FC = () => {
             </ul>
           </div>
 
-          {/* Quick Links */}
+          {/* Company Links */}
           <div>
             <h4 className="font-bold text-xs text-white uppercase tracking-wider mb-3">
               Company
@@ -173,7 +195,7 @@ export const Footer: React.FC = () => {
                   onClick={goToAbout}
                   className="hover:text-orange-400 transition-colors"
                 >
-                  5-Star Hygiene Standards
+                  Hygiene Standards
                 </button>
               </li>
               <li>
@@ -182,16 +204,7 @@ export const Footer: React.FC = () => {
                   onClick={goToContact}
                   className="hover:text-orange-400 transition-colors"
                 >
-                  Kitchen Locations
-                </button>
-              </li>
-              <li>
-                <button
-                  type="button"
-                  onClick={goToContact}
-                  className="hover:text-orange-400 transition-colors"
-                >
-                  Corporate & Party Catering
+                  Kitchen Outlets
                 </button>
               </li>
               <li>
@@ -209,16 +222,70 @@ export const Footer: React.FC = () => {
                   onClick={goToOwnerLogin}
                   className="hover:text-orange-400 transition-colors"
                 >
-                  Owner Login
+                  Owner Portal
                 </button>
               </li>
             </ul>
           </div>
 
-          {/* Newsletter & Direct Order */}
+          {/* Mandatory Legal & Policies Column */}
+          <div>
+            <h4 className="font-bold text-xs text-white uppercase tracking-wider mb-3">
+              Legal & Policy
+            </h4>
+            <ul className="space-y-2 text-xs text-gray-400">
+              <li>
+                <button
+                  type="button"
+                  onClick={goToPrivacyPolicy}
+                  className="hover:text-orange-400 transition-colors text-left"
+                >
+                  Privacy Policy
+                </button>
+              </li>
+              <li>
+                <button
+                  type="button"
+                  onClick={goToTerms}
+                  className="hover:text-orange-400 transition-colors text-left"
+                >
+                  Terms & Conditions
+                </button>
+              </li>
+              <li>
+                <button
+                  type="button"
+                  onClick={goToRefundPolicy}
+                  className="hover:text-orange-400 transition-colors text-left"
+                >
+                  Refund & Cancellation
+                </button>
+              </li>
+              <li>
+                <button
+                  type="button"
+                  onClick={goToShippingPolicy}
+                  className="hover:text-orange-400 transition-colors text-left"
+                >
+                  Shipping & Delivery
+                </button>
+              </li>
+              <li>
+                <button
+                  type="button"
+                  onClick={goToContact}
+                  className="hover:text-orange-400 transition-colors text-left"
+                >
+                  Grievance Desk
+                </button>
+              </li>
+            </ul>
+          </div>
+
+          {/* Newsletter */}
           <div>
             <h4 className="font-bold text-xs text-white uppercase tracking-wider mb-2">
-              Secret Weekend Drops
+              Weekend Drops
             </h4>
             <p className="text-xs text-gray-400 mb-2.5 leading-relaxed">
               Get member discounts and festive weekend handi specials.
@@ -245,13 +312,44 @@ export const Footer: React.FC = () => {
           </div>
         </div>
 
-        {/* Bottom copyright and legal */}
-        <div className="pt-6 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-gray-500">
+        {/* Bottom copyright and legal pill links */}
+        <div className="pt-6 flex flex-col md:flex-row items-center justify-between gap-4 text-xs text-gray-500">
           <p>© {new Date().getFullYear()} Swad Click Cloud Kitchen. All rights reserved. <span className="ml-1 text-amber-400 font-mono font-bold bg-amber-950/60 px-1.5 py-0.5 rounded border border-amber-800/40">{APP_VERSION}</span></p>
-          <div className="flex items-center gap-3 text-gray-400 text-[11px]">
-            <span>Crafted with <Heart className="w-3 h-3 text-rose-500 inline fill-rose-500" /> for food lovers</span>
+          
+          <div className="flex flex-wrap items-center justify-center gap-3 text-gray-400 text-[11px]">
+            <button
+              type="button"
+              onClick={goToPrivacyPolicy}
+              className="hover:text-orange-400 transition-colors"
+            >
+              Privacy Policy
+            </button>
             <span>•</span>
-            <span className="font-mono text-stone-400">Release {APP_VERSION}</span>
+            <button
+              type="button"
+              onClick={goToTerms}
+              className="hover:text-orange-400 transition-colors"
+            >
+              Terms of Service
+            </button>
+            <span>•</span>
+            <button
+              type="button"
+              onClick={goToRefundPolicy}
+              className="hover:text-orange-400 transition-colors"
+            >
+              Refund Policy
+            </button>
+            <span>•</span>
+            <button
+              type="button"
+              onClick={goToShippingPolicy}
+              className="hover:text-orange-400 transition-colors"
+            >
+              Shipping Policy
+            </button>
+            <span>•</span>
+            <span>Crafted with <Heart className="w-3 h-3 text-rose-500 inline fill-rose-500" /> for food lovers</span>
           </div>
         </div>
       </div>

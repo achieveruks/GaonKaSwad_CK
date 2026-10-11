@@ -38,7 +38,9 @@ export async function fetchVaultRewards(phone: string, customerId?: string): Pro
     if (phone) params.append('phone', phone);
     if (customerId) params.append('customerId', customerId);
 
-    const res = await fetch(`/api/swad-coins/rewards/vault?${params.toString()}`);
+    const res = await fetch(`/api/swad-coins/rewards/vault?${params.toString()}`, {
+      credentials: 'same-origin',
+    });
     if (!res.ok) return { cards: [], pendingRewards: [], claimedRewards: [], totalCards: 0 };
     const data = await res.json();
     if (data.success) {
@@ -63,7 +65,9 @@ export async function fetchSwadCoinBalance(phone: string, customerId?: string): 
     if (phone) params.append('phone', phone);
     if (customerId) params.append('customerId', customerId);
 
-    const res = await fetch(`/api/swad-coins/balance?${params.toString()}`);
+    const res = await fetch(`/api/swad-coins/balance?${params.toString()}`, {
+      credentials: 'same-origin',
+    });
     if (!res.ok) return 0;
     const data = await res.json();
     if (data.success && typeof data.balance === 'number') {
@@ -83,7 +87,9 @@ export async function fetchPendingRewards(phone: string, customerId?: string): P
     if (phone) params.append('phone', phone);
     if (customerId) params.append('customerId', customerId);
 
-    const res = await fetch(`/api/swad-coins/rewards/pending?${params.toString()}`);
+    const res = await fetch(`/api/swad-coins/rewards/pending?${params.toString()}`, {
+      credentials: 'same-origin',
+    });
     if (!res.ok) return [];
     const data = await res.json();
     if (data.success && Array.isArray(data.rewards)) {
@@ -104,6 +110,7 @@ export async function claimPendingReward(
   try {
     const res = await fetch(`/api/swad-coins/rewards/${encodeURIComponent(rewardId)}/claim`, {
       method: 'POST',
+      credentials: 'same-origin',
       headers: {
         'Content-Type': 'application/json',
       },
@@ -134,7 +141,9 @@ export async function fetchSwadCoinTransactions(phone: string, customerId?: stri
     if (phone) params.append('phone', phone);
     if (customerId) params.append('customerId', customerId);
 
-    const res = await fetch(`/api/swad-coins/transactions?${params.toString()}`);
+    const res = await fetch(`/api/swad-coins/transactions?${params.toString()}`, {
+      credentials: 'same-origin',
+    });
     if (!res.ok) return [];
     const data = await res.json();
     if (data.success && Array.isArray(data.transactions)) {

@@ -24,6 +24,10 @@ import { MyOrdersPage } from './pages/MyOrdersPage';
 import { AboutPage } from './pages/AboutPage';
 import { ContactPage } from './pages/ContactPage';
 import { CategoriesPage } from './pages/CategoriesPage';
+import { PrivacyPolicyPage } from './pages/PrivacyPolicyPage';
+import { TermsPage } from './pages/TermsPage';
+import { RefundPolicyPage } from './pages/RefundPolicyPage';
+import { ShippingPolicyPage } from './pages/ShippingPolicyPage';
 
 import { OwnerLoginPage } from './pages/owner/OwnerLoginPage';
 import { OwnerResetPasswordPage } from './pages/owner/OwnerResetPasswordPage';
@@ -156,6 +160,14 @@ const AppContent: React.FC = () => {
         return <AboutPage />;
       case '/contact':
         return <ContactPage />;
+      case '/privacy-policy':
+        return <PrivacyPolicyPage />;
+      case '/terms':
+        return <TermsPage />;
+      case '/refund-policy':
+        return <RefundPolicyPage />;
+      case '/shipping-policy':
+        return <ShippingPolicyPage />;
       default:
         return <HomePage />;
     }

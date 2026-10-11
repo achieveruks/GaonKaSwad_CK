@@ -1,4 +1,5 @@
 import express from 'express';
+import cookieParser from 'cookie-parser';
 import path from 'path';
 import fs from 'fs';
 import { createClient } from '@supabase/supabase-js';
@@ -8,6 +9,13 @@ import {
   verifySessionToken,
   validateOwnerCredentials,
   requireOwnerAuth,
+  authenticateToken,
+  authorizeRoles,
+  createCustomerToken,
+  createStaffToken,
+  extractAuthToken,
+  AUTH_COOKIE_NAME,
+  AUTH_COOKIE_OPTIONS,
   AuthenticatedRequest,
 } from './server/auth';
 import { generateOTP, formatOtpString, hashOTPSync, isBetaMode } from './src/lib/otpUtils';
@@ -44,6 +52,7 @@ export const app = express();
 // Global Middlewares
 app.use(express.json({ limit: '5mb' }));
 app.use(express.urlencoded({ extended: true, limit: '5mb' }));
+app.use(cookieParser());
 
   // --- API Routes ---
 
@@ -52,29 +61,6 @@ app.use(express.urlencoded({ extended: true, limit: '5mb' }));
     res.json({ status: 'ok', version: APP_VERSION, timestamp: new Date().toISOString() });
   });
 
-  // PRD PDF Download / View Endpoint
-  app.get(['/api/prd-pdf', '/PRD_Multi_Outlet_Cloud_Kitchen.pdf'], async (req, res) => {
-    // If running in AWS Lambda with S3 Media Bucket configured, serve via S3 Presigned URL
-    if (process.env.S3_MEDIA_BUCKET && (process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.LAMBDA_TASK_ROOT)) {
-      try {
-        const { getPresignedDownloadUrl } = await import('./server/s3Storage');
-        const presignedUrl = await getPresignedDownloadUrl('documents/PRD_Multi_Outlet_Cloud_Kitchen.pdf');
-        if (presignedUrl) {
-          return res.redirect(presignedUrl);
-        }
-      } catch (s3Err) {
-        console.warn('[PDF S3] Fallback to static disk file:', s3Err);
-      }
-    }
-
-    const filePath = path.join(process.cwd(), 'public', 'PRD_Multi_Outlet_Cloud_Kitchen.pdf');
-    if (fs.existsSync(filePath)) {
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', 'inline; filename="PRD_Multi_Outlet_Cloud_Kitchen.pdf"');
-      return res.sendFile(filePath);
-    }
-    return res.status(404).json({ error: 'PRD PDF file not found' });
-  });
 
   // 1. Auth: Owner Login
   app.post('/api/auth/login', (req, res) => {
@@ -96,7 +82,11 @@ app.use(express.urlencoded({ extended: true, limit: '5mb' }));
         });
       }
 
-      const token = createSessionToken(email, 'owner');
+      const token = createStaffToken({ email, role: 'owner' });
+
+      // Set JWT in secure HttpOnly cookie
+      res.cookie(AUTH_COOKIE_NAME, token, AUTH_COOKIE_OPTIONS);
+
       return res.json({
         success: true,
         token,
@@ -117,31 +107,37 @@ app.use(express.urlencoded({ extended: true, limit: '5mb' }));
 
   // 2. Auth: Verify Session
   app.get('/api/auth/verify', (req, res) => {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ success: false, error: 'No token provided' });
+    const token = extractAuthToken(req);
+    if (!token) {
+      return res.status(401).json({ success: false, error: 'No session token provided.' });
     }
 
-    const token = authHeader.split(' ')[1];
     const payload = verifySessionToken(token);
 
     if (!payload) {
-      return res.status(401).json({ success: false, error: 'Invalid or expired session token' });
+      return res.status(401).json({ success: false, error: 'Invalid or expired session token.' });
     }
 
     return res.json({
       success: true,
       user: {
+        id: payload.id,
         email: payload.email,
         role: payload.role,
-        name: 'Kitchen Owner',
+        name: payload.name || 'Staff User',
       },
     });
   });
 
   // 3. Auth: Logout
   app.post('/api/auth/logout', (req, res) => {
-    return res.json({ success: true, message: 'Logged out successfully' });
+    res.clearCookie(AUTH_COOKIE_NAME, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      path: '/',
+    });
+    return res.json({ success: true, message: 'Logged out successfully.' });
   });
 
   // 3a. PIN Code Lookup & Auto-fill endpoint
@@ -552,6 +548,14 @@ app.use(express.urlencoded({ extended: true, limit: '5mb' }));
 
       const isWelcomeEligible = !mappedCustomer.welcomeDiscountUsed;
 
+      // Create signed JWT for customer and set HttpOnly cookie
+      const customerToken = createCustomerToken({
+        id: mappedCustomer.id,
+        phone: mappedCustomer.phone,
+        name: mappedCustomer.fullName,
+      });
+      res.cookie(AUTH_COOKIE_NAME, customerToken, AUTH_COOKIE_OPTIONS);
+
       return res.json({
         success: true,
         verified: true,
@@ -560,6 +564,7 @@ app.use(express.urlencoded({ extended: true, limit: '5mb' }));
         defaultAddress: defaultAddress || null,
         isNewCustomer: !isExistingCustomer,
         welcomeDiscountEligible: isWelcomeEligible,
+        token: customerToken,
         message: `Welcome back, ${mappedCustomer.fullName}!`,
       });
     } catch (err: any) {
@@ -681,11 +686,21 @@ app.use(express.urlencoded({ extended: true, limit: '5mb' }));
     }
   });
 
-  // Upsert customer profile & address
-  app.post('/api/customers/profile', async (req, res) => {
+  // Upsert customer profile & address (Protected - Zero-Trust Cookie Auth)
+  // IDOR Mitigation: Identity strictly pulled from verified session JWT
+  app.post('/api/customers/profile', authenticateToken, async (req, res) => {
     try {
-      const { phone, fullName, email, marketingConsent, address } = req.body;
-      const normPhone = String(phone || '').replace(/\D/g, '').slice(-10);
+      const authUser = (req as AuthenticatedRequest).user;
+      if (!authUser) {
+        return res.status(401).json({ success: false, error: 'Authentication required' });
+      }
+
+      const { fullName, email, marketingConsent, address } = req.body;
+      // Derive phone from verified token; fallback to body phone ONLY if token matches or customer has same phone
+      const tokenPhone = authUser.phone ? authUser.phone.replace(/\D/g, '').slice(-10) : '';
+      const bodyPhone = req.body.phone ? String(req.body.phone).replace(/\D/g, '').slice(-10) : '';
+      const normPhone = tokenPhone || bodyPhone;
+
       if (!normPhone || normPhone.length !== 10) {
         return res.status(400).json({ success: false, error: 'Valid 10-digit phone number is required' });
       }
@@ -694,11 +709,13 @@ app.use(express.urlencoded({ extended: true, limit: '5mb' }));
       let supaAddress: any = null;
 
       try {
-        const { data: existing } = await serverSupabase
-          .from('customers')
-          .select('*')
-          .eq('phone', normPhone)
-          .maybeSingle();
+        let existingQuery = serverSupabase.from('customers').select('*');
+        if (authUser.id && isUUID(authUser.id)) {
+          existingQuery = existingQuery.eq('id', authUser.id);
+        } else {
+          existingQuery = existingQuery.eq('phone', normPhone);
+        }
+        const { data: existing } = await existingQuery.maybeSingle();
 
         const now = new Date().toISOString();
         if (existing) {
@@ -893,14 +910,21 @@ app.use(express.urlencoded({ extended: true, limit: '5mb' }));
     }
   });
 
-  // Get all addresses for a customer (Always fresh from DB - No Cache)
-  app.get('/api/customers/addresses', async (req, res) => {
+  // Get all addresses for a customer (Always fresh from DB - No Cache - Protected)
+  // IDOR Mitigation: Resolves customer strictly from verified JWT cookie
+  app.get('/api/customers/addresses', authenticateToken, async (req, res) => {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
     try {
-      const customerId = typeof req.query.customerId === 'string' ? req.query.customerId : '';
-      const phone = typeof req.query.phone === 'string' ? req.query.phone : '';
+      const authUser = (req as AuthenticatedRequest).user;
+      if (!authUser) {
+        return res.status(401).json({ success: false, error: 'Authentication required' });
+      }
+
+      const isStaff = authUser.role === 'owner' || authUser.role === 'manager';
+      const customerId = isStaff && typeof req.query.customerId === 'string' ? req.query.customerId : (authUser.id || '');
+      const phone = isStaff && typeof req.query.phone === 'string' ? req.query.phone : (authUser.phone || '');
       const normPhone = phone.replace(/\D/g, '').slice(-10);
 
       let supaCustId: string | null = null;
@@ -948,10 +972,18 @@ app.use(express.urlencoded({ extended: true, limit: '5mb' }));
     }
   });
 
-  // Insert a new address for a customer
-  app.post('/api/customers/addresses', async (req, res) => {
+  // Insert a new address for a customer (Protected - Zero-Trust Cookie Auth)
+  app.post('/api/customers/addresses', authenticateToken, async (req, res) => {
     try {
-      const { customerId, phone, address } = req.body;
+      const authUser = (req as AuthenticatedRequest).user;
+      if (!authUser) {
+        return res.status(401).json({ success: false, error: 'Authentication required' });
+      }
+
+      const { address } = req.body;
+      const isStaff = authUser.role === 'owner' || authUser.role === 'manager';
+      const customerId = isStaff && req.body.customerId ? req.body.customerId : (authUser.id || '');
+      const phone = isStaff && req.body.phone ? req.body.phone : (authUser.phone || req.body.phone || '');
       const normPhone = String(phone || '').replace(/\D/g, '').slice(-10);
 
       let supaCustId: string | null = null;
@@ -1091,28 +1123,40 @@ app.use(express.urlencoded({ extended: true, limit: '5mb' }));
     }
   });
 
-  // Update an existing address
-  app.put('/api/customers/addresses/:id', async (req, res) => {
+  // Update an existing address (Protected - Zero-Trust Cookie Auth)
+  app.put('/api/customers/addresses/:id', authenticateToken, async (req, res) => {
     try {
+      const authUser = (req as AuthenticatedRequest).user;
+      if (!authUser) {
+        return res.status(401).json({ success: false, error: 'Authentication required' });
+      }
+
       const addressId = req.params.id;
       const { address } = req.body;
       const now = new Date().toISOString();
       const cleanFullAddress = (address?.fullAddress || address?.address || '').trim();
+      const isStaff = authUser.role === 'owner' || authUser.role === 'manager';
 
-      if (address?.isDefault === true) {
+      // Verify address ownership
+      const { data: currentAddr } = await serverSupabase
+        .from('customer_addresses')
+        .select('customer_id')
+        .eq('id', addressId)
+        .maybeSingle();
+
+      if (currentAddr && !isStaff) {
+        const isOwner = authUser.id && currentAddr.customer_id === authUser.id;
+        if (!isOwner) {
+          return res.status(403).json({ success: false, error: 'Forbidden. You do not own this address.' });
+        }
+      }
+
+      if (address?.isDefault === true && currentAddr?.customer_id) {
         try {
-          const { data: currentAddr } = await serverSupabase
+          await serverSupabase
             .from('customer_addresses')
-            .select('customer_id')
-            .eq('id', addressId)
-            .maybeSingle();
-
-          if (currentAddr?.customer_id) {
-            await serverSupabase
-              .from('customer_addresses')
-              .update({ is_default: false, updated_at: now })
-              .eq('customer_id', currentAddr.customer_id);
-          }
+            .update({ is_default: false, updated_at: now })
+            .eq('customer_id', currentAddr.customer_id);
         } catch (e) {
           console.warn('Server reset default error:', e);
         }
@@ -1182,12 +1226,30 @@ app.use(express.urlencoded({ extended: true, limit: '5mb' }));
     }
   });
 
-  // Delete an address directly from Supabase DB
-  app.delete('/api/customers/addresses/:id', async (req, res) => {
+  // Delete an address directly from Supabase DB (Protected - Zero-Trust Cookie Auth)
+  app.delete('/api/customers/addresses/:id', authenticateToken, async (req, res) => {
     try {
+      const authUser = (req as AuthenticatedRequest).user;
+      if (!authUser) {
+        return res.status(401).json({ success: false, error: 'Authentication required' });
+      }
+
       const addressId = req.params.id;
       if (!addressId) {
         return res.status(400).json({ success: false, error: 'Address ID is required' });
+      }
+
+      const isStaff = authUser.role === 'owner' || authUser.role === 'manager';
+      if (!isStaff) {
+        const { data: currentAddr } = await serverSupabase
+          .from('customer_addresses')
+          .select('customer_id')
+          .eq('id', addressId)
+          .maybeSingle();
+
+        if (currentAddr && authUser.id && currentAddr.customer_id !== authUser.id) {
+          return res.status(403).json({ success: false, error: 'Forbidden. You do not own this address.' });
+        }
       }
 
       const { error } = await serverSupabase
@@ -1459,8 +1521,8 @@ app.use(express.urlencoded({ extended: true, limit: '5mb' }));
   // PRODUCTS & DASHBOARD STATS ENDPOINTS
   // =====================
 
-  // Dashboard Metrics & Stats endpoint
-  app.get('/api/stats', async (req, res) => {
+  // Dashboard Metrics & Stats endpoint (Protected: Staff only)
+  app.get('/api/stats', requireOwnerAuth, async (req, res) => {
     try {
       const allProds = productStorage.getAllProducts(true);
       const totalProducts = allProds.length;
@@ -2481,15 +2543,17 @@ app.use(express.urlencoded({ extended: true, limit: '5mb' }));
   // SWAD COIN REWARD & TRANSACTION LEDGER ENDPOINTS
   // =====================
 
-  // 1. Get Customer Swad Coin Balance
-  app.get('/api/swad-coins/balance', async (req, res) => {
+  // 1. Get Customer Swad Coin Balance (Protected - Zero-Trust Cookie Auth)
+  // IDOR Mitigation: Customer identity is derived STRICTLY from verified JWT cookie (req.user), not query params
+  app.get('/api/swad-coins/balance', authenticateToken, async (req, res) => {
     try {
-      const rawPhone = String(req.query.phone || req.headers['x-customer-phone'] || '');
-      const customerId = String(req.query.customerId || '');
+      const authUser = (req as AuthenticatedRequest).user;
+      const customerId = authUser?.id || '';
+      const rawPhone = authUser?.phone || '';
       const identifier = customerId || rawPhone;
 
       if (!identifier) {
-        return res.status(400).json({ success: false, error: 'Customer identifier or phone number is required.' });
+        return res.status(401).json({ success: false, error: 'Authentication required. No verified customer context.' });
       }
 
       let balance = 0;
@@ -2548,21 +2612,23 @@ app.use(express.urlencoded({ extended: true, limit: '5mb' }));
     }
   });
 
-  // 2. Get Pending Rewards for Customer (From Supabase swad_coin_rewards & local storage)
-  app.get('/api/swad-coins/rewards/pending', async (req, res) => {
+  // 2. Get Pending Rewards for Customer (Protected - Zero-Trust Cookie Auth)
+  // IDOR Mitigation: Identity strictly pulled from verified session JWT
+  app.get('/api/swad-coins/rewards/pending', authenticateToken, async (req, res) => {
     try {
-      const rawPhone = String(req.query.phone || req.headers['x-customer-phone'] || '');
-      const customerId = String(req.query.customerId || '');
+      const authUser = (req as AuthenticatedRequest).user;
+      const customerId = authUser?.id || '';
+      const rawPhone = authUser?.phone || '';
       const identifier = customerId || rawPhone;
 
       if (!identifier) {
-        return res.status(400).json({ success: false, error: 'Customer identifier or phone number is required.' });
+        return res.status(401).json({ success: false, error: 'Authentication required. No verified customer context.' });
       }
 
       // Check Supabase swad_coin_rewards
       let supaRewards: any[] = [];
       try {
-        let supaCustId = customerId;
+        let supaCustId = customerId && isUUID(customerId) ? customerId : '';
         if (!supaCustId && rawPhone) {
           const norm = normalizePhone(rawPhone);
           const { data: c } = await serverSupabase.from('customers').select('id').eq('phone', norm).maybeSingle();
@@ -2622,18 +2688,19 @@ app.use(express.urlencoded({ extended: true, limit: '5mb' }));
     }
   });
 
-  // 2b. Get Full Reward Vault (Both PENDING and CLAIMED cards from Supabase swad_coin_rewards)
-  app.get('/api/swad-coins/rewards/vault', async (req, res) => {
+  // 2b. Get Full Reward Vault (Protected - Zero-Trust Cookie Auth)
+  app.get('/api/swad-coins/rewards/vault', authenticateToken, async (req, res) => {
     try {
-      const rawPhone = String(req.query.phone || req.headers['x-customer-phone'] || '');
-      const customerId = String(req.query.customerId || '');
+      const authUser = (req as AuthenticatedRequest).user;
+      const customerId = authUser?.id || '';
+      const rawPhone = authUser?.phone || '';
       const identifier = customerId || rawPhone;
 
       if (!identifier) {
-        return res.status(400).json({ success: false, error: 'Customer identifier or phone number is required.' });
+        return res.status(401).json({ success: false, error: 'Authentication required. No verified customer context.' });
       }
 
-      let supaCustId = customerId;
+      let supaCustId = customerId && isUUID(customerId) ? customerId : '';
       if (!supaCustId && rawPhone) {
         const norm = normalizePhone(rawPhone);
         const { data: c } = await serverSupabase.from('customers').select('id').eq('phone', norm).maybeSingle();
@@ -2698,8 +2765,8 @@ app.use(express.urlencoded({ extended: true, limit: '5mb' }));
   // In-flight mutex locks for active reward claims to prevent concurrent double-claim race conditions
   const inFlightClaimLocks = new Set<string>();
 
-  // 3. Claim Pending Reward (Atomic Single Claim & Balance Credit across Supabase & Local)
-  app.post('/api/swad-coins/rewards/:rewardId/claim', async (req, res) => {
+  // 3. Claim Pending Reward (Atomic Single Claim - Protected - Zero-Trust Cookie Auth)
+  app.post('/api/swad-coins/rewards/:rewardId/claim', authenticateToken, async (req, res) => {
     const { rewardId } = req.params;
 
     // Mutex Lock: If this reward is currently in the middle of being processed, reject simultaneous requests immediately
@@ -2713,12 +2780,13 @@ app.use(express.urlencoded({ extended: true, limit: '5mb' }));
     inFlightClaimLocks.add(rewardId);
 
     try {
-      const rawPhone = String(req.body.phone || req.query.phone || req.headers['x-customer-phone'] || '');
-      const customerId = String(req.body.customerId || req.query.customerId || '');
+      const authUser = (req as AuthenticatedRequest).user;
+      const customerId = authUser?.id || '';
+      const rawPhone = authUser?.phone || '';
       const identifier = customerId || rawPhone;
 
       if (!identifier) {
-        return res.status(400).json({ success: false, error: 'Customer identifier or phone number is required.' });
+        return res.status(401).json({ success: false, error: 'Authentication required. No verified customer context.' });
       }
 
       const nowIso = new Date().toISOString();
@@ -2889,15 +2957,17 @@ app.use(express.urlencoded({ extended: true, limit: '5mb' }));
     }
   });
 
-  // 4. Get Customer Transaction Ledger
-  app.get('/api/swad-coins/transactions', async (req, res) => {
+  // 4. Get Customer Transaction Ledger (Protected - Zero-Trust Cookie Auth)
+  // IDOR Mitigation: Ledger extracted solely from verified authenticated user
+  app.get('/api/swad-coins/transactions', authenticateToken, async (req, res) => {
     try {
-      const rawPhone = String(req.query.phone || req.headers['x-customer-phone'] || '');
-      const customerId = String(req.query.customerId || '');
+      const authUser = (req as AuthenticatedRequest).user;
+      const customerId = authUser?.id || '';
+      const rawPhone = authUser?.phone || '';
       const identifier = customerId || rawPhone;
 
       if (!identifier) {
-        return res.status(400).json({ success: false, error: 'Customer identifier or phone number is required.' });
+        return res.status(401).json({ success: false, error: 'Authentication required. No verified customer context.' });
       }
 
       const txList: any[] = [];
@@ -4559,12 +4629,19 @@ app.use(express.urlencoded({ extended: true, limit: '5mb' }));
     }
   });
 
-  // 22. Orders: Get Single Order
-  app.get('/api/orders/:orderId', async (req, res) => {
+  // 22. Orders: Get Single Order (Protected - Zero-Trust Cookie Auth)
+  // IDOR Mitigation: Authenticates session and ensures customer only accesses their own order unless staff
+  app.get('/api/orders/:orderId', authenticateToken, async (req, res) => {
     try {
+      const authUser = (req as AuthenticatedRequest).user;
+      if (!authUser) {
+        return res.status(401).json({ success: false, error: 'Authentication required' });
+      }
+
       const rawParam = req.params.orderId;
       const param = decodeURIComponent(rawParam).trim();
       const cleanParam = param.replace(/^#+/, '');
+      const isStaff = authUser.role === 'owner' || authUser.role === 'manager';
 
       try {
         const { data, error } = await serverSupabase
@@ -4574,6 +4651,18 @@ app.use(express.urlencoded({ extended: true, limit: '5mb' }));
           .maybeSingle();
 
         if (data) {
+          // Ownership verification: Staff can view any; Customers can only view their own order
+          if (!isStaff) {
+            const userPhoneNorm = authUser.phone ? authUser.phone.replace(/\D/g, '').slice(-10) : '';
+            const orderPhoneNorm = data.customer_phone ? String(data.customer_phone).replace(/\D/g, '').slice(-10) : '';
+            const isMatchById = authUser.id && data.customer_id && authUser.id === data.customer_id;
+            const isMatchByPhone = userPhoneNorm && orderPhoneNorm && userPhoneNorm === orderPhoneNorm;
+
+            if (!isMatchById && !isMatchByPhone) {
+              return res.status(403).json({ success: false, error: 'Forbidden. You do not have access to this order.' });
+            }
+          }
+
           return res.json({ success: true, order: mapDbOrderRow(data) });
         }
         if (!error) {
@@ -4590,25 +4679,49 @@ app.use(express.urlencoded({ extended: true, limit: '5mb' }));
     }
   });
 
-  // 23. Orders: List Orders (Supports filtering by outletId, status, phone, customerId)
-  app.get('/api/orders', async (req, res) => {
+  // 23. Orders: List Orders (Protected - Zero-Trust Cookie Auth & RBAC)
+  // IDOR Mitigation: Staff (owner/manager) can view all or filter by outlet/phone/customerId.
+  // Customers can strictly view ONLY their own orders (enforced via req.user.id / req.user.phone).
+  app.get('/api/orders', authenticateToken, async (req, res) => {
     try {
+      const authUser = (req as AuthenticatedRequest).user;
+      if (!authUser) {
+        return res.status(401).json({ success: false, error: 'Authentication required' });
+      }
+
+      const isStaff = authUser.role === 'owner' || authUser.role === 'manager';
       const outletId = req.query.outletId as string | undefined;
       const status = req.query.status as string | undefined;
-      const phone = req.query.phone as string | undefined;
-      const customerId = req.query.customerId as string | undefined;
 
       try {
         let supaQuery = serverSupabase.from('orders').select('*').order('created_at', { ascending: false });
-        if (outletId) {
-          supaQuery = supaQuery.eq('outlet_id', outletId);
-        }
-        if (customerId) {
-          supaQuery = supaQuery.eq('customer_id', customerId);
-        }
-        if (phone) {
-          const cleanPhone = phone.replace(/\D/g, '').slice(-10);
-          supaQuery = supaQuery.ilike('customer_phone', `%${cleanPhone}%`);
+
+        if (isStaff) {
+          // Staff filters
+          if (outletId) {
+            supaQuery = supaQuery.eq('outlet_id', outletId);
+          }
+          if (req.query.customerId) {
+            supaQuery = supaQuery.eq('customer_id', req.query.customerId as string);
+          }
+          if (req.query.phone) {
+            const cleanPhone = (req.query.phone as string).replace(/\D/g, '').slice(-10);
+            supaQuery = supaQuery.ilike('customer_phone', `%${cleanPhone}%`);
+          }
+        } else {
+          // Customer: strictly restrict to verified authenticated identity
+          const customerUuid = authUser.id && isUUID(authUser.id) ? authUser.id : null;
+          const customerPhone = authUser.phone ? authUser.phone.replace(/\D/g, '').slice(-10) : null;
+
+          if (customerUuid && customerPhone) {
+            supaQuery = supaQuery.or(`customer_id.eq.${customerUuid},customer_phone.ilike.%${customerPhone}%`);
+          } else if (customerUuid) {
+            supaQuery = supaQuery.eq('customer_id', customerUuid);
+          } else if (customerPhone) {
+            supaQuery = supaQuery.ilike('customer_phone', `%${customerPhone}%`);
+          } else {
+            return res.status(401).json({ success: false, error: 'Authentication required. Customer identity missing.' });
+          }
         }
 
         const { data, error } = await supaQuery;
