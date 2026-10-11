@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import cookieParser from 'cookie-parser';
 import path from 'path';
@@ -20,6 +21,7 @@ import {
 } from './server/auth';
 import { generateOTP, formatOtpString, hashOTPSync, isBetaMode } from './src/lib/otpUtils';
 import { APP_VERSION } from './src/version';
+import { generalApiLimiter, authLoginLimiter, otpRateLimiter } from './server/rateLimiter';
 
 // Supabase Server Client
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || 'https://ifthfunawntmqjupafxp.supabase.co';
@@ -49,10 +51,16 @@ const isUUID = (str?: string | null): boolean => {
 // Express App instance exported for AWS Lambda (@codegenie/serverless-express) and local server
 export const app = express();
 
+// Trust proxy for reverse proxies, Cloud Run, AWS API Gateway, and Cloudflare
+app.set('trust proxy', 1);
+
 // Global Middlewares
 app.use(express.json({ limit: '5mb' }));
 app.use(express.urlencoded({ extended: true, limit: '5mb' }));
 app.use(cookieParser());
+
+// P0 API Rate Limiting: General API Limiter (Tier 1: 100 req/min per IP, skips /api/health)
+app.use('/api', generalApiLimiter);
 
   // --- API Routes ---
 
@@ -62,8 +70,8 @@ app.use(cookieParser());
   });
 
 
-  // 1. Auth: Owner Login
-  app.post('/api/auth/login', (req, res) => {
+  // 1. Auth: Owner Login (Protected with Tier 2 rate limiting: max 5 attempts per minute per IP)
+  app.post('/api/auth/login', authLoginLimiter, (req, res) => {
     try {
       const { email, password } = req.body;
 
@@ -230,8 +238,8 @@ app.use(cookieParser());
     }
   });
 
-  // 3b. Auth: Customer Send OTP
-  app.post('/api/auth/send-otp', async (req, res) => {
+  // 3b. Auth: Customer Send OTP (/api/auth/send-otp and /api/otp/send - Protected with Tier 3 rate limiting)
+  app.post(['/api/auth/send-otp', '/api/otp/send'], otpRateLimiter, async (req, res) => {
     try {
       const { phone } = req.body;
       const rawPhone = String(phone || '').trim();
@@ -329,8 +337,8 @@ app.use(cookieParser());
     }
   });
 
-  // 3c. Auth: Customer Verify OTP (Validated against customer_otps hash or beta formula)
-  app.post('/api/auth/verify-otp', async (req, res) => {
+  // 3c. Auth: Customer Verify OTP (/api/auth/verify-otp and /api/otp/verify - Protected with Tier 3 rate limiting)
+  app.post(['/api/auth/verify-otp', '/api/otp/verify'], otpRateLimiter, async (req, res) => {
     try {
       const { phone, otp, fullName, email } = req.body;
       const rawPhone = String(phone || '').trim();

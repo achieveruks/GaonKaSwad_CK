@@ -32,7 +32,7 @@ interface CustomerContextType {
     extraData?: { fullName?: string; email?: string }
   ) => void;
   closeOtpModal: () => void;
-  sendOtp: (phone: string) => Promise<{ success: boolean; exists: boolean; message?: string; error?: string }>;
+  sendOtp: (phone: string) => Promise<{ success: boolean; exists: boolean; message?: string; error?: string; code?: string; retryAfter?: number }>;
   verifyOtp: (
     phone: string,
     otp: string,
@@ -40,6 +40,8 @@ interface CustomerContextType {
   ) => Promise<{
     success: boolean;
     error?: string;
+    code?: string;
+    retryAfter?: number;
     customer?: Customer | null;
     defaultAddress?: CustomerAddress | null;
     welcomeDiscountEligible?: boolean;
@@ -572,17 +574,40 @@ export const CustomerProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ phone: normPhone }),
         });
+
+        if (res.status === 429) {
+          const errData = await res.json().catch(() => ({}));
+          const retrySec = Number(errData.retryAfter) || 600;
+          return {
+            success: false,
+            exists: existsInSupabase,
+            code: 'RATE_LIMIT_EXCEEDED',
+            retryAfter: retrySec,
+            error: errData.error || `Too many verification requests. Please wait ${Math.ceil(retrySec / 60)} minutes before trying again.`,
+          };
+        }
+
         if (res.ok) {
           serverData = await res.json();
           if (serverData.success) {
             serverResponseOk = true;
+          }
+        } else {
+          // If server responded with a client error like 400 invalid phone, don't fallback
+          const errData = await res.json().catch(() => ({}));
+          if (errData?.error) {
+            return {
+              success: false,
+              exists: existsInSupabase,
+              error: errData.error,
+            };
           }
         }
       } catch (networkErr) {
         console.warn('Server /api/auth/send-otp unreachable, falling back to direct Supabase OTP creation:', networkErr);
       }
 
-      // If server API wasn't reachable or failed (e.g. static hosting returning 404),
+      // If server API wasn't reachable (e.g. offline / direct static client),
       // generate OTP and save hash directly in Supabase customer_otps table
       if (!serverResponseOk) {
         const supaResult = await generateAndSaveSupabaseOtp(normPhone, supaCustId);
@@ -644,6 +669,17 @@ export const CustomerProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           body: JSON.stringify({ phone: normPhone, otp: cleanOtp, ...extraData }),
         });
 
+        if (res.status === 429) {
+          const errData = await res.json().catch(() => ({}));
+          const retrySec = Number(errData.retryAfter) || 600;
+          return {
+            success: false,
+            code: 'RATE_LIMIT_EXCEEDED',
+            retryAfter: retrySec,
+            error: errData.error || `Too many verification attempts. Please wait ${Math.ceil(retrySec / 60)} minutes before trying again.`,
+          };
+        }
+
         if (res.ok) {
           const data = await res.json();
           if (data.success) {
@@ -658,6 +694,12 @@ export const CustomerProvider: React.FC<{ children: React.ReactNode }> = ({ chil
               error: data.error || 'Invalid OTP. Please check the code and try again.',
             };
           }
+        } else {
+          const errData = await res.json().catch(() => ({}));
+          return {
+            success: false,
+            error: errData.error || 'Invalid OTP. Please check the code and try again.',
+          };
         }
       } catch (serverErr) {
         console.warn('Server /api/auth/verify-otp call failed, falling back to direct Supabase OTP verification:', serverErr);

@@ -1572,7 +1572,7 @@ export const CheckoutPage: React.FC = () => {
       console.warn('Backend order API notice, falling back to direct Supabase persistence:', apiErr);
     }
 
-    // Direct Supabase persistence fallback (e.g. for static hosting like Vercel)
+    // Direct Supabase persistence fallback if backend API is unreachable
     if (!orderPersisted && isSupabaseConfigured()) {
       try {
         const directSaved = await createSupabaseOrder(

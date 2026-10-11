@@ -124,7 +124,12 @@ export const OtpModal: React.FC<OtpModalProps> = ({
         setInfoNotice(`No account found for +91 ${normPhone}. Please enter your details below to create an account.`);
       } else {
         // Customer exists: Send OTP & Proceed to OTP interface
-        await context.sendOtp(normPhone);
+        const otpResult = await context.sendOtp(normPhone);
+        setIsLoading(false);
+        if (!otpResult.success) {
+          setError(otpResult.error || 'Failed to send verification code.');
+          return;
+        }
         setView('otp');
         setInfoNotice(`A 6-digit verification code has been sent to +91 ${normPhone}.`);
         setOtp(['', '', '', '', '', '']);
@@ -167,9 +172,13 @@ export const OtpModal: React.FC<OtpModalProps> = ({
 
     try {
       // Trigger OTP generation and transition to OTP screen
-      await context.sendOtp(normPhone);
-
+      const otpResult = await context.sendOtp(normPhone);
       setIsLoading(false);
+      if (!otpResult.success) {
+        setError(otpResult.error || 'Failed to send verification code.');
+        return;
+      }
+
       setView('otp');
       setInfoNotice(`A 6-digit verification code has been sent to +91 ${normPhone}.`);
       setOtp(['', '', '', '', '', '']);
@@ -263,11 +272,18 @@ export const OtpModal: React.FC<OtpModalProps> = ({
 
   const handleResendOtp = async () => {
     setError(null);
-    setResendTimer(30);
     const normPhone = phone.replace(/\D/g, '').slice(-10);
     if (normPhone) {
-      await context.sendOtp(normPhone);
-      setInfoNotice('A new 6-digit verification code has been sent to your mobile number.');
+      const otpResult = await context.sendOtp(normPhone);
+      if (!otpResult.success) {
+        setError(otpResult.error || 'Failed to send verification code.');
+        if (otpResult.retryAfter) {
+          setResendTimer(otpResult.retryAfter);
+        }
+      } else {
+        setResendTimer(30);
+        setInfoNotice('A new 6-digit verification code has been sent to your mobile number.');
+      }
     }
   };
 
