@@ -5480,13 +5480,23 @@ app.use('/api', generalApiLimiter);
 
   // --- Local Development & Standalone Server Startup ---
   export async function startServer() {
-    const PORT = Number(process.env.PORT) || 3000;
+    const portArgIndex = process.argv.indexOf('--port');
+    const cliPort = portArgIndex !== -1 && process.argv[portArgIndex + 1] ? Number(process.argv[portArgIndex + 1]) : null;
+    const PORT =
+      cliPort ||
+      (process.env.DEFAULT_APP_PORT ? Number(process.env.DEFAULT_APP_PORT) : null) ||
+      (process.env.PORT ? Number(process.env.PORT) : 3000);
 
     // Vite Dev Middleware or Static Production Serving
     if (process.env.NODE_ENV !== 'production') {
       const { createServer: createViteServer } = await import('vite');
+      const isHmrDisabled = process.env.DISABLE_HMR === 'true';
       const vite = await createViteServer({
-        server: { middlewareMode: true },
+        server: {
+          middlewareMode: true,
+          hmr: isHmrDisabled ? false : undefined,
+          watch: isHmrDisabled ? null : undefined,
+        },
         appType: 'spa',
       });
       app.use(vite.middlewares);
@@ -5523,9 +5533,23 @@ app.use('/api', generalApiLimiter);
       }
     }
 
-    app.listen(PORT, '0.0.0.0', () => {
+    const serverInstance = app.listen(PORT, '0.0.0.0', () => {
       console.log(`Gaon Ka Swad server running on http://localhost:${PORT}`);
     });
+
+    serverInstance.on('error', (err: any) => {
+      console.error(`[Server Network Error]:`, err);
+    });
+
+    const gracefulExit = () => {
+      serverInstance.close(() => {
+        process.exit(0);
+      });
+    };
+    process.once('SIGTERM', gracefulExit);
+    process.once('SIGINT', gracefulExit);
+
+    return serverInstance;
   }
 
   // Only start HTTP listener if executed directly (e.g. tsx server.ts), not when imported by lambda.ts

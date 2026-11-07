@@ -62,6 +62,12 @@ export const CategoryCard: React.FC<CategoryCardProps> = ({
           className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
           referrerPolicy="no-referrer"
           loading="lazy"
+          onError={(e) => {
+            const target = e.currentTarget;
+            if (!target.src.includes('dum_biryanis.jpg')) {
+              target.src = '/images/categories/dum_biryanis.jpg?v=1';
+            }
+          }}
         />
         <div className="absolute inset-0 bg-gradient-to-t from-gray-950/85 via-gray-950/40 to-black/10" />
 
