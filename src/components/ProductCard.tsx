@@ -97,6 +97,12 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, viewMode = 'g
             }`}
             referrerPolicy="no-referrer"
             loading="lazy"
+            onError={(e) => {
+              const target = e.currentTarget;
+              if (!target.src.includes('photo-1563379091339-03b21ab4a4f8')) {
+                target.src = 'https://images.unsplash.com/photo-1563379091339-03b21ab4a4f8?q=80&w=800&auto=format&fit=crop';
+              }
+            }}
           />
 
           {/* Gradient overlay on hover */}

@@ -43,6 +43,12 @@ export const ProductGallery: React.FC<ProductGalleryProps> = ({
             transition={{ duration: 0.3 }}
             className="w-full h-full object-cover transition-transform duration-300"
             referrerPolicy="no-referrer"
+            onError={(e) => {
+              const target = e.currentTarget as HTMLImageElement;
+              if (!target.src.includes('photo-1563379091339-03b21ab4a4f8')) {
+                target.src = 'https://images.unsplash.com/photo-1563379091339-03b21ab4a4f8?q=80&w=800&auto=format&fit=crop';
+              }
+            }}
           />
         </AnimatePresence>
 

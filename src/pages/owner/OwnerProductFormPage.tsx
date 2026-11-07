@@ -34,11 +34,15 @@ interface OwnerProductFormPageProps {
 
 const SAMPLE_FOOD_IMAGES = [
   { label: 'Biryani Handi', url: 'https://images.unsplash.com/photo-1563379091339-03b21ab4a4f8?q=80&w=800&auto=format&fit=crop' },
-  { label: 'Butter Chicken / Paneer', url: 'https://images.unsplash.com/photo-1588166524941-3bf61a9c41db?q=80&w=800&auto=format&fit=crop' },
-  { label: 'Tandoori Tikka', url: 'https://images.unsplash.com/photo-1599488615731-7e5c2823ff28?q=80&w=800&auto=format&fit=crop' },
-  { label: 'Tandoori Naan', url: 'https://images.unsplash.com/photo-1601050690597-df0568f70950?q=80&w=800&auto=format&fit=crop' },
-  { label: 'Gulab Jamun / Dessert', url: 'https://images.unsplash.com/photo-1528735602780-2552fd46c7af?q=80&w=800&auto=format&fit=crop' },
-  { label: 'Dal Makhani Bowl', url: 'https://images.unsplash.com/photo-1546833999-b9f581a1996d?q=80&w=800&auto=format&fit=crop' },
+  { label: 'Butter Chicken Gravy', url: '/images/products/butter_chicken.jpg' },
+  { label: 'Tandoori Tikka', url: '/images/products/paneer_tikka.jpg' },
+  { label: 'Tandoori Murgh Grill', url: '/images/products/murgh_tandoori.jpg' },
+  { label: 'Dal Bukhara Makhani', url: '/images/products/dal_makhani.jpg' },
+  { label: 'Garlic Butter Naan', url: '/images/products/garlic_naan_basket.jpg' },
+  { label: 'Laccha Paratha', url: '/images/products/laccha_paratha.jpg' },
+  { label: 'Shahi Gulab Jamun', url: '/images/products/gulab_jamun.jpg' },
+  { label: 'Kesar Pista Kulfi', url: '/images/products/matka_kulfi.jpg' },
+  { label: 'Thandai & Lassi', url: '/images/products/thandai_lassi.jpg' },
 ];
 
 export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
