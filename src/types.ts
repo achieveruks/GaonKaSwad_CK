@@ -57,8 +57,57 @@ export interface OutletAbout {
   expCard3Title?: string;
   expCard3Header?: string;
   expCard3Description?: string;
+  // Utsav Specials Promotional Fields (Saved to DB 'abouts' table)
+  utsavPromoEnabled?: boolean;
+  utsavPromoHeading?: string;
+  utsavPromoDescription?: string;
+  utsavPromoCtaText?: string;
+  utsavPromoImage?: string;
+  utsavFestivalName?: string;
   createdAt?: string;
   updatedAt?: string;
+}
+
+export interface FestiveEvent {
+  id: string;
+  outletId: string;
+  name: string;
+  slug: string;
+  description?: string;
+  bannerImage: string;
+  festivalDate: string; // YYYY-MM-DD
+  bookingStartAt: string; // ISO 8601
+  bookingEndAt: string; // ISO 8601
+  status: 'active' | 'inactive' | 'completed';
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface OrderPaymentTransaction {
+  id: string;
+  orderId: string;
+  transactionType: 'advance' | 'balance' | 'full' | 'refund';
+  amount: number;
+  paymentMethod?: string;
+  status: 'pending' | 'success' | 'failed' | 'refunded';
+  gatewayPaymentId?: string;
+  gatewayReference?: string;
+  notes?: string;
+  paidAt?: string;
+  createdAt?: string;
+}
+
+export interface FestiveProductionItemSummary {
+  productId: string;
+  productName: string;
+  hindiName?: string;
+  image?: string;
+  confirmedBookings: number;
+  extraPlanned: number;
+  totalPreparation: number;
+  normalStockAvailable: number;
+  availabilityMode: 'normal' | 'prebook_only';
+  price: number;
 }
 
 export interface DeliveryZone {
@@ -227,6 +276,12 @@ export interface Product {
   ingredients?: string[];
   allergens?: string[];
   reviewsList?: Review[];
+  // Utsav Specials Festival Configuration
+  festiveEventId?: string;
+  availabilityMode?: 'normal' | 'prebook_only';
+  maxBookingQuantity?: number;
+  specialPackaging?: boolean;
+  festiveProduct?: boolean;
 }
 
 export type UserRole = 'owner' | 'outlet_manager' | 'customer';
@@ -421,6 +476,13 @@ export interface OrderItem {
   id?: string;
   price?: number;
   product?: Partial<Product>;
+  // Utsav Specials permanent order item snapshots
+  festivalName?: string;
+  festival_name?: string;
+  festivalDeliveryDate?: string;
+  festival_delivery_date?: string;
+  specialPackaging?: boolean;
+  special_packaging?: boolean;
 }
 
 export type CleanOrderItem = Omit<OrderItem, 'id' | 'price' | 'product'>;
@@ -434,8 +496,21 @@ export interface Order {
   isGuestCheckout?: boolean;
   outletId: string;
   outletName?: string;
-  orderType?: 'delivery' | 'pickup';
+  orderType?: 'delivery' | 'pickup' | 'prebook';
+  order_type?: string;
   isSelfPickup?: boolean;
+  paymentPlan?: 'full' | 'advance_25';
+  payment_plan?: string;
+  advanceAmount?: number;
+  advance_amount?: number;
+  balanceAmount?: number;
+  balance_amount?: number;
+  festiveEventId?: string;
+  festive_event_id?: string;
+  festivalDeliveryAt?: string;
+  festival_delivery_at?: string;
+  festivalName?: string;
+  festival_name?: string;
   deliveryType?: 'immediate' | 'scheduled';
   delivery_type?: 'immediate' | 'scheduled';
   deliveryNotes?: string;

@@ -26,6 +26,7 @@ export type AppRoute =
   | { path: '/owner/outlets/edit'; outletId: string }
   | { path: '/owner/delivery-zones' }
   | { path: '/owner/coupons' }
+  | { path: '/owner/utsav-specials' }
   | { path: '/owner/reset-password' }
   | { path: '/manager/dashboard' };
 
@@ -57,6 +58,7 @@ interface NavigationContextType {
   goToOwnerEditOutlet: (outletId: string) => void;
   goToOwnerDeliveryZones: () => void;
   goToOwnerCoupons: () => void;
+  goToOwnerUtsavSpecials: () => void;
   goToOwnerResetPassword: () => void;
   goToManagerDashboard: () => void;
 }
@@ -148,6 +150,9 @@ function parseRouteSegments(main: string, params: URLSearchParams): AppRoute | n
   }
   if (main === 'owner/coupons' || main === 'owner-coupons') {
     return { path: '/owner/coupons' };
+  }
+  if (main === 'owner/utsav-specials' || main === 'owner-utsav-specials') {
+    return { path: '/owner/utsav-specials' };
   }
 
   // Outlet Manager Routes
@@ -254,6 +259,8 @@ function routeToUrl(route: AppRoute): string {
       return '/owner/delivery-zones';
     case '/owner/coupons':
       return '/owner/coupons';
+    case '/owner/utsav-specials':
+      return '/owner/utsav-specials';
     case '/owner/reset-password':
       return '/owner/reset-password';
     case '/manager/dashboard':
@@ -343,6 +350,7 @@ export const NavigationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     navigate({ path: '/owner/outlets/edit', outletId });
   const goToOwnerDeliveryZones = () => navigate({ path: '/owner/delivery-zones' });
   const goToOwnerCoupons = () => navigate({ path: '/owner/coupons' });
+  const goToOwnerUtsavSpecials = () => navigate({ path: '/owner/utsav-specials' });
   const goToOwnerResetPassword = () => navigate({ path: '/owner/reset-password' });
   const goToManagerDashboard = () => navigate({ path: '/manager/dashboard' });
 
@@ -376,6 +384,7 @@ export const NavigationProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         goToOwnerEditOutlet,
         goToOwnerDeliveryZones,
         goToOwnerCoupons,
+        goToOwnerUtsavSpecials,
         goToOwnerResetPassword,
         goToManagerDashboard,
       }}

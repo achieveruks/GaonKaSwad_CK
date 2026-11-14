@@ -131,6 +131,12 @@ export const OutletsPage: React.FC = () => {
     expCard3Title: '',
     expCard3Header: '',
     expCard3Description: '',
+    utsavPromoEnabled: false,
+    utsavPromoHeading: 'A Festival of Flavours!',
+    utsavPromoDescription: 'Celebrate every occasion with our exclusive Utsav Specials, freshly prepared with heritage recipes and pure desi ghee.',
+    utsavPromoCtaText: 'Explore Utsav Specials',
+    utsavPromoImage: 'https://images.unsplash.com/photo-1576871337632-b9aef4c17ab9?q=80&w=1200&auto=format&fit=crop',
+    utsavFestivalName: 'Utsav Specials',
   });
 
   // Per-outlet menu item states in modal
@@ -515,6 +521,12 @@ export const OutletsPage: React.FC = () => {
       expCard3Title: '',
       expCard3Header: '',
       expCard3Description: '',
+      utsavPromoEnabled: false,
+      utsavPromoHeading: 'A Festival of Flavours!',
+      utsavPromoDescription: 'Celebrate every occasion with our exclusive Utsav Specials, freshly prepared with heritage recipes and pure desi ghee.',
+      utsavPromoCtaText: 'Explore Utsav Specials',
+      utsavPromoImage: 'https://images.unsplash.com/photo-1576871337632-b9aef4c17ab9?q=80&w=1200&auto=format&fit=crop',
+      utsavFestivalName: 'Utsav Specials',
     });
     getAboutByOutletId(outlet.id)
       .then((ab) => {
@@ -2394,6 +2406,178 @@ export const OutletsPage: React.FC = () => {
                                   className="w-full px-2.5 py-1.5 bg-white border border-stone-200 rounded-lg text-xs text-stone-900 focus:outline-none focus:border-amber-700 resize-none"
                                 />
                               </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Third Section: Utsav Specials Homepage Promotion */}
+                    <div className="bg-stone-50/80 border border-stone-200 rounded-2xl p-4 sm:p-5 space-y-4">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <div className="w-7 h-7 rounded-lg bg-amber-100 border border-amber-200 flex items-center justify-center text-amber-800 shrink-0">
+                            <Sparkles className="w-4 h-4 text-amber-700" />
+                          </div>
+                          <div>
+                            <h3 className="font-bold text-xs text-stone-900 uppercase tracking-wider">
+                              3. Utsav Specials Homepage Promotion
+                            </h3>
+                            <p className="text-[11px] text-stone-500">
+                              Display an eye-catching festival pre-booking promotional banner on the left-hand hero side of the homepage.
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Enable / Disable Promotion Toggle */}
+                        <label className="flex items-center gap-2 cursor-pointer bg-white px-3 py-1.5 rounded-xl border border-stone-200 hover:bg-stone-50 transition-colors">
+                          <input
+                            type="checkbox"
+                            checked={!!aboutFormData.utsavPromoEnabled}
+                            onChange={(e) =>
+                              setAboutFormData({ ...aboutFormData, utsavPromoEnabled: e.target.checked })
+                            }
+                            className="w-4 h-4 rounded text-amber-800 focus:ring-amber-700 border-stone-300"
+                          />
+                          <span className="text-xs font-bold text-stone-800">
+                            {aboutFormData.utsavPromoEnabled ? 'Promotion Active' : 'Promotion Disabled'}
+                          </span>
+                        </label>
+                      </div>
+
+                      <div className="space-y-3 pt-1">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-xs font-semibold text-stone-700 mb-1">
+                              Festival / Campaign Label Tag
+                            </label>
+                            <input
+                              type="text"
+                              value={aboutFormData.utsavFestivalName || ''}
+                              onChange={(e) =>
+                                setAboutFormData({ ...aboutFormData, utsavFestivalName: e.target.value })
+                              }
+                              placeholder="e.g. Diwali Specials 2026 or Utsav Specials"
+                              className="w-full px-3 py-2 bg-white border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-xs font-semibold text-stone-700 mb-1">
+                              CTA Button Text
+                            </label>
+                            <input
+                              type="text"
+                              value={aboutFormData.utsavPromoCtaText || ''}
+                              onChange={(e) =>
+                                setAboutFormData({ ...aboutFormData, utsavPromoCtaText: e.target.value })
+                              }
+                              placeholder="e.g. Explore Utsav Specials"
+                              className="w-full px-3 py-2 bg-white border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700"
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-semibold text-stone-700 mb-1">
+                            Promotional Headline
+                          </label>
+                          <input
+                            type="text"
+                            value={aboutFormData.utsavPromoHeading || ''}
+                            onChange={(e) =>
+                              setAboutFormData({ ...aboutFormData, utsavPromoHeading: e.target.value })
+                            }
+                            placeholder="e.g. A Festival of Flavours!"
+                            className="w-full px-3 py-2 bg-white border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-semibold text-stone-700 mb-1">
+                            Promotional Description
+                          </label>
+                          <textarea
+                            rows={2}
+                            value={aboutFormData.utsavPromoDescription || ''}
+                            onChange={(e) =>
+                              setAboutFormData({ ...aboutFormData, utsavPromoDescription: e.target.value })
+                            }
+                            placeholder="e.g. Celebrate every occasion with our exclusive Utsav Specials, freshly prepared with heritage recipes and pure desi ghee."
+                            className="w-full px-3 py-2 bg-white border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700 resize-none"
+                          />
+                        </div>
+
+                        {/* Banner Image URL & Presets */}
+                        <div>
+                          <label className="block text-xs font-semibold text-stone-700 mb-1 flex items-center gap-1.5">
+                            <ImageIcon className="w-3.5 h-3.5 text-stone-500" />
+                            <span>Festival Banner Image URL</span>
+                          </label>
+                          <input
+                            type="url"
+                            value={aboutFormData.utsavPromoImage || ''}
+                            onChange={(e) =>
+                              setAboutFormData({ ...aboutFormData, utsavPromoImage: e.target.value })
+                            }
+                            placeholder="https://images.unsplash.com/..."
+                            className="w-full px-3 py-2 bg-white border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-700"
+                          />
+
+                          {/* Image preview & presets */}
+                          <div className="flex items-center gap-3 mt-2">
+                            <div className="w-16 h-12 rounded-lg bg-stone-200 border border-stone-300 overflow-hidden shrink-0">
+                              <img
+                                src={aboutFormData.utsavPromoImage || 'https://images.unsplash.com/photo-1576871337632-b9aef4c17ab9?q=80&w=1200&auto=format&fit=crop'}
+                                alt="Utsav Preview"
+                                className="w-full h-full object-cover"
+                                referrerPolicy="no-referrer"
+                                onError={(e) => {
+                                  (e.target as HTMLImageElement).src =
+                                    'https://images.unsplash.com/photo-1576871337632-b9aef4c17ab9?q=80&w=1200&auto=format&fit=crop';
+                                }}
+                              />
+                            </div>
+                            <div className="flex-1 flex flex-wrap gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setAboutFormData({
+                                    ...aboutFormData,
+                                    utsavPromoImage:
+                                      'https://images.unsplash.com/photo-1576871337632-b9aef4c17ab9?q=80&w=1200&auto=format&fit=crop',
+                                  })
+                                }
+                                className="px-2 py-0.5 text-[10px] bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-md font-medium cursor-pointer"
+                              >
+                                Diwali Lights
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setAboutFormData({
+                                    ...aboutFormData,
+                                    utsavPromoImage:
+                                      'https://images.unsplash.com/photo-1589301760014-d929f3979dbc?q=80&w=1200&auto=format&fit=crop',
+                                  })
+                                }
+                                className="px-2 py-0.5 text-[10px] bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-md font-medium cursor-pointer"
+                              >
+                                Royal Handi
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setAboutFormData({
+                                    ...aboutFormData,
+                                    utsavPromoImage:
+                                      'https://images.unsplash.com/photo-1599488615731-7e5c2823ff28?q=80&w=1200&auto=format&fit=crop',
+                                  })
+                                }
+                                className="px-2 py-0.5 text-[10px] bg-stone-100 hover:bg-stone-200 text-stone-700 rounded-md font-medium cursor-pointer"
+                              >
+                                Sweets & Mithai
+                              </button>
                             </div>
                           </div>
                         </div>

@@ -120,6 +120,16 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, viewMode = 'g
                 <span className="px-2 py-0.5 bg-stone-900/90 text-amber-300 font-bold text-[10px] uppercase tracking-wider rounded shadow-2xs border border-amber-400/40">
                   OUT OF STOCK
                 </span>
+              ) : product.availabilityMode === 'prebook_only' ? (
+                <span className="px-2 py-0.5 bg-gradient-to-r from-amber-700 to-amber-900 text-amber-200 font-bold text-[10px] uppercase tracking-wider rounded shadow-2xs flex items-center gap-1 border border-amber-500/50">
+                  <Sparkles className="w-2.5 h-2.5 fill-amber-300 text-amber-300" />
+                  PRE-BOOK ONLY
+                </span>
+              ) : product.festiveProduct ? (
+                <span className="px-2 py-0.5 bg-amber-700 text-amber-100 font-bold text-[10px] uppercase tracking-wider rounded shadow-2xs flex items-center gap-1 border border-amber-600">
+                  <Sparkles className="w-2.5 h-2.5 fill-amber-300 text-amber-300" />
+                  UTSAV SPECIAL
+                </span>
               ) : soldCount && soldCount > 0 ? (
                 <span className="px-2 py-0.5 bg-gradient-to-r from-orange-600 to-amber-600 text-white font-bold text-[10px] uppercase tracking-wider rounded shadow-2xs flex items-center gap-1">
                   <Flame className="w-2.5 h-2.5 fill-white" />
@@ -190,7 +200,14 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, viewMode = 'g
             <h3 className="font-bold text-stone-900 text-sm group-hover:text-amber-800 transition-colors line-clamp-1">
               {product.name}
             </h3>
-            <span className="text-amber-800 font-bold text-sm shrink-0">₹{product.price}</span>
+            <div className="text-right shrink-0">
+              <span className="text-amber-800 font-bold text-sm block">₹{product.price}</span>
+              {product.availabilityMode === 'prebook_only' && (
+                <span className="text-[9px] font-bold text-amber-900 bg-amber-50 px-1 py-0.2 rounded border border-amber-200 block">
+                  25% Adv: ₹{Math.round(product.price * 0.25)}
+                </span>
+              )}
+            </div>
           </div>
 
           {/* Short Description */}
@@ -260,11 +277,24 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, viewMode = 'g
               type="button"
               id={`add-to-cart-btn-${product.id}`}
               onClick={handleQuickAdd}
-              className="p-1.5 px-2.5 bg-amber-800 hover:bg-amber-900 active:bg-stone-950 text-white rounded-lg text-xs font-bold transition-colors shadow-2xs flex items-center gap-1"
-              aria-label={`Add ${product.name} to cart`}
+              className={`p-1.5 px-2.5 rounded-lg text-xs font-bold transition-colors shadow-2xs flex items-center gap-1 cursor-pointer ${
+                product.availabilityMode === 'prebook_only'
+                  ? 'bg-gradient-to-r from-amber-700 to-amber-900 hover:from-amber-800 hover:to-amber-950 text-white border border-amber-600/60 shadow-amber-950/20'
+                  : 'bg-amber-800 hover:bg-amber-900 active:bg-stone-950 text-white'
+              }`}
+              aria-label={product.availabilityMode === 'prebook_only' ? `Pre-book ${product.name}` : `Add ${product.name} to cart`}
             >
-              <Plus className="w-3.5 h-3.5" />
-              <span className="text-[11px] font-bold">Add</span>
+              {product.availabilityMode === 'prebook_only' ? (
+                <>
+                  <Sparkles className="w-3.5 h-3.5 text-amber-300 fill-amber-300" />
+                  <span className="text-[11px] font-bold">Pre-book</span>
+                </>
+              ) : (
+                <>
+                  <Plus className="w-3.5 h-3.5" />
+                  <span className="text-[11px] font-bold">Add</span>
+                </>
+              )}
             </button>
           )}
 

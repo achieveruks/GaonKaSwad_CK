@@ -37,6 +37,7 @@ import { OwnerProductFormPage } from './pages/owner/OwnerProductFormPage';
 import { OutletsPage } from './pages/owner/OutletsPage';
 import { DeliveryZonesPage } from './pages/owner/DeliveryZonesPage';
 import { CouponsPage } from './pages/owner/CouponsPage';
+import { OwnerUtsavSpecialsPage } from './pages/owner/OwnerUtsavSpecialsPage';
 import { ManagerDashboardPage } from './pages/manager/ManagerDashboardPage';
 
 const AppContent: React.FC = () => {
@@ -124,6 +125,13 @@ const AppContent: React.FC = () => {
         return (
           <>
             <CouponsPage />
+            <Toast />
+          </>
+        );
+      case '/owner/utsav-specials':
+        return (
+          <>
+            <OwnerUtsavSpecialsPage />
             <Toast />
           </>
         );

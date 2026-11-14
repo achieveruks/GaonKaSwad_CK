@@ -1,5 +1,5 @@
 import { supabase, isSupabaseConfigured } from './supabase';
-import { Product, Outlet, OutletAbout, DeliveryZone, Order, OrderItem, CleanOrderItem, Category, DashboardStats, Profile, UserRole, Customer, CustomerAddress, Coupon, CouponRedemption, CouponValidationResult } from '../types';
+import { Product, Outlet, OutletAbout, DeliveryZone, Order, OrderItem, CleanOrderItem, Category, DashboardStats, Profile, UserRole, Customer, CustomerAddress, Coupon, CouponRedemption, CouponValidationResult, FestiveEvent, OrderPaymentTransaction } from '../types';
 import { generateOTP, formatOtpString, hashOTP, isBetaMode } from './otpUtils';
 
 // ============================================================================
@@ -53,6 +53,12 @@ export function mapDbProductToProduct(row: any): Product {
     ingredients: Array.isArray(row.ingredients) ? row.ingredients : [],
     allergens: Array.isArray(row.allergens) ? row.allergens : [],
     reviewsList: [],
+    // Festive mappings
+    festiveEventId: row.festive_event_id || undefined,
+    availabilityMode: row.availability_mode || 'normal',
+    maxBookingQuantity: row.max_booking_quantity !== undefined && row.max_booking_quantity !== null ? Number(row.max_booking_quantity) : undefined,
+    specialPackaging: row.special_packaging !== undefined ? !!row.special_packaging : true,
+    festiveProduct: !!row.festive_product,
   };
 }
 
@@ -87,6 +93,11 @@ export function mapProductToDbProduct(p: Partial<Product>): any {
   if (p.addons !== undefined) dbObj.addons = p.addons;
   if (p.ingredients !== undefined) dbObj.ingredients = p.ingredients;
   if (p.allergens !== undefined) dbObj.allergens = p.allergens;
+  if (p.festiveEventId !== undefined) dbObj.festive_event_id = p.festiveEventId || null;
+  if (p.availabilityMode !== undefined) dbObj.availability_mode = p.availabilityMode;
+  if (p.maxBookingQuantity !== undefined) dbObj.max_booking_quantity = p.maxBookingQuantity !== null && p.maxBookingQuantity !== undefined ? Number(p.maxBookingQuantity) : null;
+  if (p.specialPackaging !== undefined) dbObj.special_packaging = !!p.specialPackaging;
+  if (p.festiveProduct !== undefined) dbObj.festive_product = !!p.festiveProduct;
   dbObj.updated_at = new Date().toISOString();
   return dbObj;
 }
@@ -210,6 +221,12 @@ export function mapDbAboutToAbout(row: any): OutletAbout {
     expCard3Title: row.exp_card3_title || undefined,
     expCard3Header: row.exp_card3_header || undefined,
     expCard3Description: row.exp_card3_description || undefined,
+    utsavPromoEnabled: row.utsav_promo_enabled !== undefined ? !!row.utsav_promo_enabled : false,
+    utsavPromoHeading: row.utsav_promo_heading || undefined,
+    utsavPromoDescription: row.utsav_promo_description || undefined,
+    utsavPromoCtaText: row.utsav_promo_cta_text || 'Explore Utsav Specials',
+    utsavPromoImage: row.utsav_promo_image || undefined,
+    utsavFestivalName: row.utsav_festival_name || undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -242,6 +259,12 @@ export function mapAboutToDbAbout(a: Partial<OutletAbout>): any {
   if (a.expCard3Title !== undefined) dbObj.exp_card3_title = a.expCard3Title;
   if (a.expCard3Header !== undefined) dbObj.exp_card3_header = a.expCard3Header;
   if (a.expCard3Description !== undefined) dbObj.exp_card3_description = a.expCard3Description;
+  if (a.utsavPromoEnabled !== undefined) dbObj.utsav_promo_enabled = !!a.utsavPromoEnabled;
+  if (a.utsavPromoHeading !== undefined) dbObj.utsav_promo_heading = a.utsavPromoHeading || null;
+  if (a.utsavPromoDescription !== undefined) dbObj.utsav_promo_description = a.utsavPromoDescription || null;
+  if (a.utsavPromoCtaText !== undefined) dbObj.utsav_promo_cta_text = a.utsavPromoCtaText || 'Explore Utsav Specials';
+  if (a.utsavPromoImage !== undefined) dbObj.utsav_promo_image = a.utsavPromoImage || null;
+  if (a.utsavFestivalName !== undefined) dbObj.utsav_festival_name = a.utsavFestivalName || null;
   dbObj.updated_at = new Date().toISOString();
   return dbObj;
 }
@@ -1572,7 +1595,20 @@ export function mapDbOrderToOrder(row: any): Order {
     addressId: row.address_id || row.customer_address_id || undefined,
     isSelfPickup: isPickup,
     isGuestCheckout: !row.customer_id,
-    orderType: (row.order_type || (isPickup ? 'pickup' : 'delivery')) as 'delivery' | 'pickup',
+    orderType: (row.order_type || (isPickup ? 'pickup' : 'delivery')) as any,
+    order_type: row.order_type || (isPickup ? 'pickup' : 'delivery'),
+    paymentPlan: (row.payment_plan || 'full') as any,
+    payment_plan: row.payment_plan || 'full',
+    advanceAmount: Number(row.advance_amount || 0),
+    advance_amount: Number(row.advance_amount || 0),
+    balanceAmount: Number(row.balance_amount || 0),
+    balance_amount: Number(row.balance_amount || 0),
+    festiveEventId: row.festive_event_id || undefined,
+    festive_event_id: row.festive_event_id || undefined,
+    festivalDeliveryAt: row.festival_delivery_at || undefined,
+    festival_delivery_at: row.festival_delivery_at || undefined,
+    festivalName: row.festival_name || undefined,
+    festival_name: row.festival_name || undefined,
     deliveryType,
     scheduledAt,
     deliveryPinCode: row.delivery_pincode || row.customer_details?.pincode || '',
@@ -1830,8 +1866,14 @@ export async function createSupabaseOrder(
     address_id: isSelfPickup ? null : (isUUID(orderData.addressId) ? orderData.addressId : null),
     customer_name: supaCustomerName,
     customer_phone: supaCustomerPhone,
-    order_type: isSelfPickup ? 'pickup' : 'delivery',
+    order_type: orderData.orderType || (isSelfPickup ? 'pickup' : 'delivery'),
     is_self_pickup: isSelfPickup,
+    payment_plan: orderData.paymentPlan || 'full',
+    advance_amount: Number(orderData.advanceAmount || 0),
+    balance_amount: Number(orderData.balanceAmount || 0),
+    festive_event_id: orderData.festiveEventId || null,
+    festival_delivery_at: orderData.festivalDeliveryAt || null,
+    festival_name: orderData.festivalName || null,
     items: safeItems,
     subtotal: Number(orderData.subtotal || 0),
     delivery_fee: Number(orderData.deliveryFee || 0),
@@ -1899,6 +1941,10 @@ export async function createSupabaseOrder(
           const qty = Number(item.quantity || 1);
           const itemDiscount = Number(item.discount || item.discount_amount || 0);
           const totalPrice = Number(item.totalPrice || Math.max(0, unitPrice * qty - itemDiscount));
+          const festName = item.festivalName || item.festival_name || orderData.festivalName || null;
+          const festDate = item.festivalDeliveryDate || item.festival_delivery_date || orderData.festivalDeliveryAt || null;
+          const isFestivePkg = item.specialPackaging !== undefined ? !!item.specialPackaging : (item.special_packaging !== undefined ? !!item.special_packaging : false);
+
           return {
             order_id: data.id,
             product_id: pId ? String(pId) : null,
@@ -1908,6 +1954,9 @@ export async function createSupabaseOrder(
             unit_price: unitPrice,
             discount_amount: itemDiscount,
             total_price: totalPrice,
+            festival_name: festName,
+            festival_delivery_date: festDate,
+            special_packaging: isFestivePkg,
             created_at: now,
           };
         });
@@ -3117,6 +3166,207 @@ export async function verifySupabaseOtp(
     success: false,
     error: 'Invalid verification code. Please check the code and try again.',
   };
+}
+
+// ============================================================================
+// SUPABASE FESTIVE EVENTS API (Utsav Specials)
+// ============================================================================
+
+export function mapDbFestiveEventToFestiveEvent(row: any): FestiveEvent {
+  return {
+    id: row.id,
+    outletId: row.outlet_id,
+    name: row.name,
+    slug: row.slug,
+    description: row.description || '',
+    bannerImage: row.banner_image || '',
+    festivalDate: row.festival_date,
+    bookingStartAt: row.booking_start_at,
+    bookingEndAt: row.booking_end_at,
+    status: row.status || 'active',
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export function mapFestiveEventToDbFestiveEvent(ev: Partial<FestiveEvent>): any {
+  const dbObj: any = {};
+  if (ev.id !== undefined) dbObj.id = ev.id;
+  if (ev.outletId !== undefined) dbObj.outlet_id = ev.outletId;
+  if (ev.name !== undefined) dbObj.name = ev.name.trim();
+  if (ev.slug !== undefined) dbObj.slug = ev.slug.toLowerCase().trim();
+  if (ev.description !== undefined) dbObj.description = ev.description;
+  if (ev.bannerImage !== undefined) dbObj.banner_image = ev.bannerImage;
+  if (ev.festivalDate !== undefined) dbObj.festival_date = ev.festivalDate;
+  if (ev.bookingStartAt !== undefined) dbObj.booking_start_at = ev.bookingStartAt;
+  if (ev.bookingEndAt !== undefined) dbObj.booking_end_at = ev.bookingEndAt;
+  if (ev.status !== undefined) dbObj.status = ev.status;
+  dbObj.updated_at = new Date().toISOString();
+  return dbObj;
+}
+
+export async function fetchSupabaseFestiveEvents(outletId?: string, onlyActive = false): Promise<FestiveEvent[]> {
+  if (!isSupabaseConfigured()) return [];
+
+  try {
+    let query = supabase.from('festive_events').select('*').order('festival_date', { ascending: true });
+    if (outletId) {
+      query = query.eq('outlet_id', outletId);
+    }
+    if (onlyActive) {
+      query = query.eq('status', 'active');
+    }
+
+    const { data, error } = await query;
+    if (error) {
+      console.warn('fetchSupabaseFestiveEvents notice:', error.message);
+      return [];
+    }
+    return (data || []).map(mapDbFestiveEventToFestiveEvent);
+  } catch (err) {
+    console.warn('fetchSupabaseFestiveEvents error:', err);
+    return [];
+  }
+}
+
+export async function fetchSupabaseFestiveEventById(id: string): Promise<FestiveEvent | null> {
+  if (!isSupabaseConfigured() || !id) return null;
+
+  try {
+    const { data, error } = await supabase
+      .from('festive_events')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (error || !data) return null;
+    return mapDbFestiveEventToFestiveEvent(data);
+  } catch (err) {
+    console.warn('fetchSupabaseFestiveEventById error:', err);
+    return null;
+  }
+}
+
+export async function createSupabaseFestiveEvent(eventData: Partial<FestiveEvent>): Promise<FestiveEvent> {
+  if (!isSupabaseConfigured()) throw new Error('Supabase not configured');
+
+  const now = new Date().toISOString();
+  let baseSlug = (eventData.slug || eventData.name || 'festival')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)/g, '');
+
+  const payload = mapFestiveEventToDbFestiveEvent({
+    ...eventData,
+    slug: baseSlug,
+    status: eventData.status || 'active',
+  });
+  payload.created_at = now;
+
+  const { data, error } = await supabase.from('festive_events').insert(payload).select().single();
+  if (error) throw error;
+  return mapDbFestiveEventToFestiveEvent(data);
+}
+
+export async function updateSupabaseFestiveEvent(id: string, eventData: Partial<FestiveEvent>): Promise<FestiveEvent> {
+  if (!isSupabaseConfigured()) throw new Error('Supabase not configured');
+
+  const payload = mapFestiveEventToDbFestiveEvent(eventData);
+  delete payload.id;
+  delete payload.created_at;
+
+  const { data, error } = await supabase
+    .from('festive_events')
+    .update(payload)
+    .eq('id', id)
+    .select()
+    .single();
+
+  if (error) throw error;
+  return mapDbFestiveEventToFestiveEvent(data);
+}
+
+export async function deleteSupabaseFestiveEvent(id: string): Promise<boolean> {
+  if (!isSupabaseConfigured()) return false;
+
+  // Check if any active orders exist for this festival
+  const { data: orders, error: checkErr } = await supabase
+    .from('orders')
+    .select('id')
+    .eq('festive_event_id', id)
+    .neq('order_status', 'cancelled')
+    .limit(1);
+
+  if (!checkErr && orders && orders.length > 0) {
+    throw new Error('Cannot delete festival collection with confirmed bookings. Please cancel or resolve bookings first.');
+  }
+
+  const { error } = await supabase.from('festive_events').delete().eq('id', id);
+  if (error) throw error;
+  return true;
+}
+
+// ============================================================================
+// SUPABASE PAYMENT TRANSACTIONS API
+// ============================================================================
+
+export function mapDbPaymentTxToPaymentTx(row: any): OrderPaymentTransaction {
+  return {
+    id: row.id,
+    orderId: row.order_id,
+    transactionType: row.transaction_type,
+    amount: Number(row.amount || 0),
+    paymentMethod: row.payment_method || 'online',
+    status: row.status || 'success',
+    gatewayPaymentId: row.gateway_payment_id || undefined,
+    gatewayReference: row.gateway_reference || undefined,
+    notes: row.notes || undefined,
+    paidAt: row.paid_at,
+    createdAt: row.created_at,
+  };
+}
+
+export async function fetchSupabasePaymentTransactions(orderId: string): Promise<OrderPaymentTransaction[]> {
+  if (!isSupabaseConfigured() || !orderId) return [];
+
+  try {
+    const { data, error } = await supabase
+      .from('order_payment_transactions')
+      .select('*')
+      .eq('order_id', orderId)
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      console.warn('fetchSupabasePaymentTransactions notice:', error.message);
+      return [];
+    }
+    return (data || []).map(mapDbPaymentTxToPaymentTx);
+  } catch (err) {
+    console.warn('fetchSupabasePaymentTransactions error:', err);
+    return [];
+  }
+}
+
+export async function recordSupabasePaymentTransaction(data: Partial<OrderPaymentTransaction>): Promise<OrderPaymentTransaction> {
+  if (!isSupabaseConfigured()) throw new Error('Supabase not configured');
+
+  const now = new Date().toISOString();
+  const payload = {
+    order_id: data.orderId,
+    transaction_type: data.transactionType || 'advance',
+    amount: Number(data.amount || 0),
+    payment_method: data.paymentMethod || 'online',
+    status: data.status || 'success',
+    gateway_payment_id: data.gatewayPaymentId || null,
+    gateway_reference: data.gatewayReference || null,
+    notes: data.notes || null,
+    paid_at: data.paidAt || now,
+    created_at: now,
+  };
+
+  const { data: res, error } = await supabase.from('order_payment_transactions').insert(payload).select().single();
+  if (error) throw error;
+  return mapDbPaymentTxToPaymentTx(res);
 }
 
 

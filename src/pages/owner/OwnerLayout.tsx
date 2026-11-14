@@ -18,11 +18,12 @@ import {
   Database,
   TicketPercent,
   KeyRound,
+  Sparkles,
 } from 'lucide-react';
 
 interface OwnerLayoutProps {
   children: React.ReactNode;
-  activeTab: 'dashboard' | 'products' | 'new-product' | 'edit-product' | 'outlets' | 'delivery-zones' | 'coupons';
+  activeTab: 'dashboard' | 'products' | 'new-product' | 'edit-product' | 'outlets' | 'delivery-zones' | 'coupons' | 'utsav-specials';
   title: string;
   subtitle?: string;
   actions?: React.ReactNode;
@@ -43,6 +44,7 @@ export const OwnerLayout: React.FC<OwnerLayoutProps> = ({
     goToOwnerOutlets,
     goToOwnerDeliveryZones,
     goToOwnerCoupons,
+    goToOwnerUtsavSpecials,
     goToOwnerLogin,
     goToManagerDashboard,
     goToHome,
@@ -221,6 +223,19 @@ export const OwnerLayout: React.FC<OwnerLayoutProps> = ({
                 <TicketPercent className="w-3.5 h-3.5" />
                 <span>Promotional Offers</span>
               </button>
+
+              <button
+                type="button"
+                onClick={goToOwnerUtsavSpecials}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                  activeTab === 'utsav-specials'
+                    ? 'bg-amber-800 text-white shadow-xs'
+                    : 'text-stone-300 hover:text-white hover:bg-stone-800'
+                }`}
+              >
+                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                <span>Utsav Specials</span>
+              </button>
             </nav>
 
             {/* Right Controls: User info, View Site, Logout */}
@@ -350,6 +365,20 @@ export const OwnerLayout: React.FC<OwnerLayoutProps> = ({
               >
                 <TicketPercent className="w-4 h-4" />
                 <span>Promotional Offers</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  goToOwnerUtsavSpecials();
+                  setMobileMenuOpen(false);
+                }}
+                className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold ${
+                  activeTab === 'utsav-specials' ? 'bg-amber-800 text-white' : 'text-stone-300 hover:bg-stone-800'
+                }`}
+              >
+                <Sparkles className="w-4 h-4 text-amber-400" />
+                <span>Utsav Specials</span>
               </button>
 
               <button

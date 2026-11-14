@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react';
 import { FilterState } from '../types';
 import { useProducts } from '../context/ProductContext';
-import { RotateCcw, SlidersHorizontal, Check } from 'lucide-react';
+import { RotateCcw, SlidersHorizontal, Check, Sparkles } from 'lucide-react';
 
 interface FilterSidebarProps {
   filters: FilterState;
@@ -22,8 +22,15 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
   const categoryCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const cat of categories) {
-      counts[cat.slug] = outletProducts.filter(
-        (p) => p.category === cat.slug || p.category === cat.id
+      const isUtsavCat = cat.slug === 'utsav_specials' || cat.slug === 'utsav-specials';
+      counts[cat.slug] = outletProducts.filter((p) =>
+        isUtsavCat
+          ? p.category === 'utsav_specials' ||
+            p.category === 'utsav-specials' ||
+            !!p.festiveProduct ||
+            p.availabilityMode === 'prebook_only' ||
+            !!p.festiveEventId
+          : p.category === cat.slug || p.category === cat.id
       ).length;
     }
     return counts;
@@ -139,22 +146,32 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
 
           {categories.map((cat) => {
             const count = categoryCounts[cat.slug] ?? 0;
+            const isUtsav = cat.slug === 'utsav_specials' || cat.slug === 'utsav-specials';
+            const isSelected = filters.category === cat.slug;
+
             return (
               <button
                 key={cat.slug}
                 type="button"
                 onClick={() => setFilters((prev) => ({ ...prev, category: cat.slug }))}
                 className={`w-full text-left px-3 py-2 rounded-lg text-xs font-medium transition-colors flex items-center justify-between ${
-                  filters.category === cat.slug
-                    ? 'bg-orange-50 text-orange-900 font-semibold border border-orange-200'
+                  isSelected
+                    ? isUtsav
+                      ? 'bg-amber-100 text-amber-950 font-bold border border-amber-300'
+                      : 'bg-orange-50 text-orange-900 font-semibold border border-orange-200'
+                    : isUtsav
+                    ? 'text-amber-900 hover:bg-amber-50 font-semibold'
                     : 'text-gray-600 hover:bg-gray-50'
                 }`}
               >
-                <span>{cat.name}</span>
+                <span className="flex items-center gap-1.5">
+                  {isUtsav && <Sparkles className="w-3 h-3 text-amber-600 fill-amber-400 shrink-0" />}
+                  <span>{cat.name}</span>
+                </span>
                 <span className="flex items-center gap-1.5">
                   <span className="text-[10px] text-gray-400 font-normal">({count})</span>
-                  {filters.category === cat.slug && (
-                    <Check className="w-3.5 h-3.5 text-orange-600" />
+                  {isSelected && (
+                    <Check className={`w-3.5 h-3.5 ${isUtsav ? 'text-amber-700' : 'text-orange-600'}`} />
                   )}
                 </span>
               </button>

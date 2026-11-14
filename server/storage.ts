@@ -23,6 +23,8 @@ import {
   SwadCoinRewardStatus,
   SwadCoinTransactionType,
   SwadCoinDispatch,
+  FestiveEvent,
+  OrderPaymentTransaction,
 } from '../src/types';
 
 /**
@@ -73,6 +75,11 @@ export function serializeOrderItemForDb(it: any): CleanOrderItem {
   if (selectedVariant) cleanItem.selectedVariant = selectedVariant;
   if (it.selectedSpiceLevel) cleanItem.selectedSpiceLevel = it.selectedSpiceLevel;
   cleanItem.selectedAddons = selectedAddons;
+  if (it.festivalName || it.festival_name) (cleanItem as any).festivalName = it.festivalName || it.festival_name;
+  if (it.festivalDeliveryDate || it.festival_delivery_date) (cleanItem as any).festivalDeliveryDate = it.festivalDeliveryDate || it.festival_delivery_date;
+  if (it.specialPackaging !== undefined || it.special_packaging !== undefined) {
+    (cleanItem as any).specialPackaging = it.specialPackaging !== undefined ? Boolean(it.specialPackaging) : Boolean(it.special_packaging);
+  }
 
   return cleanItem;
 }
@@ -152,6 +159,8 @@ const PRODUCT_REVIEWS_FILE = path.join(DATA_DIR, 'product_reviews_store.json');
 const SWAD_COIN_REWARDS_FILE = path.join(DATA_DIR, 'swad_coin_rewards_store.json');
 const SWAD_COIN_TRANSACTIONS_FILE = path.join(DATA_DIR, 'swad_coin_transactions_store.json');
 const SWAD_COIN_DISPATCH_FILE = path.join(DATA_DIR, 'swad_coin_dispatch_store.json');
+const FESTIVE_EVENTS_FILE = path.join(DATA_DIR, 'festive_events_store.json');
+const PAYMENT_TRANSACTIONS_FILE = path.join(DATA_DIR, 'payment_transactions_store.json');
 
 /**
  * Weighted probability distribution for daily reward generation:
@@ -227,6 +236,8 @@ class AppStorage {
   private swadCoinRewards: SwadCoinReward[] = [];
   private swadCoinTransactions: SwadCoinTransaction[] = [];
   private swadCoinDispatches: SwadCoinDispatch[] = [];
+  private festiveEvents: FestiveEvent[] = [];
+  private paymentTransactions: OrderPaymentTransaction[] = [];
   private isInitialized = false;
 
   constructor() {
@@ -253,6 +264,8 @@ class AppStorage {
     this.swadCoinRewards = safeReadJson<SwadCoinReward[]>(SWAD_COIN_REWARDS_FILE, []);
     this.swadCoinTransactions = safeReadJson<SwadCoinTransaction[]>(SWAD_COIN_TRANSACTIONS_FILE, []);
     this.swadCoinDispatches = safeReadJson<SwadCoinDispatch[]>(SWAD_COIN_DISPATCH_FILE, []);
+    this.festiveEvents = safeReadJson<FestiveEvent[]>(FESTIVE_EVENTS_FILE, []);
+    this.paymentTransactions = safeReadJson<OrderPaymentTransaction[]>(PAYMENT_TRANSACTIONS_FILE, []);
 
     this.isInitialized = true;
   }
@@ -298,6 +311,24 @@ class AppStorage {
       fs.writeFileSync(SWAD_COIN_TRANSACTIONS_FILE, JSON.stringify(this.swadCoinTransactions, null, 2), 'utf-8');
     } catch (e) {
       console.warn('Warning: Could not save swad coin transactions to disk.', e);
+    }
+  }
+
+  private saveFestiveEvents() {
+    try {
+      if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+      fs.writeFileSync(FESTIVE_EVENTS_FILE, JSON.stringify(this.festiveEvents, null, 2), 'utf-8');
+    } catch (e) {
+      console.warn('Warning: Could not save festive events to disk.', e);
+    }
+  }
+
+  private savePaymentTransactions() {
+    try {
+      if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+      fs.writeFileSync(PAYMENT_TRANSACTIONS_FILE, JSON.stringify(this.paymentTransactions, null, 2), 'utf-8');
+    } catch (e) {
+      console.warn('Warning: Could not save payment transactions to disk.', e);
     }
   }
 
@@ -1286,6 +1317,24 @@ class AppStorage {
       gst: orderData.gst || 0,
       total: orderData.total || 0,
       couponCode: orderData.couponCode,
+      orderType: orderData.orderType || (isPickup ? 'pickup' : 'delivery'),
+      order_type: orderData.order_type || orderData.orderType || (isPickup ? 'pickup' : 'delivery'),
+      paymentPlan: orderData.paymentPlan || 'full',
+      payment_plan: orderData.payment_plan || orderData.paymentPlan || 'full',
+      advanceAmount: Number(orderData.advanceAmount || 0),
+      advance_amount: Number(orderData.advance_amount || orderData.advanceAmount || 0),
+      balanceAmount: Number(orderData.balanceAmount || 0),
+      balance_amount: Number(orderData.balance_amount || orderData.balanceAmount || 0),
+      festiveEventId: orderData.festiveEventId,
+      festive_event_id: orderData.festive_event_id || orderData.festiveEventId,
+      festivalDeliveryAt: orderData.festivalDeliveryAt,
+      festival_delivery_at: orderData.festival_delivery_at || orderData.festivalDeliveryAt,
+      festivalName: orderData.festivalName,
+      festival_name: orderData.festival_name || orderData.festivalName,
+      paymentMethod: orderData.paymentMethod || orderData.customerDetails?.paymentMethod || 'cod',
+      payment_method: orderData.payment_method || orderData.paymentMethod || orderData.customerDetails?.paymentMethod || 'cod',
+      paymentStatus: orderData.paymentStatus || (orderData.paymentPlan === 'advance_25' ? 'partially_paid' : 'pending'),
+      payment_status: orderData.payment_status || orderData.paymentStatus || (orderData.paymentPlan === 'advance_25' ? 'partially_paid' : 'pending'),
       deliveryType: orderData.deliveryType || 'immediate',
       scheduledAt: orderData.scheduledAt,
       customerDetails: orderData.customerDetails || {
@@ -2917,6 +2966,105 @@ class AppStorage {
     });
 
     return !pastOrder;
+  }
+
+  // =====================
+  // FESTIVE EVENTS (Utsav Specials)
+  // =====================
+
+  public getFestiveEvents(outletId?: string, onlyActive = false): FestiveEvent[] {
+    this.init();
+    let list = [...this.festiveEvents];
+    if (outletId) {
+      list = list.filter((e) => e.outletId === outletId);
+    }
+    if (onlyActive) {
+      list = list.filter((e) => e.status === 'active');
+    }
+    return list;
+  }
+
+  public getFestiveEventById(id: string): FestiveEvent | null {
+    this.init();
+    return this.festiveEvents.find((e) => e.id === id) || null;
+  }
+
+  public createFestiveEvent(data: Partial<FestiveEvent>): FestiveEvent {
+    this.init();
+    const id = data.id || `fest-${Date.now().toString(36)}`;
+    const now = new Date().toISOString();
+    const newEvent: FestiveEvent = {
+      id,
+      outletId: data.outletId || '',
+      name: (data.name || '').trim(),
+      slug: (data.slug || data.name || '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, ''),
+      description: data.description || '',
+      bannerImage: data.bannerImage || '',
+      festivalDate: data.festivalDate || new Date().toISOString().split('T')[0],
+      bookingStartAt: data.bookingStartAt || now,
+      bookingEndAt: data.bookingEndAt || now,
+      status: data.status || 'active',
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.festiveEvents.unshift(newEvent);
+    this.saveFestiveEvents();
+    return newEvent;
+  }
+
+  public updateFestiveEvent(id: string, data: Partial<FestiveEvent>): FestiveEvent {
+    this.init();
+    const idx = this.festiveEvents.findIndex((e) => e.id === id);
+    if (idx < 0) {
+      throw new Error(`Festival collection ${id} not found`);
+    }
+    const updated: FestiveEvent = {
+      ...this.festiveEvents[idx],
+      ...data,
+      id,
+      updatedAt: new Date().toISOString(),
+    };
+    this.festiveEvents[idx] = updated;
+    this.saveFestiveEvents();
+    return updated;
+  }
+
+  public deleteFestiveEvent(id: string): boolean {
+    this.init();
+    const initialLen = this.festiveEvents.length;
+    this.festiveEvents = this.festiveEvents.filter((e) => e.id !== id);
+    if (this.festiveEvents.length !== initialLen) {
+      this.saveFestiveEvents();
+      return true;
+    }
+    return false;
+  }
+
+  public recordPaymentTransaction(data: Partial<OrderPaymentTransaction>): OrderPaymentTransaction {
+    this.init();
+    const id = data.id || `ptx-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    const now = new Date().toISOString();
+    const tx: OrderPaymentTransaction = {
+      id,
+      orderId: data.orderId || '',
+      transactionType: data.transactionType || 'advance',
+      amount: Number(data.amount || 0),
+      paymentMethod: data.paymentMethod || 'online',
+      status: data.status || 'success',
+      gatewayPaymentId: data.gatewayPaymentId,
+      gatewayReference: data.gatewayReference,
+      notes: data.notes,
+      paidAt: data.paidAt || now,
+      createdAt: now,
+    };
+    this.paymentTransactions.push(tx);
+    this.savePaymentTransactions();
+    return tx;
+  }
+
+  public getPaymentTransactions(orderId: string): OrderPaymentTransaction[] {
+    this.init();
+    return this.paymentTransactions.filter((t) => t.orderId === orderId);
   }
 
   // =====================

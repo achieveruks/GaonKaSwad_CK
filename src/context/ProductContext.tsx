@@ -230,32 +230,87 @@ export const ProductProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
   // Dynamic Categories from Supabase DB with live item counts for selected outlet
   const categories = useMemo(() => {
+    const isUtsavProduct = (p: Product) =>
+      p.category === 'utsav_specials' ||
+      p.category === 'utsav-specials' ||
+      !!p.festiveProduct ||
+      p.availabilityMode === 'prebook_only' ||
+      !!p.festiveEventId;
+
     // If dbCategories loaded from database, calculate counts
     if (dbCategories.length > 0) {
-      return dbCategories.map((cat) => {
-        const count = outletProducts.filter((p) => p.category === cat.id || p.category === cat.slug).length;
+      let list = dbCategories.map((cat) => {
+        const isUtsavCat = cat.slug === 'utsav_specials' || cat.slug === 'utsav-specials';
+        const count = outletProducts.filter((p) =>
+          isUtsavCat
+            ? isUtsavProduct(p)
+            : p.category === cat.id || p.category === cat.slug
+        ).length;
         return {
           ...cat,
           itemCount: count,
         };
       });
+
+      // If utsav_specials category is not explicitly in dbCategories, check if we have any festive items
+      const hasUtsavCat = list.some((c) => c.slug === 'utsav_specials' || c.slug === 'utsav-specials');
+      const utsavItemsCount = outletProducts.filter(isUtsavProduct).length;
+
+      if (!hasUtsavCat && utsavItemsCount > 0) {
+        list.push({
+          id: 'utsav_specials',
+          name: 'Utsav Specials',
+          slug: 'utsav_specials',
+          tagline: 'Handcrafted festival delicacies & limited pre-booking specials',
+          image: 'https://images.unsplash.com/photo-1576871337632-b9aef4c17ab9?q=80&w=800&auto=format&fit=crop',
+          iconName: 'Sparkles',
+          itemCount: utsavItemsCount,
+        });
+      }
+
+      return list;
     }
 
     // Fallback: dynamically construct categories from distinct product categories in DB
     const uniqueCategoryIds = Array.from(new Set(products.map((p) => p.category).filter(Boolean)));
-    return uniqueCategoryIds.map((catId) => {
-      const name = catId.charAt(0).toUpperCase() + catId.slice(1).replace(/-/g, ' ');
-      const count = outletProducts.filter((p) => p.category === catId).length;
+    const list = uniqueCategoryIds.map((catId) => {
+      const isUtsavCat = catId === 'utsav_specials' || catId === 'utsav-specials';
+      const name = isUtsavCat
+        ? 'Utsav Specials'
+        : catId.charAt(0).toUpperCase() + catId.slice(1).replace(/-/g, ' ');
+      const count = outletProducts.filter((p) =>
+        isUtsavCat ? isUtsavProduct(p) : p.category === catId
+      ).length;
       return {
         id: catId,
         name,
         slug: catId,
-        tagline: `Authentic traditional ${name.toLowerCase()}`,
-        image: 'https://images.unsplash.com/photo-1589301760014-d929f3979dbc?q=80&w=800&auto=format&fit=crop',
-        iconName: 'Utensils',
+        tagline: isUtsavCat
+          ? 'Handcrafted festival delicacies & limited pre-booking specials'
+          : `Authentic traditional ${name.toLowerCase()}`,
+        image: isUtsavCat
+          ? 'https://images.unsplash.com/photo-1576871337632-b9aef4c17ab9?q=80&w=800&auto=format&fit=crop'
+          : 'https://images.unsplash.com/photo-1589301760014-d929f3979dbc?q=80&w=800&auto=format&fit=crop',
+        iconName: isUtsavCat ? 'Sparkles' : 'Utensils',
         itemCount: count,
       };
     });
+
+    const hasUtsavCat = list.some((c) => c.slug === 'utsav_specials' || c.slug === 'utsav-specials');
+    const utsavItemsCount = outletProducts.filter(isUtsavProduct).length;
+    if (!hasUtsavCat && utsavItemsCount > 0) {
+      list.push({
+        id: 'utsav_specials',
+        name: 'Utsav Specials',
+        slug: 'utsav_specials',
+        tagline: 'Handcrafted festival delicacies & limited pre-booking specials',
+        image: 'https://images.unsplash.com/photo-1576871337632-b9aef4c17ab9?q=80&w=800&auto=format&fit=crop',
+        iconName: 'Sparkles',
+        itemCount: utsavItemsCount,
+      });
+    }
+
+    return list;
   }, [dbCategories, products, outletProducts]);
 
   const isAvailableInCurrentOutlet = useCallback(

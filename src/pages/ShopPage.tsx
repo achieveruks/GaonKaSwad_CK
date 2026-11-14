@@ -80,12 +80,23 @@ export const ShopPage: React.FC = () => {
 
       // 2. Category
       if (filters.category) {
-        const catObj = categories.find(
-          (c) => c.slug === filters.category || c.id === filters.category
-        );
-        const matchSlugs = catObj ? [catObj.slug, catObj.id] : [filters.category];
-        if (!matchSlugs.includes(product.category)) {
-          return false;
+        const isUtsavFilter = filters.category === 'utsav_specials' || filters.category === 'utsav-specials';
+        if (isUtsavFilter) {
+          const isUtsavItem =
+            product.category === 'utsav_specials' ||
+            product.category === 'utsav-specials' ||
+            !!product.festiveProduct ||
+            product.availabilityMode === 'prebook_only' ||
+            !!product.festiveEventId;
+          if (!isUtsavItem) return false;
+        } else {
+          const catObj = categories.find(
+            (c) => c.slug === filters.category || c.id === filters.category
+          );
+          const matchSlugs = catObj ? [catObj.slug, catObj.id] : [filters.category];
+          if (!matchSlugs.includes(product.category)) {
+            return false;
+          }
         }
       }
 
@@ -125,8 +136,15 @@ export const ShopPage: React.FC = () => {
   const categoryCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     for (const cat of categories) {
-      counts[cat.slug] = outletProducts.filter(
-        (p) => p.category === cat.slug || p.category === cat.id
+      const isUtsavCat = cat.slug === 'utsav_specials' || cat.slug === 'utsav-specials';
+      counts[cat.slug] = outletProducts.filter((p) =>
+        isUtsavCat
+          ? p.category === 'utsav_specials' ||
+            p.category === 'utsav-specials' ||
+            !!p.festiveProduct ||
+            p.availabilityMode === 'prebook_only' ||
+            !!p.festiveEventId
+          : p.category === cat.slug || p.category === cat.id
       ).length;
     }
     return counts;
@@ -137,17 +155,43 @@ export const ShopPage: React.FC = () => {
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8 space-y-6">
       {/* Header Banner */}
-      <div className="relative rounded-2xl overflow-hidden bg-gray-900 text-white p-5 sm:p-6 border border-gray-800 shadow-xs">
+      <div
+        className={`relative rounded-2xl overflow-hidden text-white p-5 sm:p-6 border shadow-xs transition-colors ${
+          filters.category === 'utsav_specials' || filters.category === 'utsav-specials'
+            ? 'bg-gradient-to-r from-amber-950 via-stone-900 to-amber-900 border-amber-600/50'
+            : 'bg-gray-900 border-gray-800'
+        }`}
+      >
         <div className="max-w-2xl space-y-1.5">
-          <div className="inline-flex items-center gap-1.5 bg-orange-500/20 text-orange-400 px-2.5 py-0.5 rounded-full text-[11px] font-bold uppercase tracking-wider">
-            <Flame className="w-3 h-3" />
-            <span>Cloud Kitchen Menu</span>
+          <div
+            className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold uppercase tracking-wider ${
+              filters.category === 'utsav_specials' || filters.category === 'utsav-specials'
+                ? 'bg-amber-500/25 text-amber-300 border border-amber-400/30'
+                : 'bg-orange-500/20 text-orange-400'
+            }`}
+          >
+            {filters.category === 'utsav_specials' || filters.category === 'utsav-specials' ? (
+              <Sparkles className="w-3 h-3 text-amber-300" />
+            ) : (
+              <Flame className="w-3 h-3" />
+            )}
+            <span>
+              {filters.category === 'utsav_specials' || filters.category === 'utsav-specials'
+                ? 'Festival Pre-Booking & Utsav Specials'
+                : 'Cloud Kitchen Menu'}
+            </span>
           </div>
-          <h1 className="font-extrabold text-xl sm:text-3xl text-white">
-            {activeCategoryObj ? activeCategoryObj.name : 'Authentic Gourmet Delicacies'}
+          <h1 className="font-extrabold text-xl sm:text-3xl text-white font-heading">
+            {filters.category === 'utsav_specials' || filters.category === 'utsav-specials'
+              ? 'Utsav Specials — Handcrafted Festival Delicacies'
+              : activeCategoryObj
+              ? activeCategoryObj.name
+              : 'Authentic Gourmet Delicacies'}
           </h1>
           <p className="text-xs text-gray-300">
-            {activeCategoryObj
+            {filters.category === 'utsav_specials' || filters.category === 'utsav-specials'
+              ? 'Pre-book exclusive limited edition festival dishes with 25% advance or 100% upfront. Freshly prepared for celebratory festival delivery.'
+              : activeCategoryObj
               ? activeCategoryObj.tagline
               : 'Browse slow-cooked handi curries, dum biryanis, clay-oven kebabs, and artisanal desserts.'}
           </p>
@@ -236,18 +280,26 @@ export const ShopPage: React.FC = () => {
 
           {categories.map((cat) => {
             const count = categoryCounts[cat.slug] ?? 0;
+            const isUtsav = cat.slug === 'utsav_specials' || cat.slug === 'utsav-specials';
+            const isSelected = filters.category === cat.slug;
+
             return (
               <button
                 key={cat.id}
                 type="button"
                 onClick={() => setFilters((prev) => ({ ...prev, category: cat.slug }))}
-                className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-colors shrink-0 ${
-                  filters.category === cat.slug
-                    ? 'bg-orange-600 text-white shadow-xs'
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-colors shrink-0 flex items-center gap-1.5 ${
+                  isSelected
+                    ? isUtsav
+                      ? 'bg-gradient-to-r from-amber-700 to-amber-900 text-white shadow-xs border border-amber-600'
+                      : 'bg-orange-600 text-white shadow-xs'
+                    : isUtsav
+                    ? 'bg-amber-50/80 border border-amber-300 text-amber-900 hover:bg-amber-100 font-bold'
                     : 'bg-white border border-gray-200 text-gray-700 hover:bg-gray-50'
                 }`}
               >
-                {cat.name} ({count})
+                {isUtsav && <Sparkles className="w-3 h-3 text-amber-500 fill-amber-400 shrink-0" />}
+                <span>{cat.name} ({count})</span>
               </button>
             );
           })}

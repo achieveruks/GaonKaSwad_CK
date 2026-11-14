@@ -3,8 +3,9 @@ import { OwnerLayout } from './OwnerLayout';
 import { useProducts } from '../../context/ProductContext';
 import { useNavigation } from '../../context/NavigationContext';
 import { useAuth } from '../../context/AuthContext';
-import { Product, Outlet, ProductOutletConfig } from '../../types';
+import { Product, Outlet, ProductOutletConfig, FestiveEvent } from '../../types';
 import { getOutlets } from '../../lib/locationService';
+import { getFestiveEvents } from '../../lib/festiveService';
 import { getCulinaryHighlights, CATEGORY_CULINARY_DEFAULTS, normalizeCategorySlug } from '../../utils/culinaryHighlights';
 import {
   ArrowLeft,
@@ -86,6 +87,14 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
   const [active, setActive] = useState(true);
   const [ingredientsText, setIngredientsText] = useState('Pure Cow Ghee, Heirloom Spices, Saffron, Fresh Ingredients');
 
+  // Utsav Specials & Festive Pre-Booking State
+  const [availableFestiveEvents, setAvailableFestiveEvents] = useState<FestiveEvent[]>([]);
+  const [festiveEventId, setFestiveEventId] = useState<string>('');
+  const [availabilityMode, setAvailabilityMode] = useState<'normal' | 'prebook_only'>('normal');
+  const [maxBookingQuantity, setMaxBookingQuantity] = useState<string>('');
+  const [specialPackaging, setSpecialPackaging] = useState<boolean>(false);
+  const [festiveProduct, setFestiveProduct] = useState<boolean>(false);
+
   // Outlet assignment state: Record<outletId, { isAssigned: boolean; inStock: boolean; isFeatured: boolean; isBestseller: boolean; isChefSpecial: boolean; portionsLeft: number | null }>
   const [outletConfigs, setOutletConfigs] = useState<
     Record<string, { isAssigned: boolean; inStock: boolean; isFeatured: boolean; isBestseller: boolean; isChefSpecial: boolean; portionsLeft: number | null }>
@@ -109,6 +118,19 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
       }
     };
     fetchAllOutlets();
+  }, [token]);
+
+  // Fetch Festive Events for Dropdown
+  useEffect(() => {
+    const fetchFestiveEvents = async () => {
+      try {
+        const evs = await getFestiveEvents(undefined, false, token || undefined);
+        setAvailableFestiveEvents(evs);
+      } catch (err) {
+        console.warn('Failed to load festive events in product form:', err);
+      }
+    };
+    fetchFestiveEvents();
   }, [token]);
 
   // Auto-generate slug when creating a new product (unless manually customized)
@@ -160,6 +182,13 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
             ? found.ingredients.join(', ')
             : 'Pure Cow Ghee, Heirloom Spices, Fresh Ingredients'
         );
+
+        // Utsav Specials festive fields
+        setFestiveEventId(found.festiveEventId || '');
+        setAvailabilityMode(found.availabilityMode || 'normal');
+        setMaxBookingQuantity(found.maxBookingQuantity ? String(found.maxBookingQuantity) : '');
+        setSpecialPackaging(found.specialPackaging !== false && (!!found.festiveEventId || !!found.festiveProduct));
+        setFestiveProduct(!!found.festiveProduct || !!found.festiveEventId);
 
         // Map outlet configs
         const configs: Record<string, { isAssigned: boolean; inStock: boolean; isFeatured: boolean; isBestseller: boolean; isChefSpecial: boolean; portionsLeft: number | null }> = {};
@@ -348,6 +377,12 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
       inStock: assignedOutletsList.some((o) => o.inStock),
       outlets: assignedOutletsList,
       ingredients: ingredients.length > 0 ? ingredients : ['Pure Cow Ghee', 'Heirloom Spices'],
+      // Utsav Specials festive fields
+      festiveEventId: festiveEventId ? festiveEventId : undefined,
+      availabilityMode,
+      maxBookingQuantity: maxBookingQuantity ? parseInt(maxBookingQuantity, 10) : undefined,
+      specialPackaging,
+      festiveProduct: festiveProduct || !!festiveEventId || availabilityMode === 'prebook_only',
     };
 
     setIsSubmitting(true);
@@ -938,7 +973,175 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
               </div>
             </div>
 
-            {/* Section 5: Store Visibility & Dietary */}
+            {/* Section 5: Utsav Specials & Festival Pre-Booking Configuration */}
+            <div className="bg-white rounded-2xl border border-amber-200/80 p-5 shadow-2xs space-y-4 bg-gradient-to-br from-white via-amber-50/20 to-orange-50/20">
+              <div className="flex items-center gap-2">
+                <div className="w-7 h-7 rounded-lg bg-amber-100 border border-amber-200 flex items-center justify-center text-amber-800 shrink-0">
+                  <Sparkles className="w-4 h-4 text-amber-700" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-sm text-gray-900">
+                    Utsav Specials & Festival Pre-Booking
+                  </h3>
+                  <p className="text-[11px] text-gray-500">
+                    Associate this dish with a festival pre-booking event, set availability mode, and gift packaging.
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-4 pt-1">
+                {/* Festival Event Selector */}
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 mb-1">
+                    Festival Event Collection
+                  </label>
+                  <select
+                    value={festiveEventId}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setFestiveEventId(val);
+                      if (val) {
+                        setFestiveProduct(true);
+                        setSpecialPackaging(true);
+                      }
+                    }}
+                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs text-gray-900 font-medium focus:outline-none focus:border-amber-700 focus:bg-white cursor-pointer"
+                  >
+                    <option value="">None (Standard Year-Round Menu Dish)</option>
+                    {availableFestiveEvents.map((fe) => (
+                      <option key={fe.id} value={fe.id}>
+                        🎉 {fe.name} — Festival Date: {fe.festivalDate} ({fe.status.toUpperCase()})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Availability Mode */}
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 mb-1.5">
+                    Ordering & Availability Mode *
+                  </label>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <label
+                      className={`p-3 rounded-xl border cursor-pointer transition-all ${
+                        availabilityMode === 'normal'
+                          ? 'border-orange-500 bg-orange-50/60 shadow-xs'
+                          : 'border-gray-200 bg-gray-50/50 hover:bg-gray-50'
+                      }`}
+                    >
+                      <div className="flex items-start gap-2.5">
+                        <input
+                          type="radio"
+                          name="availabilityMode"
+                          value="normal"
+                          checked={availabilityMode === 'normal'}
+                          onChange={() => setAvailabilityMode('normal')}
+                          className="mt-0.5 text-orange-600 focus:ring-orange-500"
+                        />
+                        <div>
+                          <span className="font-bold text-xs text-gray-900 block">
+                            Normal Listing
+                          </span>
+                          <span className="text-[11px] text-gray-500 block leading-tight mt-0.5">
+                            Customer can order for standard immediate kitchen preparation and delivery.
+                          </span>
+                        </div>
+                      </div>
+                    </label>
+
+                    <label
+                      className={`p-3 rounded-xl border cursor-pointer transition-all ${
+                        availabilityMode === 'prebook_only'
+                          ? 'border-amber-600 bg-amber-50/80 shadow-xs ring-1 ring-amber-600/20'
+                          : 'border-gray-200 bg-gray-50/50 hover:bg-gray-50'
+                      }`}
+                    >
+                      <div className="flex items-start gap-2.5">
+                        <input
+                          type="radio"
+                          name="availabilityMode"
+                          value="prebook_only"
+                          checked={availabilityMode === 'prebook_only'}
+                          onChange={() => {
+                            setAvailabilityMode('prebook_only');
+                            setFestiveProduct(true);
+                          }}
+                          className="mt-0.5 text-amber-700 focus:ring-amber-600"
+                        />
+                        <div>
+                          <span className="font-bold text-xs text-amber-950 flex items-center gap-1">
+                            <span>Pre-book Only</span>
+                            <span className="text-[9px] bg-amber-200 text-amber-900 px-1.5 py-0.2 rounded font-black">
+                              UTSAV
+                            </span>
+                          </span>
+                          <span className="text-[11px] text-stone-600 block leading-tight mt-0.5">
+                            Customer can order only through pre-booking with 25% advance or 100% upfront payment.
+                          </span>
+                        </div>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+
+                {/* Max Booking Quantity */}
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 mb-1">
+                    Max Pre-booking Capacity (Optional)
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={maxBookingQuantity}
+                    onChange={(e) => setMaxBookingQuantity(e.target.value)}
+                    placeholder="e.g. 50 (Leave blank for unlimited kitchen booking capacity)"
+                    className="w-full px-3 py-1.5 bg-gray-50 border border-gray-200 rounded-xl text-xs text-gray-900 font-medium focus:outline-none focus:border-amber-700 focus:bg-white"
+                  />
+                  <p className="text-[10px] text-gray-400 mt-1">
+                    Limits maximum pre-booked portions across all customers to protect kitchen prep capacity.
+                  </p>
+                </div>
+
+                {/* Checkboxes: Festive Product & Special Packaging */}
+                <div className="pt-2 border-t border-amber-200/60 space-y-2.5">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={festiveProduct}
+                      onChange={(e) => setFestiveProduct(e.target.checked)}
+                      className="w-4 h-4 rounded text-amber-700 focus:ring-amber-600 border-gray-300"
+                    />
+                    <div>
+                      <span className="font-semibold text-xs text-gray-900">
+                        Mark as Festive Dish (Displays Utsav Special badge)
+                      </span>
+                      <p className="text-[10px] text-gray-500">
+                        Surfaces dish in the Utsav Specials category and hero promotional carousels.
+                      </p>
+                    </div>
+                  </label>
+
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={specialPackaging}
+                      onChange={(e) => setSpecialPackaging(e.target.checked)}
+                      className="w-4 h-4 rounded text-amber-700 focus:ring-amber-600 border-gray-300"
+                    />
+                    <div>
+                      <span className="font-semibold text-xs text-gray-900">
+                        Special Festive Gift Packaging Included
+                      </span>
+                      <p className="text-[10px] text-gray-500">
+                        Dish includes sealed artisanal festive box with celebration ribbons.
+                      </p>
+                    </div>
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            {/* Section 6: Store Visibility & Dietary */}
             <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-2xs space-y-4">
               <h3 className="font-extrabold text-sm text-gray-900">
                 Storefront & Dietary
