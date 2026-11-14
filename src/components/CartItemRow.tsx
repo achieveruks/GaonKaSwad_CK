@@ -3,16 +3,19 @@ import { CartItem } from '../types';
 import { useCart } from '../context/CartContext';
 import { useNavigation } from '../context/NavigationContext';
 import { QuantitySelector } from './QuantitySelector';
-import { Trash2, Flame } from 'lucide-react';
+import { Trash2, Flame, Sparkles, Calendar, PackageCheck } from 'lucide-react';
+import { FestiveEvent } from '../types';
 
 interface CartItemRowProps {
   item: CartItem;
   compact?: boolean;
+  festiveEvent?: FestiveEvent;
 }
 
-export const CartItemRow: React.FC<CartItemRowProps> = ({ item, compact = false }) => {
+export const CartItemRow: React.FC<CartItemRowProps> = ({ item, compact = false, festiveEvent }) => {
   const { updateQuantity, removeFromCart, setIsCartDrawerOpen } = useCart();
   const { goToProduct } = useNavigation();
+  const isPrebook = item.product.availabilityMode === 'prebook_only';
 
   const handleProductClick = () => {
     setIsCartDrawerOpen(false);
@@ -58,7 +61,7 @@ export const CartItemRow: React.FC<CartItemRowProps> = ({ item, compact = false 
           >
             {item.product.name}
           </h4>
-          <span className="text-xs font-bold text-gray-900 shrink-0">
+          <span className="text-xs font-bold text-gray-900 shrink-0 tabular-nums">
             ₹{item.unitPrice * item.quantity}
           </span>
         </div>
@@ -83,6 +86,28 @@ export const CartItemRow: React.FC<CartItemRowProps> = ({ item, compact = false 
           <p className="text-[10px] text-orange-800 font-medium line-clamp-1 mt-0.5">
             + {item.selectedAddons.map((a) => a.name).join(', ')}
           </p>
+        )}
+
+        {/* Utsav Pre-book cues */}
+        {isPrebook && (
+          <div className="flex flex-wrap items-center gap-1.5 mt-1 text-[10px] font-semibold text-amber-900">
+            <span className="inline-flex items-center gap-0.5 bg-amber-50 border border-amber-200 px-1.5 py-0.2 rounded">
+              <Sparkles className="w-2.5 h-2.5 text-amber-600" />
+              Pre-book
+            </span>
+            {item.product.specialPackaging !== false && (
+              <span className="inline-flex items-center gap-0.5 text-stone-600">
+                <PackageCheck className="w-2.5 h-2.5 text-amber-700" />
+                Festive Pack
+              </span>
+            )}
+            {festiveEvent?.festivalDate && (
+              <span className="inline-flex items-center gap-0.5 text-stone-600 tabular-nums">
+                <Calendar className="w-2.5 h-2.5 text-amber-700" />
+                {new Date(festiveEvent.festivalDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+              </span>
+            )}
+          </div>
         )}
 
         {/* Price & Quantity Controls */}

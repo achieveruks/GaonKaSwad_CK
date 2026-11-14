@@ -15,6 +15,7 @@ import {
   createCustomerToken,
   createStaffToken,
   extractAuthToken,
+  registerStaffProfileResolver,
   AUTH_COOKIE_NAME,
   AUTH_COOKIE_OPTIONS,
   AuthenticatedRequest,
@@ -22,6 +23,7 @@ import {
 import { generateOTP, formatOtpString, hashOTPSync, isBetaMode } from './src/lib/otpUtils';
 import { APP_VERSION } from './src/version';
 import { generalApiLimiter, authLoginLimiter, otpRateLimiter } from './server/rateLimiter';
+import { calculateMixedCheckoutBreakdown, isPrebookItem } from './src/lib/mixedCheckoutCalc';
 
 // Supabase Server Client
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || 'https://ifthfunawntmqjupafxp.supabase.co';
@@ -31,6 +33,31 @@ const SUPABASE_KEY =
   process.env.VITE_SUPABASE_ANON_KEY ||
   'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlmdGhmdW5hd250bXFqdXBhZnhwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODcyMjc4NTQsImV4cCI6MjEwMjgwMzg1NH0.xS74LsNci-I_v-p13O3rzzhflOuOZaHLDcVLgEi9Yzw';
 const serverSupabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+registerStaffProfileResolver(async (userId: string) => {
+  try {
+    const { data, error } = await serverSupabase
+      .from('profiles')
+      .select('role, outlet_id, assigned_outlet_ids')
+      .eq('id', userId)
+      .maybeSingle();
+    if (error || !data) return null;
+    const rawRole = String(data.role || '').toLowerCase();
+    const mappedRole: 'owner' | 'manager' | 'customer' =
+      rawRole === 'owner'
+        ? 'owner'
+        : rawRole === 'outlet_manager' || rawRole === 'manager'
+          ? 'manager'
+          : 'customer';
+    return {
+      role: mappedRole,
+      outletId: data.outlet_id || undefined,
+      assignedOutletIds: Array.isArray(data.assigned_outlet_ids) ? data.assigned_outlet_ids : undefined,
+    };
+  } catch {
+    return null;
+  }
+});
 
 // In-memory OTP cache fallback
 interface MemoryOtpRecord {
@@ -133,6 +160,7 @@ app.get('/api/auth/verify', (req, res) => {
       id: payload.id,
       email: payload.email,
       role: payload.role,
+      outletId: payload.outletId,
       name: payload.name || 'Staff User',
     },
   });
@@ -3609,29 +3637,53 @@ app.get('/api/admin/swad-coins/dispatches', requireOwnerAuth, async (req: Authen
 
 async function getNextServerOrderId(): Promise<string> {
   try {
-    const { data, error } = await serverSupabase
-      .from('orders')
-      .select('order_id, order_number')
-      .order('created_at', { ascending: false })
-      .limit(100);
+    const [{ data: orderRows }, { data: groupRows }] = await Promise.all([
+      serverSupabase
+        .from('orders')
+        .select('order_id, order_number')
+        .order('created_at', { ascending: false })
+        .limit(150),
+      serverSupabase
+        .from('checkout_groups')
+        .select('checkout_reference')
+        .order('created_at', { ascending: false })
+        .limit(50),
+    ]);
 
-    if (error || !data || data.length === 0) {
-      return 'SWADCLK-00016';
-    }
-
-    let maxNum = 0;
-    for (const row of data) {
-      const idToCheck = row.order_number || row.order_id;
-      if (idToCheck) {
-        const match = idToCheck.match(/(?:SWADCLK|GKSWAD|GKS)-#?0*(\d+)/i);
-        if (match && match[1]) {
-          const num = parseInt(match[1], 10);
-          if (!isNaN(num) && num > maxNum) {
-            maxNum = num;
-          }
+    let maxNum = 15;
+    const scanRef = (ref?: string | null) => {
+      if (!ref) return;
+      const match = String(ref).match(/(?:SWADCLK|GKSWAD|GKS)-#?0*(\d+)/i);
+      if (match && match[1]) {
+        const num = parseInt(match[1], 10);
+        if (!isNaN(num) && num > maxNum) {
+          maxNum = num;
         }
       }
+    };
+
+    if (Array.isArray(orderRows)) {
+      orderRows.forEach((r: any) => {
+        scanRef(r.order_number);
+        scanRef(r.order_id);
+      });
     }
+    if (Array.isArray(groupRows)) {
+      groupRows.forEach((g: any) => scanRef(g.checkout_reference));
+    }
+
+    // Also try Postgres sequence helper if available, ensuring we never go backwards
+    try {
+      const { data: rpcRef, error: rpcErr } = await serverSupabase.rpc('next_checkout_reference');
+      if (!rpcErr && typeof rpcRef === 'string') {
+        const m = rpcRef.match(/0*(\d+)$/);
+        const rpcNum = m ? parseInt(m[1], 10) : 0;
+        if (rpcNum > maxNum) {
+          return rpcRef;
+        }
+      }
+    } catch {}
+
     const nextSeq = Math.max(maxNum + 1, 16);
     return `SWADCLK-${String(nextSeq).padStart(5, '0')}`;
   } catch {
@@ -3670,12 +3722,34 @@ function mapDbOrderRow(data: any): any {
     id: data.id,
     orderId: data.order_id || data.order_number || data.id,
     orderNumber: data.order_number || data.order_id,
+    checkoutGroupId: data.checkout_group_id || undefined,
+    checkout_group_id: data.checkout_group_id || undefined,
+    checkoutReference: data.checkout_reference || undefined,
     outletId: data.outlet_id,
     outletName: data.outlet_name || (data.delivery_address_snapshot as any)?.outletName || undefined,
     customerId: data.customer_id,
     addressId: isPickup ? undefined : (data.address_id || undefined),
     orderType: data.order_type || (isPickup ? 'pickup' : 'delivery'),
+    order_type: data.order_type || (isPickup ? 'pickup' : 'delivery'),
     isSelfPickup: isPickup,
+    paymentPlan: data.payment_plan || 'full',
+    payment_plan: data.payment_plan || 'full',
+    advanceAmount: Number(data.advance_amount || 0),
+    advance_amount: Number(data.advance_amount || 0),
+    paidAmount: Number(data.paid_amount ?? data.advance_amount ?? 0),
+    paid_amount: Number(data.paid_amount ?? data.advance_amount ?? 0),
+    balanceAmount: Number(data.balance_amount || 0),
+    balance_amount: Number(data.balance_amount || 0),
+    festiveEventId: data.festive_event_id || undefined,
+    festive_event_id: data.festive_event_id || undefined,
+    festivalDeliveryAt: data.festival_delivery_at || undefined,
+    festival_delivery_at: data.festival_delivery_at || undefined,
+    festivalName: data.festival_name || undefined,
+    festival_name: data.festival_name || undefined,
+    paymentMethod: data.payment_method || data.customer_details?.paymentMethod || 'cod',
+    payment_method: data.payment_method || data.customer_details?.paymentMethod || 'cod',
+    paymentStatus: data.payment_status || 'pending',
+    payment_status: data.payment_status || 'pending',
     items: Array.isArray(data.items) ? data.items.map(deserializeOrderItem) : [],
     subtotal: Number(data.subtotal || 0),
     discount: Number(data.discount_amount || data.discount || 0),
@@ -4127,26 +4201,128 @@ app.post('/api/orders', async (req, res) => {
         }
       }
 
-      let finalOrderId = order.orderId ? String(order.orderId).trim().replace(/^#+/, '').replace(/SWADCLK-#/i, 'SWADCLK-').replace(/GKSWAD-#?/i, 'SWADCLK-') : '';
-      if (!finalOrderId || !finalOrderId.startsWith('SWADCLK-')) {
-        finalOrderId = await getNextServerOrderId();
+      let baseRef = order.orderId
+        ? String(order.orderId)
+            .trim()
+            .replace(/^#+/, '')
+            .replace(/SWADCLK-#/i, 'SWADCLK-')
+            .replace(/GKSWAD-#?/i, 'SWADCLK-')
+            .replace(/(-I|-PB|_PB)$/i, '')
+        : '';
+      if (!baseRef || !/^SWADCLK-\d+$/i.test(baseRef)) {
+        baseRef = await getNextServerOrderId();
       }
 
-      // Check if finalOrderId already exists in Supabase to prevent duplicate key constraint violation
-      const { data: existingOrderCheck } = await serverSupabase
-        .from('orders')
-        .select('id, order_number')
-        .or(`order_number.eq.${finalOrderId},order_id.eq.${finalOrderId}`)
-        .maybeSingle();
+      const targetChildSuffix = isPrebook ? '-PB' : '-I';
+      let finalOrderId = `${baseRef}${targetChildSuffix}`;
 
-      if (existingOrderCheck) {
-        finalOrderId = await getNextServerOrderId();
+      // Check if baseRef or finalOrderId already exists in Supabase to prevent duplicate key collisions
+      const [{ data: existingOrderCheck }, { data: existingGroupCheck }] = await Promise.all([
+        serverSupabase
+          .from('orders')
+          .select('id, order_number')
+          .or(`order_number.eq.${finalOrderId},order_id.eq.${finalOrderId}`)
+          .maybeSingle(),
+        !payload.checkoutGroupId
+          ? serverSupabase
+              .from('checkout_groups')
+              .select('id')
+              .eq('checkout_reference', baseRef)
+              .maybeSingle()
+          : Promise.resolve({ data: null } as any),
+      ]);
+
+      if (existingOrderCheck || existingGroupCheck) {
+        baseRef = await getNextServerOrderId();
+        finalOrderId = `${baseRef}${targetChildSuffix}`;
+      }
+
+      const fallbackPaymentMethod = String(order.customerDetails?.paymentMethod || 'cod').toLowerCase();
+      const isOnlineFallbackPayment = fallbackPaymentMethod !== 'cod';
+      const fallbackPaidNow = isPrebook
+        ? isOnlineFallbackPayment
+          ? Number(advanceAmount || 0)
+          : 0
+        : isOnlineFallbackPayment
+          ? Number(order.total || 0)
+          : 0;
+      const fallbackBalance = Math.max(0, Number((Number(order.total || 0) - fallbackPaidNow).toFixed(2)));
+      const fallbackPaymentStatus =
+        !isOnlineFallbackPayment && !isPrebook
+          ? 'pending'
+          : fallbackBalance > 0
+            ? fallbackPaidNow > 0
+              ? 'partially_paid'
+              : 'pending'
+            : 'paid';
+
+      let resolvedCheckoutGroupId: string | null = payload.checkoutGroupId || null;
+      let createdGroupRecord: any = null;
+      if (!resolvedCheckoutGroupId) {
+        try {
+          const nowGroupIso = new Date().toISOString();
+          const { data: cgInserted, error: cgErr } = await serverSupabase
+            .from('checkout_groups')
+            .insert({
+              checkout_reference: baseRef,
+              customer_id: isUUID(supaCustomerId) ? supaCustomerId : null,
+              customer_address_id: !isSelfPickup && isUUID(supaAddressId) ? supaAddressId : null,
+              outlet_id: safeOutletId,
+              coupon_id: isUUID(payload.couponId) ? payload.couponId : null,
+              coupon_code_snapshot: order.couponCode || null,
+              subtotal: Number(order.subtotal || 0),
+              discount_amount: Number(order.discount || 0),
+              swad_coin_discount_amount: Number(order.swadCoinDiscountAmount || 0),
+              packaging_fee: Number(order.packagingFee || 0),
+              delivery_charge: Number(order.deliveryFee || 0),
+              tax_amount: Number(order.gst || 0),
+              grand_total: Number(order.total || 0),
+              order_mode: isPrebook ? 'prebook' : 'normal',
+              prebook_payment_plan: isPrebook ? paymentPlan : null,
+              amount_due_now: isPrebook ? Number(advanceAmount || 0) : Number(order.total || 0),
+              amount_paid: fallbackPaidNow,
+              balance_due: fallbackBalance,
+              payment_status: fallbackPaymentStatus,
+              idempotency_key: payload.idempotencyKey || null,
+              created_at: nowGroupIso,
+              updated_at: nowGroupIso,
+            })
+            .select()
+            .single();
+
+          if (!cgErr && cgInserted) {
+            resolvedCheckoutGroupId = cgInserted.id;
+            createdGroupRecord = {
+              id: cgInserted.id,
+              checkoutReference: baseRef,
+              outletId: safeOutletId,
+              orderMode: isPrebook ? 'prebook' : 'normal',
+              prebookPaymentPlan: isPrebook ? paymentPlan : null,
+              subtotal: Number(order.subtotal || 0),
+              discountAmount: Number(order.discount || 0),
+              swadCoinDiscountAmount: Number(order.swadCoinDiscountAmount || 0),
+              packagingFee: Number(order.packagingFee || 0),
+              deliveryCharge: Number(order.deliveryFee || 0),
+              taxAmount: Number(order.gst || 0),
+              grandTotal: Number(order.total || 0),
+              amountDueNow: isPrebook ? Number(advanceAmount || 0) : Number(order.total || 0),
+              amountPaid: fallbackPaidNow,
+              balanceDue: fallbackBalance,
+              paymentStatus: fallbackPaymentStatus,
+              createdAt: nowGroupIso,
+            };
+            productStorage.recordCheckoutGroup(createdGroupRecord);
+          }
+        } catch (cgCreateErr) {
+          console.warn('Direct /api/orders checkout_groups creation notice:', cgCreateErr);
+        }
       }
 
       const supaPayload: any = {
         id: order.id || `order-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
         order_id: finalOrderId,
         order_number: finalOrderId,
+        checkout_group_id: resolvedCheckoutGroupId,
         outlet_id: safeOutletId,
         customer_id: isUUID(supaCustomerId) ? supaCustomerId : null,
         address_id: isSelfPickup ? null : (isUUID(supaAddressId) ? supaAddressId : null),
@@ -4168,10 +4344,11 @@ app.post('/api/orders', async (req, res) => {
         swad_coins_used: Number(order.swadCoinsUsed || 0),
         swad_coin_discount_amount: Number(order.swadCoinDiscountAmount || 0),
         payment_method: order.customerDetails?.paymentMethod || 'cod',
-        payment_status: orderData.paymentStatus || 'PENDING',
+        payment_status: orderData.paymentStatus || fallbackPaymentStatus,
         order_type: orderData.orderType || (isSelfPickup ? 'pickup' : 'delivery'),
         payment_plan: paymentPlan,
         advance_amount: Number(advanceAmount || 0),
+        paid_amount: fallbackPaidNow,
         balance_amount: Number(balanceAmount || 0),
         festive_event_id: payload.festiveEventId || null,
         festival_delivery_at: payload.festivalDeliveryAt || null,
@@ -4204,9 +4381,18 @@ app.post('/api/orders', async (req, res) => {
 
       // If duplicate constraint race occurs, retry with newly computed next ID
       if (res1.error && (res1.error.code === '23505' || res1.error.message.includes('unique constraint') || res1.error.message.includes('order_number'))) {
-        const freshId = await getNextServerOrderId();
-        supaPayload.order_id = freshId;
-        supaPayload.order_number = freshId;
+        baseRef = await getNextServerOrderId();
+        finalOrderId = `${baseRef}${targetChildSuffix}`;
+        supaPayload.order_id = finalOrderId;
+        supaPayload.order_number = finalOrderId;
+        if (resolvedCheckoutGroupId) {
+          try {
+            await serverSupabase
+              .from('checkout_groups')
+              .update({ checkout_reference: baseRef })
+              .eq('id', resolvedCheckoutGroupId);
+          } catch {}
+        }
         res1 = await serverSupabase
           .from('orders')
           .insert(supaPayload)
@@ -4215,25 +4401,29 @@ app.post('/api/orders', async (req, res) => {
       }
 
       if (res1.data) {
-        // If Supabase trigger forced an unexpected format or inner #, immediately normalize
+        // If a stale Supabase BEFORE INSERT trigger overwrote our SWADCLK-000xx-I/-PB ID, restore it immediately
         const dbOrderId = String(res1.data.order_id || res1.data.order_number || finalOrderId);
-        if (dbOrderId.includes('SWADCLK-#') || dbOrderId.includes('GKSWAD')) {
-          const cleanOrderId = dbOrderId.replace(/SWADCLK-#/g, 'SWADCLK-').replace(/GKSWAD-#?/g, 'SWADCLK-');
+        if (dbOrderId !== finalOrderId) {
           try {
             await serverSupabase
               .from('orders')
-              .update({ order_id: cleanOrderId, order_number: cleanOrderId })
+              .update({ order_id: finalOrderId, order_number: finalOrderId })
               .eq('id', res1.data.id);
-            res1.data.order_id = cleanOrderId;
-            res1.data.order_number = cleanOrderId;
+            res1.data.order_id = finalOrderId;
+            res1.data.order_number = finalOrderId;
           } catch (cleanErr) {
-            console.warn('Post-insert ID normalization notice:', cleanErr);
+            console.warn('Post-insert ID alignment notice:', cleanErr);
           }
         }
 
         console.log(`Order ${res1.data.order_id || res1.data.id} successfully persisted to Supabase.`);
         order.orderId = res1.data.order_id || finalOrderId;
         order.orderNumber = res1.data.order_number || order.orderId;
+        order.checkoutGroupId = resolvedCheckoutGroupId || undefined;
+        order.checkoutReference = baseRef;
+        if (createdGroupRecord) {
+          (order as any).checkoutGroup = createdGroupRecord;
+        }
 
         // Insert normalized order_items into Supabase
         if (safeItems.length > 0) {
@@ -4444,7 +4634,11 @@ app.post('/api/orders', async (req, res) => {
       console.warn('Supabase order creation and stock sync notice:', dbSyncErr);
     }
 
-    return res.status(201).json({ success: true, order });
+    return res.status(201).json({
+      success: true,
+      order,
+      checkoutGroup: (order as any).checkoutGroup || undefined,
+    });
   } catch (err: any) {
     console.error('Create order error:', err);
     return res.status(400).json({
@@ -4454,15 +4648,1108 @@ app.post('/api/orders', async (req, res) => {
   }
 });
 
+// 21b. Unified Mixed-Cart Checkout Endpoint (Normal + Utsav Pre-book Orders under One Parent Transaction)
+app.post('/api/orders/checkout', async (req, res) => {
+  try {
+    const payload = req.body || {};
+    const idempotencyKey = String(payload.idempotencyKey || '').trim() || `chk-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const outletId = String(payload.outletId || '').trim();
+    const isSelfPickup = !!(payload.isSelfPickup || payload.orderType === 'pickup');
+    const rawPhone = String(payload.customerDetails?.phone || '').trim();
+    const normPhone = rawPhone.replace(/\D/g, '').slice(-10);
+    const paymentMethod = String(payload.customerDetails?.paymentMethod || payload.paymentMethod || 'upi').toLowerCase();
+    const prebookPaymentPlan: 'advance_25' | 'full' = payload.prebookPaymentPlan === 'advance_25' ? 'advance_25' : 'full';
+    const rawItems = Array.isArray(payload.items) ? payload.items : [];
+
+    if (!outletId) {
+      return res.status(400).json({ success: false, error: 'Active kitchen outlet is required.' });
+    }
+    if (rawItems.length === 0) {
+      return res.status(400).json({ success: false, error: 'Your cart is empty.' });
+    }
+    if (!normPhone || normPhone.length !== 10) {
+      return res.status(400).json({ success: false, error: 'A valid 10-digit customer phone number is required.' });
+    }
+
+    // 0. Idempotency check
+    try {
+      const { data: existingGroup } = await serverSupabase
+        .from('checkout_groups')
+        .select('*')
+        .eq('idempotency_key', idempotencyKey)
+        .maybeSingle();
+
+      if (existingGroup) {
+        const { data: existingChildren } = await serverSupabase
+          .from('orders')
+          .select('*')
+          .eq('checkout_group_id', existingGroup.id)
+          .order('created_at', { ascending: true });
+
+        const mappedChildren = (existingChildren || []).map((c: any) => ({
+          ...mapDbOrderRow(c),
+          checkoutReference: existingGroup.checkout_reference,
+        }));
+        const normalOrder = mappedChildren.find((o: any) => o.orderType !== 'prebook') || null;
+        const prebookOrder = mappedChildren.find((o: any) => o.orderType === 'prebook') || null;
+
+        return res.status(200).json({
+          success: true,
+          idempotentReplay: true,
+          checkoutGroup: {
+            id: existingGroup.id,
+            checkoutReference: existingGroup.checkout_reference,
+            outletId: existingGroup.outlet_id,
+            orderMode: existingGroup.order_mode,
+            prebookPaymentPlan: existingGroup.prebook_payment_plan,
+            subtotal: Number(existingGroup.subtotal || 0),
+            discountAmount: Number(existingGroup.discount_amount || 0),
+            swadCoinDiscountAmount: Number(existingGroup.swad_coin_discount_amount || 0),
+            packagingFee: Number(existingGroup.packaging_fee || 0),
+            deliveryCharge: Number(existingGroup.delivery_charge || 0),
+            taxAmount: Number(existingGroup.tax_amount || 0),
+            grandTotal: Number(existingGroup.grand_total || 0),
+            amountDueNow: Number(existingGroup.amount_due_now || 0),
+            amountPaid: Number(existingGroup.amount_paid || 0),
+            balanceDue: Number(existingGroup.balance_due || 0),
+            paymentStatus: existingGroup.payment_status,
+            createdAt: existingGroup.created_at,
+          },
+          orders: mappedChildren,
+          normalOrder,
+          prebookOrder,
+        });
+      }
+    } catch {}
+
+    // 1. Validate outlet & delivery PIN code coverage
+    const { data: outletRow, error: outletErr } = await serverSupabase
+      .from('outlets')
+      .select('*')
+      .eq('id', outletId)
+      .maybeSingle();
+
+    if (outletErr || !outletRow || outletRow.is_active === false) {
+      return res.status(400).json({ success: false, error: 'Selected kitchen outlet is unavailable or inactive.' });
+    }
+
+    const deliveryPinCode = String(payload.deliveryPinCode || payload.customerDetails?.pincode || '').trim();
+    if (!isSelfPickup) {
+      if (!/^\d{6}$/.test(deliveryPinCode)) {
+        return res.status(400).json({ success: false, error: 'Please provide a valid 6-digit delivery PIN code.' });
+      }
+      const { data: outletZones } = await serverSupabase
+        .from('delivery_zones')
+        .select('id, pin_codes, is_active, delivery_fee, free_delivery_above')
+        .eq('outlet_id', outletId);
+
+      const activeZones = (outletZones || []).filter((z: any) => z.is_active !== false);
+      if (activeZones.length > 0) {
+        const matchedZone = activeZones.find(
+          (z: any) => Array.isArray(z.pin_codes) && z.pin_codes.includes(deliveryPinCode)
+        );
+        if (!matchedZone) {
+          return res.status(400).json({
+            success: false,
+            error: `PIN code ${deliveryPinCode} is outside the serviceable delivery area for ${outletRow.name}.`,
+          });
+        }
+      }
+    }
+
+    // 2. Fetch authoritative product rows & validate outlet availability, stock capacity, and festive booking windows
+    const productIds = Array.from(
+      new Set(
+        rawItems
+          .map((it: any) => String(it.productId || it.product?.id || it.id || '').trim())
+          .filter(Boolean)
+      )
+    );
+
+    const { data: dbProducts } = await serverSupabase
+      .from('products')
+      .select('*')
+      .in('id', productIds);
+
+    const productMap = new Map<string, any>();
+    (dbProducts || []).forEach((p: any) => productMap.set(String(p.id), p));
+
+    // Aggregate quantities per productId for atomic capacity checks
+    const requestedQtyByProduct: Record<string, number> = {};
+    const enrichedItems: any[] = [];
+    const festiveEventIds = new Set<string>();
+
+    for (const rawItem of rawItems) {
+      const pId = String(rawItem.productId || rawItem.product?.id || rawItem.id || '').trim();
+      const qty = Math.max(1, Math.floor(Number(rawItem.quantity) || 1));
+      const dbProd = productMap.get(pId);
+
+      if (dbProd) {
+        if (dbProd.active === false) {
+          return res.status(400).json({
+            success: false,
+            error: `"${dbProd.name}" is currently unavailable.`,
+          });
+        }
+        const outletsArr = Array.isArray(dbProd.outlets) ? dbProd.outlets : [];
+        const outletCfg = outletsArr.find((o: any) => String(o.outletId || o.outlet_id) === outletId);
+        if (outletsArr.length > 0 && !outletCfg) {
+          return res.status(400).json({
+            success: false,
+            error: `"${dbProd.name}" is not available at ${outletRow.name}. Please remove it from your cart.`,
+          });
+        }
+        if (outletCfg && outletCfg.inStock === false) {
+          return res.status(400).json({
+            success: false,
+            error: `"${dbProd.name}" is currently sold out at ${outletRow.name}.`,
+          });
+        }
+        requestedQtyByProduct[pId] = (requestedQtyByProduct[pId] || 0) + qty;
+        const portionsLeft = outletCfg?.portionsLeft ?? outletCfg?.portions_left;
+        if (portionsLeft !== null && portionsLeft !== undefined && portionsLeft !== '') {
+          if (requestedQtyByProduct[pId] > Number(portionsLeft)) {
+            return res.status(400).json({
+              success: false,
+              error: `Only ${Math.max(0, Number(portionsLeft))} portion(s) left for "${dbProd.name}" at ${outletRow.name}.`,
+            });
+          }
+        }
+
+        // Authoritative price derivation (variant + addons)
+        const basePrice = Number(
+          rawItem.selectedVariant?.price ??
+            (Array.isArray(dbProd.variants) && rawItem.selectedVariant?.id
+              ? dbProd.variants.find((v: any) => String(v.id) === String(rawItem.selectedVariant.id))?.price
+              : undefined) ??
+            outletCfg?.price ??
+            dbProd.price ??
+            rawItem.unitPrice ??
+            0
+        );
+        const addonsTotal = Array.isArray(rawItem.selectedAddons)
+          ? rawItem.selectedAddons.reduce((acc: number, ad: any) => {
+              const dbAddon = Array.isArray(dbProd.addons)
+                ? dbProd.addons.find((a: any) => String(a.id) === String(ad.id))
+                : null;
+              return acc + Number(dbAddon?.price ?? ad.price ?? 0);
+            }, 0)
+          : 0;
+
+        const unitPrice = Number((basePrice + addonsTotal).toFixed(2)) || Number(rawItem.unitPrice || 0);
+        const availMode = dbProd.availability_mode === 'prebook_only' ? 'prebook_only' : 'normal';
+        const fEventId = dbProd.festive_event_id || rawItem.festiveEventId || rawItem.product?.festiveEventId || null;
+        if (availMode === 'prebook_only' && fEventId) {
+          festiveEventIds.add(String(fEventId));
+        }
+
+        enrichedItems.push({
+          ...rawItem,
+          productId: pId,
+          name: dbProd.name || rawItem.name || rawItem.product?.name,
+          hindiName: dbProd.hindi_name || rawItem.hindiName,
+          image: dbProd.image || rawItem.image || rawItem.product?.image || '',
+          isVeg: dbProd.is_veg !== undefined ? !!dbProd.is_veg : Boolean(rawItem.isVeg ?? rawItem.product?.isVeg ?? true),
+          quantity: qty,
+          unitPrice,
+          totalPrice: Number((unitPrice * qty).toFixed(2)),
+          availabilityMode: availMode,
+          festiveEventId: fEventId,
+          specialPackaging: dbProd.special_packaging !== undefined ? !!dbProd.special_packaging : !!rawItem.specialPackaging,
+        });
+      } else {
+        // Fallback if item wasn't found in products table
+        const unitPrice = Number(rawItem.unitPrice || rawItem.price || rawItem.product?.price || 0);
+        const availMode = isPrebookItem(rawItem) ? 'prebook_only' : 'normal';
+        const fEventId = rawItem.festiveEventId || rawItem.product?.festiveEventId || null;
+        if (availMode === 'prebook_only' && fEventId) {
+          festiveEventIds.add(String(fEventId));
+        }
+        enrichedItems.push({
+          ...rawItem,
+          productId: pId,
+          quantity: qty,
+          unitPrice,
+          totalPrice: Number((unitPrice * qty).toFixed(2)),
+          availabilityMode: availMode,
+          festiveEventId: fEventId,
+        });
+      }
+    }
+
+    // Validate festive event windows for all pre-book items
+    const festiveEventMap = new Map<string, any>();
+    if (festiveEventIds.size > 0) {
+      const { data: evRows } = await serverSupabase
+        .from('festive_events')
+        .select('*')
+        .in('id', Array.from(festiveEventIds));
+
+      (evRows || []).forEach((ev: any) => festiveEventMap.set(String(ev.id), ev));
+      const nowTime = Date.now();
+      for (const evId of festiveEventIds) {
+        const ev = festiveEventMap.get(evId);
+        if (!ev) continue;
+        if (ev.outlet_id && String(ev.outlet_id) !== outletId) {
+          return res.status(400).json({
+            success: false,
+            error: `Festive collection "${ev.name}" belongs to another kitchen outlet.`,
+          });
+        }
+        if (ev.status && ev.status !== 'active') {
+          return res.status(400).json({
+            success: false,
+            error: `Pre-booking for "${ev.name}" is currently closed.`,
+          });
+        }
+        if (ev.booking_start_at && new Date(ev.booking_start_at).getTime() > nowTime) {
+          return res.status(400).json({
+            success: false,
+            error: `Pre-booking for "${ev.name}" opens on ${new Date(ev.booking_start_at).toLocaleDateString('en-IN')}.`,
+          });
+        }
+        if (ev.booking_end_at && new Date(ev.booking_end_at).getTime() < nowTime) {
+          return res.status(400).json({
+            success: false,
+            error: `Pre-booking for "${ev.name}" closed on ${new Date(ev.booking_end_at).toLocaleDateString('en-IN')}.`,
+          });
+        }
+      }
+    }
+
+    // Attach festival snapshot fields onto each pre-book item
+    let primaryFestiveEvent: any = null;
+    for (const item of enrichedItems) {
+      if (item.availabilityMode === 'prebook_only' && item.festiveEventId) {
+        const ev = festiveEventMap.get(String(item.festiveEventId));
+        if (ev) {
+          if (!primaryFestiveEvent) primaryFestiveEvent = ev;
+          item.festivalName = ev.name;
+          item.festivalDeliveryDate = ev.festival_date;
+        }
+      }
+    }
+
+    const hasAnyPrebook = enrichedItems.some((it) => isPrebookItem(it));
+    if (hasAnyPrebook && paymentMethod === 'cod') {
+      return res.status(400).json({
+        success: false,
+        error: 'Cash on Delivery is unavailable when your cart includes Utsav Pre-book dishes. Please choose an online payment option.',
+      });
+    }
+
+    // 3. Resolve or create customer & address in Supabase first (needed for coupon & coin checks)
+    let supaCustomerId: string | null = isUUID(payload.customerId) ? payload.customerId : null;
+    let supaAddressId: string | null = !isSelfPickup && isUUID(payload.addressId) ? payload.addressId : null;
+
+    if (normPhone) {
+      const { data: existingSupaCust } = await serverSupabase
+        .from('customers')
+        .select('id, swad_coin_balance')
+        .eq('phone', normPhone)
+        .maybeSingle();
+
+      if (existingSupaCust?.id) {
+        supaCustomerId = existingSupaCust.id;
+      } else {
+        const { data: newSupaCust } = await serverSupabase
+          .from('customers')
+          .insert({
+            phone: normPhone,
+            full_name: payload.customerDetails?.fullName?.trim() || 'Valued Customer',
+            email: payload.customerDetails?.email?.trim() || null,
+            is_phone_verified: true,
+            marketing_consent: !!payload.customerDetails?.marketingConsent,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .select('id')
+          .maybeSingle();
+        if (newSupaCust?.id) supaCustomerId = newSupaCust.id;
+      }
+
+      if (supaCustomerId && payload.customerDetails?.address && !isSelfPickup) {
+        const cleanAddr = String(payload.customerDetails.address).trim();
+        const { data: existingAddrs } = await serverSupabase
+          .from('customer_addresses')
+          .select('*')
+          .eq('customer_id', supaCustomerId);
+        const matchedAddr = (existingAddrs || []).find(
+          (a: any) =>
+            (a.full_address || a.address_line1 || '').trim().toLowerCase() === cleanAddr.toLowerCase() ||
+            (payload.addressId && a.id === payload.addressId)
+        );
+        if (matchedAddr?.id) {
+          supaAddressId = matchedAddr.id;
+        } else {
+          const insAddr = await serverSupabase
+            .from('customer_addresses')
+            .insert({
+              customer_id: supaCustomerId,
+              label: payload.customerDetails?.addressLabel || 'Home',
+              full_address: cleanAddr,
+              landmark: payload.customerDetails?.landmark || null,
+              city: payload.customerDetails?.city || outletRow.city || 'Bhubaneswar',
+              state: payload.customerDetails?.state || outletRow.state || 'Odisha',
+              pincode: deliveryPinCode,
+              is_default: true,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            })
+            .select('id')
+            .maybeSingle();
+          if (insAddr.data?.id) supaAddressId = insAddr.data.id;
+        }
+      }
+    }
+
+    // 4. Authoritative Coupon & Swad Coin computation on Combined Cart
+    const combinedSubtotal = Number(
+      enrichedItems.reduce((s, it) => s + Number(it.unitPrice || 0) * Number(it.quantity || 1), 0).toFixed(2)
+    );
+
+    let validatedCouponId: string | null = null;
+    let validatedCouponCode: string | null = payload.couponCode ? String(payload.couponCode).trim().toUpperCase() : null;
+    let authoritativeCouponDiscount = 0;
+
+    if (validatedCouponCode) {
+      const { data: cRow } = await serverSupabase
+        .from('coupons')
+        .select('*')
+        .ilike('code', validatedCouponCode)
+        .maybeSingle();
+
+      if (!cRow || cRow.is_active === false) {
+        return res.status(400).json({ success: false, error: `Coupon "${validatedCouponCode}" is invalid or inactive.` });
+      }
+      const now = new Date();
+      if (cRow.valid_from && new Date(cRow.valid_from) > now) {
+        return res.status(400).json({ success: false, error: `Coupon "${cRow.code}" is not yet active.` });
+      }
+      if (cRow.valid_until && new Date(cRow.valid_until) < now) {
+        return res.status(400).json({ success: false, error: `Coupon "${cRow.code}" has expired.` });
+      }
+      const minOrd = Number(cRow.minimum_order_value || 0);
+      if (minOrd > 0 && combinedSubtotal < minOrd) {
+        return res.status(400).json({
+          success: false,
+          error: `Minimum cart total of ₹${minOrd} required for coupon ${cRow.code}.`,
+        });
+      }
+      const cOutlets = Array.isArray(cRow.outlet_ids) ? cRow.outlet_ids : [];
+      if (cOutlets.length > 0 && !cOutlets.includes(outletId)) {
+        return res.status(400).json({
+          success: false,
+          error: `Coupon ${cRow.code} is not valid for ${outletRow.name}.`,
+        });
+      }
+
+      if (cRow.usage_limit_per_user && supaCustomerId) {
+        const { count: uCount } = await serverSupabase
+          .from('coupon_redemptions')
+          .select('id', { count: 'exact', head: true })
+          .eq('coupon_id', cRow.id)
+          .eq('customer_id', supaCustomerId);
+        if (uCount && uCount >= Number(cRow.usage_limit_per_user)) {
+          return res.status(400).json({
+            success: false,
+            error: `You have already redeemed coupon ${cRow.code}.`,
+          });
+        }
+      }
+
+      validatedCouponId = cRow.id;
+      validatedCouponCode = cRow.code;
+      if (cRow.discount_type === 'percentage') {
+        authoritativeCouponDiscount = (combinedSubtotal * Number(cRow.discount_value || 0)) / 100;
+        if (cRow.max_discount_amount != null && Number(cRow.max_discount_amount) > 0) {
+          authoritativeCouponDiscount = Math.min(authoritativeCouponDiscount, Number(cRow.max_discount_amount));
+        }
+      } else {
+        authoritativeCouponDiscount = Number(cRow.discount_value || 0);
+      }
+      authoritativeCouponDiscount = Math.min(Math.round(authoritativeCouponDiscount), combinedSubtotal);
+    }
+
+    // Swad Coins check (1 Coin = ₹1, capped at 10% of eligible post-coupon subtotal)
+    const requestedCoins = Math.max(0, Math.floor(Number(payload.requestedSwadCoins || payload.swadCoinsUsed || 0)));
+    let authoritativeCoinsUsed = 0;
+    let currentCoinBalance = 0;
+    if (requestedCoins > 0 && normPhone) {
+      if (supaCustomerId) {
+        const { data: sCust } = await serverSupabase
+          .from('customers')
+          .select('swad_coin_balance')
+          .eq('id', supaCustomerId)
+          .maybeSingle();
+        currentCoinBalance = Math.max(0, Number(sCust?.swad_coin_balance ?? productStorage.getCustomerSwadCoinBalance(normPhone)));
+      } else {
+        currentCoinBalance = Math.max(0, productStorage.getCustomerSwadCoinBalance(normPhone));
+      }
+      const eligibleAfterCoupon = Math.max(0, combinedSubtotal - authoritativeCouponDiscount);
+      const maxCoins = Math.floor(eligibleAfterCoupon * 0.1);
+      authoritativeCoinsUsed = Math.min(requestedCoins, currentCoinBalance, maxCoins);
+    }
+
+    // Fees
+    const packagingFeeTotal = Math.max(0, Number(payload.packagingFee ?? outletRow.packaging_fee ?? 0));
+    const freeThreshold = Number(outletRow.free_delivery_threshold ?? 999);
+    const defaultDeliveryFee = Number(outletRow.delivery_fee ?? 40);
+    const deliveryFeeTotal = isSelfPickup
+      ? 0
+      : payload.deliveryFee !== undefined
+        ? Math.max(0, Number(payload.deliveryFee))
+        : combinedSubtotal >= freeThreshold
+          ? 0
+          : defaultDeliveryFee;
+
+    // Run deterministic split calculation
+    const breakdown = calculateMixedCheckoutBreakdown({
+      items: enrichedItems,
+      couponDiscountTotal: authoritativeCouponDiscount,
+      swadCoinDiscountTotal: authoritativeCoinsUsed,
+      packagingFeeTotal,
+      deliveryFeeTotal,
+      prebookPaymentPlan,
+    });
+
+    // Scheduled timestamp calculation for Normal order if scheduled
+    const isScheduled =
+      payload.deliveryType === 'scheduled' || payload.customerDetails?.deliveryType === 'scheduled';
+    let scheduledAt: string | null = null;
+    if (isScheduled) {
+      const rawDate = payload.scheduledAt || payload.customerDetails?.scheduledAt || payload.customerDetails?.scheduledDate;
+      if (rawDate) {
+        const d = new Date(rawDate);
+        if (!isNaN(d.getTime())) scheduledAt = d.toISOString();
+      }
+    }
+
+    // 5. Generate authoritative checkout reference + child order numbers
+    const baseReference = await getNextServerOrderId();
+    const nowIso = new Date().toISOString();
+    const isOnlinePayment = paymentMethod !== 'cod';
+    const initialPaidAmount = isOnlinePayment ? breakdown.amountDueNow : 0;
+    const parentBalanceDue = isOnlinePayment ? breakdown.balanceDue : breakdown.grandTotal;
+    const parentPaymentStatus: 'pending' | 'partially_paid' | 'paid' = !isOnlinePayment
+      ? 'pending'
+      : parentBalanceDue > 0
+        ? 'partially_paid'
+        : 'paid';
+
+    // 6. Insert parent checkout_groups row
+    const groupInsertPayload = {
+      checkout_reference: baseReference,
+      customer_id: isUUID(supaCustomerId) ? supaCustomerId : null,
+      customer_address_id: !isSelfPickup && isUUID(supaAddressId) ? supaAddressId : null,
+      outlet_id: outletId,
+      coupon_id: validatedCouponId,
+      coupon_code_snapshot: validatedCouponCode,
+      subtotal: breakdown.combinedSubtotal,
+      discount_amount: breakdown.totalCouponDiscount,
+      swad_coin_discount_amount: breakdown.totalSwadCoinDiscount,
+      packaging_fee: breakdown.totalPackagingFee,
+      delivery_charge: breakdown.totalDeliveryFee,
+      tax_amount: breakdown.totalGst,
+      grand_total: breakdown.grandTotal,
+      order_mode: breakdown.orderMode,
+      prebook_payment_plan: breakdown.hasPrebook ? breakdown.prebookPaymentPlan : null,
+      amount_due_now: breakdown.amountDueNow,
+      amount_paid: initialPaidAmount,
+      balance_due: parentBalanceDue,
+      payment_status: parentPaymentStatus,
+      idempotency_key: idempotencyKey,
+      created_at: nowIso,
+      updated_at: nowIso,
+    };
+
+    let insertedGroup: any = null;
+    const { data: cgRow, error: cgErr } = await serverSupabase
+      .from('checkout_groups')
+      .insert(groupInsertPayload)
+      .select()
+      .single();
+
+    if (cgErr) {
+      console.error('checkout_groups insert error:', cgErr.message);
+      return res.status(500).json({
+        success: false,
+        error: `Failed to initialize checkout group (${cgErr.message}). Please ensure the checkout_groups migration is applied.`,
+      });
+    }
+    insertedGroup = cgRow;
+
+    productStorage.recordCheckoutGroup({
+      id: insertedGroup.id,
+      checkoutReference: baseReference,
+      customerId: supaCustomerId,
+      customerAddressId: supaAddressId,
+      outletId,
+      couponId: validatedCouponId,
+      couponCodeSnapshot: validatedCouponCode,
+      subtotal: breakdown.combinedSubtotal,
+      discountAmount: breakdown.totalCouponDiscount,
+      swadCoinDiscountAmount: breakdown.totalSwadCoinDiscount,
+      packagingFee: breakdown.totalPackagingFee,
+      deliveryCharge: breakdown.totalDeliveryFee,
+      taxAmount: breakdown.totalGst,
+      grandTotal: breakdown.grandTotal,
+      orderMode: breakdown.orderMode,
+      prebookPaymentPlan: breakdown.hasPrebook ? breakdown.prebookPaymentPlan : null,
+      amountDueNow: breakdown.amountDueNow,
+      amountPaid: initialPaidAmount,
+      balanceDue: parentBalanceDue,
+      paymentStatus: parentPaymentStatus,
+      idempotencyKey,
+    });
+
+    // Helper to build & insert a child order
+    const createdChildRows: any[] = [];
+    const buildChildPayload = (
+      childKind: 'normal' | 'prebook',
+      childOrderNumber: string,
+      childItems: any[],
+      totals: NonNullable<typeof breakdown.normalChild>
+    ) => {
+      const childOrderIdUuid = `order-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 7)}`;
+      const childPaid = childKind === 'normal'
+        ? (isOnlinePayment ? totals.total : 0)
+        : (isOnlinePayment ? totals.advanceAmount : 0);
+      const childBalance = Math.max(0, Number((totals.total - childPaid).toFixed(2)));
+      const childPaymentStatus = !isOnlinePayment
+        ? 'pending'
+        : childBalance > 0
+          ? 'partially_paid'
+          : 'paid';
+      const childFestiveEventId = childKind === 'prebook'
+        ? (primaryFestiveEvent?.id || childItems.find((i) => i.festiveEventId)?.festiveEventId || null)
+        : null;
+      const childFestiveName = childKind === 'prebook'
+        ? (primaryFestiveEvent?.name || childItems.find((i) => i.festivalName)?.festivalName || null)
+        : null;
+      const childFestiveDate = childKind === 'prebook'
+        ? (primaryFestiveEvent?.festival_date || childItems.find((i) => i.festivalDeliveryDate)?.festivalDeliveryDate || null)
+        : null;
+
+      return {
+        id: childOrderIdUuid,
+        order_id: childOrderNumber,
+        order_number: childOrderNumber,
+        checkout_group_id: insertedGroup.id,
+        outlet_id: outletId,
+        customer_id: isUUID(supaCustomerId) ? supaCustomerId : null,
+        address_id: isSelfPickup ? null : (isUUID(supaAddressId) ? supaAddressId : null),
+        customer_name: payload.customerDetails?.fullName || null,
+        customer_phone: payload.customerDetails?.phone || null,
+        is_self_pickup: isSelfPickup,
+        order_type: childKind === 'prebook' ? 'prebook' : (isSelfPickup ? 'pickup' : 'delivery'),
+        payment_plan: totals.paymentPlan,
+        advance_amount: totals.advanceAmount,
+        paid_amount: childPaid,
+        balance_amount: childBalance,
+        festive_event_id: childFestiveEventId,
+        festival_delivery_at: childFestiveDate,
+        festival_name: childFestiveName,
+        items: childItems.map(sanitizeOrderItem),
+        subtotal: totals.subtotal,
+        delivery_fee: totals.deliveryFee,
+        packaging_fee: totals.packagingFee,
+        discount_amount: totals.discount,
+        tax_amount: totals.gst,
+        total_amount: totals.total,
+        discount_type: totals.discount > 0 ? 'coupon' : 'NONE',
+        discount_code: validatedCouponCode,
+        swad_coins_used: Math.round(totals.swadCoinDiscount),
+        swad_coin_discount_amount: totals.swadCoinDiscount,
+        payment_method: paymentMethod,
+        payment_status: childPaymentStatus,
+        delivery_type: childKind === 'prebook' ? 'scheduled' : (isScheduled ? 'scheduled' : 'immediate'),
+        scheduled_at: childKind === 'prebook' ? (childFestiveDate ? new Date(`${childFestiveDate}T11:00:00`).toISOString() : scheduledAt) : scheduledAt,
+        delivery_instructions: payload.customerDetails?.deliveryNotes || null,
+        order_status: 'received',
+        placed_at: nowIso,
+        customer_details: payload.customerDetails || {},
+        delivery_address_snapshot: isSelfPickup ? null : (payload.deliveryAddressSnapshot || null),
+        delivery_pincode: deliveryPinCode,
+        estimated_delivery_minutes: isSelfPickup ? 25 : 35,
+        created_at: nowIso,
+        updated_at: nowIso,
+      };
+    };
+
+    const insertChildOrder = async (supaOrderPayload: any, rawChildItems: any[]) => {
+      const { data: row, error: insErr } = await serverSupabase
+        .from('orders')
+        .insert(supaOrderPayload)
+        .select()
+        .single();
+
+      if (insErr || !row) {
+        throw new Error(insErr?.message || `Failed to create order ${supaOrderPayload.order_number}`);
+      }
+
+      // Guard: if a stale DB BEFORE INSERT trigger overwrote order_id/order_number (e.g. GKSWAD-*), restore it immediately
+      if (
+        row.order_id !== supaOrderPayload.order_id ||
+        row.order_number !== supaOrderPayload.order_number
+      ) {
+        try {
+          const { error: alignErr } = await serverSupabase
+            .from('orders')
+            .update({
+              order_id: supaOrderPayload.order_id,
+              order_number: supaOrderPayload.order_number,
+            })
+            .eq('id', row.id);
+          if (!alignErr) {
+            row.order_id = supaOrderPayload.order_id;
+            row.order_number = supaOrderPayload.order_number;
+          }
+        } catch (alignWrapErr) {
+          console.warn('Child order ID alignment notice:', alignWrapErr);
+        }
+      }
+
+      createdChildRows.push(row);
+
+      if (rawChildItems.length > 0) {
+        const orderItemsPayload = rawChildItems.map((item: any) => ({
+          order_id: row.id,
+          product_id: item.productId ? String(item.productId) : null,
+          product_name: item.name || 'Authentic Delicacy',
+          product_variant_name: item.selectedVariant?.name || null,
+          quantity: Number(item.quantity || 1),
+          unit_price: Number(item.unitPrice || 0),
+          discount_amount: Number(item.discount || 0),
+          total_price: Number(item.totalPrice || Number(item.unitPrice || 0) * Number(item.quantity || 1)),
+          festival_name: supaOrderPayload.festival_name || item.festivalName || null,
+          festival_delivery_date: supaOrderPayload.festival_delivery_at || item.festivalDeliveryDate || null,
+          special_packaging: item.specialPackaging !== undefined ? !!item.specialPackaging : false,
+          created_at: nowIso,
+        }));
+        await serverSupabase.from('order_items').insert(orderItemsPayload);
+      }
+
+      return row;
+    };
+
+    let normalOrderRow: any = null;
+    let prebookOrderRow: any = null;
+
+    try {
+      if (breakdown.hasNormal && breakdown.normalChild) {
+        const normalNumber = `${baseReference}-I`;
+        const normalPayload = buildChildPayload('normal', normalNumber, breakdown.normalItems, breakdown.normalChild);
+        normalOrderRow = await insertChildOrder(normalPayload, breakdown.normalItems);
+      }
+      if (breakdown.hasPrebook && breakdown.prebookChild) {
+        const prebookNumber = `${baseReference}-PB`;
+        const prebookPayload = buildChildPayload('prebook', prebookNumber, breakdown.prebookItems, breakdown.prebookChild);
+        prebookOrderRow = await insertChildOrder(prebookPayload, breakdown.prebookItems);
+      }
+    } catch (childErr: any) {
+      // Explicit cleanup rollback if any child failed after partial insert
+      for (const created of createdChildRows) {
+        try {
+          await serverSupabase.from('orders').delete().eq('id', created.id);
+        } catch {}
+      }
+      try {
+        await serverSupabase.from('checkout_groups').delete().eq('id', insertedGroup.id);
+      } catch {}
+      return res.status(500).json({
+        success: false,
+        error: childErr?.message || 'Failed to persist checkout orders.',
+      });
+    }
+
+    // 7. Record ONE initial payment transaction + child payment_allocations
+    let insertedPaymentTx: any = null;
+    const primaryOrderId = normalOrderRow?.id || prebookOrderRow?.id || null;
+
+    try {
+      const txPayload = {
+        order_id: createdChildRows.length === 1 ? primaryOrderId : null,
+        checkout_group_id: insertedGroup.id,
+        transaction_type: 'initial',
+        amount: isOnlinePayment ? breakdown.amountDueNow : 0,
+        payment_method: paymentMethod,
+        payment_gateway: isOnlinePayment ? 'demo_gateway' : 'cod',
+        status: isOnlinePayment ? 'success' : 'pending',
+        gateway_order_id: payload.gatewayOrderId || baseReference,
+        gateway_payment_id: payload.paymentGatewayPaymentId || (isOnlinePayment ? `DEMO-${baseReference}` : null),
+        gateway_signature: payload.gatewaySignature || null,
+        idempotency_key: `init-${idempotencyKey}`,
+        notes: breakdown.isMixed
+          ? `Unified Mixed Checkout (${baseReference}-I + ${baseReference}-PB)`
+          : breakdown.hasPrebook
+            ? `Utsav Pre-book ${prebookPaymentPlan === 'advance_25' ? '25% Advance' : '100% Upfront'} (${baseReference}-PB)`
+            : `Online Checkout (${baseReference}-I)`,
+        paid_at: isOnlinePayment ? nowIso : null,
+        created_at: nowIso,
+      };
+
+      const { data: txRow, error: txErr } = await serverSupabase
+        .from('order_payment_transactions')
+        .insert(txPayload)
+        .select()
+        .single();
+
+      if (!txErr && txRow) {
+        insertedPaymentTx = txRow;
+        productStorage.recordPaymentTransaction({
+          id: txRow.id,
+          orderId: txRow.order_id,
+          checkoutGroupId: insertedGroup.id,
+          transactionType: 'initial',
+          amount: Number(txRow.amount || 0),
+          paymentMethod,
+          paymentGateway: txRow.payment_gateway,
+          status: txRow.status,
+          gatewayPaymentId: txRow.gateway_payment_id,
+          idempotencyKey: txRow.idempotency_key,
+          notes: txRow.notes,
+          paidAt: txRow.paid_at,
+        });
+
+        if (isOnlinePayment) {
+          const allocRows: any[] = [];
+          if (normalOrderRow && breakdown.normalChild) {
+            allocRows.push({
+              payment_transaction_id: txRow.id,
+              order_id: normalOrderRow.id,
+              allocated_amount: breakdown.normalChild.total,
+              allocation_type: 'normal_full',
+              created_at: nowIso,
+            });
+          }
+          if (prebookOrderRow && breakdown.prebookChild) {
+            allocRows.push({
+              payment_transaction_id: txRow.id,
+              order_id: prebookOrderRow.id,
+              allocated_amount: breakdown.prebookChild.advanceAmount,
+              allocation_type: prebookPaymentPlan === 'advance_25' ? 'prebook_advance' : 'prebook_full',
+              created_at: nowIso,
+            });
+          }
+          if (allocRows.length > 0) {
+            await serverSupabase.from('payment_allocations').insert(allocRows);
+            allocRows.forEach((a) =>
+              productStorage.recordPaymentAllocation({
+                paymentTransactionId: a.payment_transaction_id,
+                orderId: a.order_id,
+                allocatedAmount: a.allocated_amount,
+                allocationType: a.allocation_type,
+              })
+            );
+          }
+        }
+      }
+    } catch (txWrapErr) {
+      console.warn('Unified payment tx / allocation notice:', txWrapErr);
+    }
+
+    // 8. Record ONE coupon redemption for the parent checkout group
+    if (validatedCouponCode && breakdown.totalCouponDiscount > 0) {
+      try {
+        productStorage.recordCouponRedemption({
+          couponId: validatedCouponId || validatedCouponCode,
+          couponCode: validatedCouponCode,
+          customerId: supaCustomerId || undefined,
+          customerPhone: normPhone || undefined,
+          orderId: primaryOrderId || baseReference,
+          discountAmount: breakdown.totalCouponDiscount,
+          orderTotal: breakdown.grandTotal,
+        });
+        if (validatedCouponId && isUUID(validatedCouponId)) {
+          await serverSupabase.from('coupon_redemptions').insert({
+            coupon_id: validatedCouponId,
+            checkout_group_id: insertedGroup.id,
+            customer_id: isUUID(supaCustomerId) ? supaCustomerId : null,
+            order_id: primaryOrderId,
+            discount_amount: breakdown.totalCouponDiscount,
+            redeemed_at: nowIso,
+          });
+        }
+      } catch (cErr) {
+        console.warn('Unified checkout coupon redemption notice:', cErr);
+      }
+    }
+
+    // 9. Deduct Swad Coins ONCE across the combined checkout
+    if (authoritativeCoinsUsed > 0 && normPhone) {
+      try {
+        const balanceAfter = Math.max(0, currentCoinBalance - authoritativeCoinsUsed);
+        productStorage.redeemSwadCoins(
+          normPhone,
+          baseReference,
+          authoritativeCoinsUsed,
+          Math.max(0, breakdown.combinedSubtotal - breakdown.totalCouponDiscount)
+        );
+        productStorage.setCustomerSwadCoinBalance(normPhone, balanceAfter);
+        if (supaCustomerId) {
+          productStorage.setCustomerSwadCoinBalance(supaCustomerId, balanceAfter);
+          await serverSupabase
+            .from('customers')
+            .update({ swad_coin_balance: balanceAfter, updated_at: nowIso })
+            .eq('id', supaCustomerId);
+          await serverSupabase.from('swad_coin_transactions').insert({
+            customer_id: supaCustomerId,
+            type: 'REDEEM',
+            amount: -authoritativeCoinsUsed,
+            balance_before: currentCoinBalance,
+            balance_after: balanceAfter,
+            order_id: primaryOrderId,
+            description: `Redeemed ${authoritativeCoinsUsed} Swad Coins on Checkout ${baseReference}`,
+            created_at: nowIso,
+          });
+        }
+      } catch (coinErr) {
+        console.warn('Unified checkout Swad Coin deduction notice:', coinErr);
+      }
+    }
+
+    const mappedNormal = normalOrderRow ? { ...mapDbOrderRow(normalOrderRow), checkoutReference: baseReference } : null;
+    const mappedPrebook = prebookOrderRow ? { ...mapDbOrderRow(prebookOrderRow), checkoutReference: baseReference } : null;
+    const mappedOrders = [mappedNormal, mappedPrebook].filter(Boolean);
+
+    return res.status(201).json({
+      success: true,
+      checkoutGroup: {
+        id: insertedGroup.id,
+        checkoutReference: baseReference,
+        outletId,
+        orderMode: breakdown.orderMode,
+        prebookPaymentPlan: breakdown.hasPrebook ? breakdown.prebookPaymentPlan : null,
+        subtotal: breakdown.combinedSubtotal,
+        discountAmount: breakdown.totalCouponDiscount,
+        swadCoinDiscountAmount: breakdown.totalSwadCoinDiscount,
+        packagingFee: breakdown.totalPackagingFee,
+        deliveryCharge: breakdown.totalDeliveryFee,
+        taxAmount: breakdown.totalGst,
+        grandTotal: breakdown.grandTotal,
+        amountDueNow: breakdown.amountDueNow,
+        amountPaid: initialPaidAmount,
+        balanceDue: parentBalanceDue,
+        paymentStatus: parentPaymentStatus,
+        createdAt: nowIso,
+      },
+      orders: mappedOrders,
+      normalOrder: mappedNormal,
+      prebookOrder: mappedPrebook,
+      paymentTransaction: insertedPaymentTx,
+    });
+  } catch (err: any) {
+    console.error('Mixed checkout error:', err);
+    return res.status(500).json({
+      success: false,
+      error: err?.message || 'Failed to complete checkout.',
+    });
+  }
+});
+
 // =====================
 // UTSAV SPECIALS & PRE-BOOKING ENDPOINTS
 // =====================
 
-// Pre-booking: Collect Outstanding Balance at Delivery
-app.post('/api/orders/:id/collect-balance', async (req, res) => {
+const CONFIRMED_PAYMENT_STATUSES = new Set(['paid', 'partially_paid', 'success', 'captured']);
+
+async function resolveStaffOutletAccess(
+  req: AuthenticatedRequest,
+  targetOutletId?: string | null
+): Promise<{
+  allowed: boolean;
+  status?: number;
+  error?: string;
+  isOwner?: boolean;
+  assignedOutletIds?: string[] | null;
+}> {
+  const user = req.user;
+  if (!user) {
+    return { allowed: false, status: 401, error: 'Authentication required' };
+  }
+  if (user.role === 'owner') {
+    return { allowed: true, isOwner: true, assignedOutletIds: null };
+  }
+  if (user.role !== 'manager') {
+    return { allowed: false, status: 403, error: 'Forbidden. Staff privileges required.' };
+  }
+
+  const assigned = new Set<string>();
+  if (user.outletId) assigned.add(String(user.outletId));
+  if (Array.isArray(user.assignedOutletIds)) {
+    user.assignedOutletIds.forEach((id) => {
+      if (id) assigned.add(String(id));
+    });
+  }
+
+  // Hydrate from profiles if still empty
+  if (assigned.size === 0 && user.id && isUUID(user.id)) {
+    try {
+      const { data: prof } = await serverSupabase
+        .from('profiles')
+        .select('role, outlet_id, assigned_outlet_ids')
+        .eq('id', user.id)
+        .maybeSingle();
+      if (prof) {
+        if (String(prof.role || '').toLowerCase() === 'owner') {
+          return { allowed: true, isOwner: true, assignedOutletIds: null };
+        }
+        if (prof.outlet_id) assigned.add(String(prof.outlet_id));
+        if (Array.isArray(prof.assigned_outlet_ids)) {
+          prof.assigned_outlet_ids.forEach((id: any) => {
+            if (id) assigned.add(String(id));
+          });
+        }
+      }
+    } catch {}
+  }
+
+  if (assigned.size === 0) {
+    return {
+      allowed: false,
+      status: 403,
+      error: 'Forbidden. Your manager account has no assigned outlet.',
+    };
+  }
+
+  if (targetOutletId && !assigned.has(String(targetOutletId))) {
+    return {
+      allowed: false,
+      status: 403,
+      error: 'Forbidden. Outlet managers can only access their assigned kitchen outlet.',
+    };
+  }
+
+  return {
+    allowed: true,
+    isOwner: false,
+    assignedOutletIds: Array.from(assigned),
+  };
+}
+
+function isProductAssignedToOutlet(productRow: any, outletId: string): boolean {
+  if (!Array.isArray(productRow?.outlets)) return false;
+  return productRow.outlets.some((o: any) => String(o.outletId || o.outlet_id || '') === String(outletId));
+}
+
+function computeProductionSummaryForEvent(
+  outletId: string,
+  eventId: string,
+  productsList: any[],
+  ordersList: any[]
+) {
+  const outletFestiveProducts = productsList.filter((p) => isProductAssignedToOutlet(p, outletId));
+
+  const confirmedOrders = ordersList.filter((order: any) => {
+    const orderStatus = String(order.order_status || order.orderStatus || '').toLowerCase();
+    const payStatus = String(order.payment_status || order.paymentStatus || '').toLowerCase();
+    if (orderStatus === 'cancelled') return false;
+    return CONFIRMED_PAYMENT_STATUSES.has(payStatus);
+  });
+
+  const bookedCountMap: Record<string, number> = {};
+  for (const order of confirmedOrders) {
+    const items = Array.isArray(order.items) ? order.items : [];
+    for (const item of items) {
+      const pId = String(item.productId || item.product?.id || item.id || '');
+      if (!pId) continue;
+      const qty = Number(item.quantity || 1);
+      bookedCountMap[pId] = (bookedCountMap[pId] || 0) + qty;
+    }
+  }
+
+  let totalBookedUnits = 0;
+  let totalExtraBuffer = 0;
+  let specialPackagingUnits = 0;
+
+  const itemsSummary = outletFestiveProducts.map((p: any) => {
+    const pId = String(p.id);
+    const booked = bookedCountMap[pId] || 0;
+    totalBookedUnits += booked;
+
+    let extraPlanned = 0;
+    let inStockAtOutlet = p.inStock !== false;
+    if (Array.isArray(p.outlets)) {
+      const cfg = p.outlets.find((o: any) => String(o.outletId || o.outlet_id || '') === String(outletId));
+      if (cfg) {
+        inStockAtOutlet = cfg.inStock !== undefined ? !!cfg.inStock : cfg.in_stock !== undefined ? !!cfg.in_stock : true;
+        if (cfg.portionsLeft !== null && cfg.portionsLeft !== undefined && cfg.portionsLeft !== '') {
+          extraPlanned = Math.max(0, Number(cfg.portionsLeft));
+        } else if (cfg.portions_left !== null && cfg.portions_left !== undefined && cfg.portions_left !== '') {
+          extraPlanned = Math.max(0, Number(cfg.portions_left));
+        }
+      }
+    }
+
+    totalExtraBuffer += extraPlanned;
+    const hasSpecialPkg = p.special_packaging !== undefined ? !!p.special_packaging : !!p.specialPackaging;
+    if (hasSpecialPkg) {
+      specialPackagingUnits += booked;
+    }
+
+    return {
+      productId: pId,
+      productName: p.name,
+      hindiName: p.hindi_name ?? p.hindiName,
+      image: p.image,
+      price: Number(p.price || 0),
+      availabilityMode: (p.availability_mode ?? p.availabilityMode ?? 'normal') as 'normal' | 'prebook_only',
+      confirmedBookings: booked,
+      extraPlanned,
+      totalPreparation: booked + extraPlanned,
+      normalStockAvailable: extraPlanned,
+      specialPackaging: hasSpecialPkg,
+      maxBookingQuantity:
+        p.max_booking_quantity !== undefined && p.max_booking_quantity !== null
+          ? Number(p.max_booking_quantity)
+          : p.maxBookingQuantity ?? null,
+      active: p.active !== false,
+      inStock: inStockAtOutlet,
+    };
+  });
+
+  return {
+    festiveEventId: eventId,
+    outletId,
+    totalBookedUnits,
+    totalExtraBuffer,
+    totalKitchenPrep: totalBookedUnits + totalExtraBuffer,
+    specialPackagingUnits,
+    items: itemsSummary,
+  };
+}
+
+// Pre-booking: Collect Outstanding Balance at Delivery (Protected - Owner/Outlet-Scoped Manager)
+app.post('/api/orders/:id/collect-balance', requireOwnerAuth, async (req: AuthenticatedRequest, res) => {
   try {
     const { id } = req.params;
-    const { amount, paymentMethod, notes, gatewayPaymentId } = req.body;
+    const { amount, paymentMethod, notes, gatewayPaymentId, idempotencyKey } = req.body;
+
+    // 0. Idempotency check if key provided
+    if (idempotencyKey) {
+      const { data: existingTx } = await serverSupabase
+        .from('order_payment_transactions')
+        .select('*')
+        .eq('idempotency_key', String(idempotencyKey))
+        .maybeSingle();
+
+      if (existingTx) {
+        const { data: currentOrderRow } = await serverSupabase
+          .from('orders')
+          .select('*')
+          .or(`id.eq.${id},order_id.eq.${id},order_number.eq.${id}`)
+          .maybeSingle();
+
+        return res.json({
+          success: true,
+          idempotentReplay: true,
+          order: currentOrderRow ? mapDbOrderRow(currentOrderRow) : currentOrderRow,
+          transaction: existingTx,
+          message: 'Balance collection already recorded.',
+        });
+      }
+    }
 
     // 1. Fetch order from Supabase
     const { data: orderRow, error: fetchErr } = await serverSupabase
@@ -4475,6 +5762,11 @@ app.post('/api/orders/:id/collect-balance', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Order not found' });
     }
 
+    const access = await resolveStaffOutletAccess(req, orderRow.outlet_id);
+    if (!access.allowed) {
+      return res.status(access.status || 403).json({ success: false, error: access.error });
+    }
+
     const currentBalance = Number(orderRow.balance_amount || 0);
     if (currentBalance <= 0) {
       return res.status(400).json({
@@ -4484,38 +5776,72 @@ app.post('/api/orders/:id/collect-balance', async (req, res) => {
     }
 
     const collectedAmount = amount !== undefined ? Number(amount) : currentBalance;
-    const newBalance = Math.max(0, currentBalance - collectedAmount);
+    if (isNaN(collectedAmount) || collectedAmount <= 0 || collectedAmount > currentBalance) {
+      return res.status(400).json({
+        success: false,
+        error: `Invalid collection amount. Must be between ₹1 and ₹${currentBalance}.`,
+      });
+    }
+
+    const prevPaid = Number(orderRow.paid_amount ?? orderRow.advance_amount ?? 0);
+    const newPaidAmount = Number((prevPaid + collectedAmount).toFixed(2));
+    const newBalance = Math.max(0, Number((currentBalance - collectedAmount).toFixed(2)));
     const newPaymentStatus = newBalance === 0 ? 'paid' : 'partially_paid';
     const now = new Date().toISOString();
 
-    // 2. Record payment transaction in Supabase
+    // 2. Record payment transaction + allocation in Supabase
+    const txInsertPayload: any = {
+      order_id: orderRow.id,
+      checkout_group_id: orderRow.checkout_group_id || null,
+      transaction_type: 'balance',
+      amount: collectedAmount,
+      payment_method: paymentMethod || 'cash',
+      payment_gateway: 'offline_outlet',
+      status: 'success',
+      gateway_payment_id: gatewayPaymentId || null,
+      idempotency_key: idempotencyKey ? String(idempotencyKey) : null,
+      notes: notes || 'Delivery balance collection',
+      paid_at: now,
+      created_at: now,
+    };
+
     const { data: txRow, error: txErr } = await serverSupabase
       .from('order_payment_transactions')
-      .insert({
-        order_id: orderRow.id,
-        transaction_type: 'balance',
-        amount: collectedAmount,
-        payment_method: paymentMethod || 'cash',
-        status: 'success',
-        gateway_payment_id: gatewayPaymentId || null,
-        notes: notes || 'Delivery balance collection',
-        paid_at: now,
-        created_at: now,
-      })
+      .insert(txInsertPayload)
       .select()
       .single();
 
     if (txErr) {
       console.warn('Balance transaction insert error:', txErr);
+    } else if (txRow) {
+      try {
+        await serverSupabase.from('payment_allocations').insert({
+          payment_transaction_id: txRow.id,
+          order_id: orderRow.id,
+          allocated_amount: collectedAmount,
+          allocation_type: 'prebook_balance',
+          created_at: now,
+        });
+        productStorage.recordPaymentAllocation({
+          paymentTransactionId: txRow.id,
+          orderId: orderRow.id,
+          allocatedAmount: collectedAmount,
+          allocationType: 'prebook_balance',
+        });
+      } catch (allocErr) {
+        console.warn('Balance payment allocation insert notice:', allocErr);
+      }
     }
 
-    // Also record in memory storage
     productStorage.recordPaymentTransaction({
+      id: txRow?.id,
       orderId: orderRow.id,
+      checkoutGroupId: orderRow.checkout_group_id || null,
       transactionType: 'balance',
       amount: collectedAmount,
       paymentMethod: paymentMethod || 'cash',
       status: 'success',
+      idempotencyKey: idempotencyKey ? String(idempotencyKey) : undefined,
       notes: notes || 'Delivery balance collection',
       paidAt: now,
     });
@@ -4524,6 +5850,7 @@ app.post('/api/orders/:id/collect-balance', async (req, res) => {
     const { data: updatedOrder, error: updateErr } = await serverSupabase
       .from('orders')
       .update({
+        paid_amount: newPaidAmount,
         balance_amount: newBalance,
         payment_status: newPaymentStatus,
         updated_at: now,
@@ -4536,9 +5863,49 @@ app.post('/api/orders/:id/collect-balance', async (req, res) => {
       return res.status(500).json({ success: false, error: 'Failed to update order balance' });
     }
 
+    // 4. Recompute parent checkout_groups totals & status if linked
+    if (orderRow.checkout_group_id) {
+      try {
+        const { data: siblingOrders } = await serverSupabase
+          .from('orders')
+          .select('id, paid_amount, advance_amount, balance_amount, total_amount')
+          .eq('checkout_group_id', orderRow.checkout_group_id);
+
+        if (Array.isArray(siblingOrders) && siblingOrders.length > 0) {
+          const groupPaid = siblingOrders.reduce(
+            (sum: number, o: any) => sum + Number(o.paid_amount ?? o.advance_amount ?? 0),
+            0
+          );
+          const groupBalance = siblingOrders.reduce(
+            (sum: number, o: any) => sum + Number(o.balance_amount ?? 0),
+            0
+          );
+          const groupStatus = groupBalance <= 0 ? 'paid' : groupPaid > 0 ? 'partially_paid' : 'pending';
+
+          await serverSupabase
+            .from('checkout_groups')
+            .update({
+              amount_paid: Number(groupPaid.toFixed(2)),
+              balance_due: Number(groupBalance.toFixed(2)),
+              payment_status: groupStatus,
+              updated_at: now,
+            })
+            .eq('id', orderRow.checkout_group_id);
+
+          productStorage.updateCheckoutGroup(orderRow.checkout_group_id, {
+            amountPaid: Number(groupPaid.toFixed(2)),
+            balanceDue: Number(groupBalance.toFixed(2)),
+            paymentStatus: groupStatus,
+          });
+        }
+      } catch (groupSyncErr) {
+        console.warn('Parent checkout_groups sync notice:', groupSyncErr);
+      }
+    }
+
     return res.json({
       success: true,
-      order: updatedOrder,
+      order: mapDbOrderRow(updatedOrder),
       transaction: txRow,
       message: `Successfully recorded balance collection of ₹${collectedAmount}.`,
     });
@@ -4548,11 +5915,29 @@ app.post('/api/orders/:id/collect-balance', async (req, res) => {
   }
 });
 
+function formatFestiveEventResponse(row: any) {
+  if (!row) return row;
+  return {
+    id: row.id,
+    outletId: row.outletId ?? row.outlet_id ?? '',
+    name: row.name || '',
+    slug: row.slug || '',
+    description: row.description || '',
+    bannerImage: row.bannerImage ?? row.banner_image ?? '',
+    festivalDate: row.festivalDate ?? row.festival_date ?? '',
+    bookingStartAt: row.bookingStartAt ?? row.booking_start_at ?? '',
+    bookingEndAt: row.bookingEndAt ?? row.booking_end_at ?? '',
+    status: row.status || 'active',
+    createdAt: row.createdAt ?? row.created_at,
+    updatedAt: row.updatedAt ?? row.updated_at,
+  };
+}
+
 // Festive Events: List all (Public / Outlet-scoped)
 app.get('/api/festive-events', async (req, res) => {
   try {
     const outletId = req.query.outletId as string | undefined;
-    const active = req.query.active === 'true';
+    const active = req.query.active === 'true' || req.query.status === 'active';
 
     let query = serverSupabase.from('festive_events').select('*').order('festival_date', { ascending: true });
     if (outletId) {
@@ -4569,10 +5954,134 @@ app.get('/api/festive-events', async (req, res) => {
       return res.json({ success: true, festiveEvents: stored });
     }
 
-    return res.json({ success: true, festiveEvents: data || [] });
+    return res.json({ success: true, festiveEvents: (data || []).map(formatFestiveEventResponse) });
   } catch (err: any) {
     console.error('Fetch festive events error:', err);
     return res.status(500).json({ success: false, error: 'Failed to fetch festive events' });
+  }
+});
+
+// Festive Events: Live Overview (Protected - Owner Multi-Outlet, Manager Strictly Outlet-Scoped)
+app.get('/api/festive-events/overview', requireOwnerAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const requestedOutletId = req.query.outletId as string | undefined;
+    const access = await resolveStaffOutletAccess(req, requestedOutletId || null);
+    if (!access.allowed) {
+      return res.status(access.status || 403).json({ success: false, error: access.error });
+    }
+
+    // Determine target outlet filter for managers vs owners
+    const allowedOutletIds = access.isOwner ? null : access.assignedOutletIds || [];
+
+    // 1. Fetch festive events
+    let eventsList: any[] = [];
+    let eventsQuery = serverSupabase.from('festive_events').select('*').order('festival_date', { ascending: true });
+    if (requestedOutletId) {
+      eventsQuery = eventsQuery.eq('outlet_id', requestedOutletId);
+    } else if (allowedOutletIds && allowedOutletIds.length > 0) {
+      eventsQuery = eventsQuery.in('outlet_id', allowedOutletIds);
+    }
+
+    const { data: supaEvents, error: evErr } = await eventsQuery;
+    if (evErr) {
+      eventsList = productStorage.getFestiveEvents(requestedOutletId);
+      if (allowedOutletIds) {
+        eventsList = eventsList.filter((ev) => allowedOutletIds.includes(ev.outletId));
+      }
+    } else {
+      eventsList = (supaEvents || []).map(formatFestiveEventResponse);
+    }
+
+    const activeEvents = eventsList.filter((ev) => ev.status === 'active');
+    const now = Date.now();
+    const activeBookingWindowsCount = activeEvents.filter((ev) => {
+      const start = new Date(ev.bookingStartAt).getTime();
+      const end = new Date(ev.bookingEndAt).getTime();
+      return !isNaN(start) && !isNaN(end) && now >= start && now <= end;
+    }).length;
+
+    // 2. Fetch festive products & confirmed orders once for batch aggregation
+    const { data: supaProducts, error: prodErr } = await serverSupabase
+      .from('products')
+      .select('*')
+      .not('festive_event_id', 'is', null);
+
+    const allFestiveProducts = prodErr
+      ? productStorage.getAllProducts(true).filter((p) => !!p.festiveEventId)
+      : supaProducts || [];
+
+    let ordersQuery = serverSupabase
+      .from('orders')
+      .select('id, outlet_id, festive_event_id, items, order_status, payment_status')
+      .not('festive_event_id', 'is', null)
+      .neq('order_status', 'cancelled');
+
+    if (requestedOutletId) {
+      ordersQuery = ordersQuery.eq('outlet_id', requestedOutletId);
+    } else if (allowedOutletIds && allowedOutletIds.length > 0) {
+      ordersQuery = ordersQuery.in('outlet_id', allowedOutletIds);
+    }
+
+    const { data: supaOrders, error: ordErr } = await ordersQuery;
+    const allFestiveOrders = ordErr
+      ? productStorage
+          .getAllOrders()
+          .filter(
+            (o: any) =>
+              !!(o.festiveEventId || o.festive_event_id) &&
+              (!requestedOutletId || (o.outletId || o.outlet_id) === requestedOutletId) &&
+              (!allowedOutletIds || allowedOutletIds.includes(o.outletId || o.outlet_id))
+          )
+      : supaOrders || [];
+
+    let totalBookedUnits = 0;
+    let totalExtraBuffer = 0;
+    let specialPackagingUnits = 0;
+
+    const eventSummaries = activeEvents.map((ev) => {
+      const evProducts = allFestiveProducts.filter(
+        (p: any) => String(p.festive_event_id ?? p.festiveEventId ?? '') === String(ev.id)
+      );
+      const evOrders = allFestiveOrders.filter(
+        (o: any) =>
+          String(o.festive_event_id ?? o.festiveEventId ?? '') === String(ev.id) &&
+          String(o.outlet_id ?? o.outletId ?? '') === String(ev.outletId)
+      );
+      const summary = computeProductionSummaryForEvent(ev.outletId, ev.id, evProducts, evOrders);
+      totalBookedUnits += summary.totalBookedUnits;
+      totalExtraBuffer += summary.totalExtraBuffer;
+      specialPackagingUnits += summary.specialPackagingUnits;
+
+      return {
+        id: ev.id,
+        outletId: ev.outletId,
+        name: ev.name,
+        festivalDate: ev.festivalDate,
+        bookingStartAt: ev.bookingStartAt,
+        bookingEndAt: ev.bookingEndAt,
+        status: ev.status,
+        bookedUnits: summary.totalBookedUnits,
+        extraBuffer: summary.totalExtraBuffer,
+        totalPrep: summary.totalKitchenPrep,
+        dishCount: summary.items.length,
+      };
+    });
+
+    return res.json({
+      success: true,
+      overview: {
+        activeCollectionsCount: activeEvents.length,
+        activeBookingWindowsCount,
+        totalBookedUnits,
+        totalExtraBuffer,
+        totalKitchenPrep: totalBookedUnits + totalExtraBuffer,
+        specialPackagingUnits,
+        events: eventSummaries,
+      },
+    });
+  } catch (err: any) {
+    console.error('Festive overview error:', err);
+    return res.status(500).json({ success: false, error: 'Failed to load festive production overview' });
   }
 });
 
@@ -4594,17 +6103,26 @@ app.get('/api/festive-events/:id', async (req, res) => {
       return res.json({ success: true, festiveEvent: stored });
     }
 
-    return res.json({ success: true, festiveEvent: data });
+    return res.json({ success: true, festiveEvent: formatFestiveEventResponse(data) });
   } catch (err: any) {
     console.error('Fetch festive event error:', err);
     return res.status(500).json({ success: false, error: 'Failed to fetch festive event' });
   }
 });
 
-// Festive Events: Create (Protected - Owner/Manager)
+// Festive Events: Create (Protected - Owner/Outlet-Scoped Manager)
 app.post('/api/festive-events', requireOwnerAuth, async (req: AuthenticatedRequest, res) => {
   try {
     const body = req.body;
+    if (!body?.name || !String(body.name).trim() || !body?.outletId) {
+      return res.status(400).json({ success: false, error: 'Festival name and outletId are required' });
+    }
+
+    const access = await resolveStaffOutletAccess(req, body.outletId);
+    if (!access.allowed) {
+      return res.status(access.status || 403).json({ success: false, error: access.error });
+    }
+
     const now = new Date().toISOString();
     const slug = (body.slug || body.name || 'festival')
       .toLowerCase()
@@ -4612,9 +6130,9 @@ app.post('/api/festive-events', requireOwnerAuth, async (req: AuthenticatedReque
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/(^-|-$)/g, '');
 
-    const payload = {
+    const payload: any = {
       outlet_id: body.outletId,
-      name: body.name.trim(),
+      name: String(body.name).trim(),
       slug,
       description: body.description || '',
       banner_image: body.bannerImage || '',
@@ -4625,6 +6143,9 @@ app.post('/api/festive-events', requireOwnerAuth, async (req: AuthenticatedReque
       created_at: now,
       updated_at: now,
     };
+    if (body.id) {
+      payload.id = body.id;
+    }
 
     const { data, error } = await serverSupabase.from('festive_events').insert(payload).select().single();
     if (error) {
@@ -4633,24 +6154,48 @@ app.post('/api/festive-events', requireOwnerAuth, async (req: AuthenticatedReque
       return res.json({ success: true, festiveEvent: stored });
     }
 
-    productStorage.createFestiveEvent({ ...body, id: data.id });
-    return res.json({ success: true, festiveEvent: data });
+    const formatted = formatFestiveEventResponse(data);
+    try {
+      productStorage.createFestiveEvent({ ...body, ...formatted, id: formatted.id });
+    } catch {}
+    return res.json({ success: true, festiveEvent: formatted });
   } catch (err: any) {
     console.error('Create festive event error:', err);
     return res.status(500).json({ success: false, error: 'Failed to create festive event' });
   }
 });
 
-// Festive Events: Update (Protected - Owner/Manager)
+// Festive Events: Update (Protected - Owner/Outlet-Scoped Manager)
 app.put('/api/festive-events/:id', requireOwnerAuth, async (req: AuthenticatedRequest, res) => {
   try {
     const { id } = req.params;
     const body = req.body;
+
+    // Verify existing outlet ownership for managers
+    const { data: existingEv } = await serverSupabase
+      .from('festive_events')
+      .select('outlet_id')
+      .eq('id', id)
+      .maybeSingle();
+    const existingOutletId = existingEv?.outlet_id || productStorage.getFestiveEventById(id)?.outletId;
+
+    const existingAccess = await resolveStaffOutletAccess(req, existingOutletId || null);
+    if (!existingAccess.allowed) {
+      return res.status(existingAccess.status || 403).json({ success: false, error: existingAccess.error });
+    }
+    if (body.outletId !== undefined) {
+      const targetAccess = await resolveStaffOutletAccess(req, body.outletId);
+      if (!targetAccess.allowed) {
+        return res.status(targetAccess.status || 403).json({ success: false, error: targetAccess.error });
+      }
+    }
+
     const now = new Date().toISOString();
 
     const payload: any = { updated_at: now };
-    if (body.name !== undefined) payload.name = body.name.trim();
-    if (body.slug !== undefined) payload.slug = body.slug.toLowerCase().trim();
+    if (body.outletId !== undefined) payload.outlet_id = body.outletId;
+    if (body.name !== undefined) payload.name = String(body.name).trim();
+    if (body.slug !== undefined) payload.slug = String(body.slug).toLowerCase().trim();
     if (body.description !== undefined) payload.description = body.description;
     if (body.bannerImage !== undefined) payload.banner_image = body.bannerImage;
     if (body.festivalDate !== undefined) payload.festival_date = body.festivalDate;
@@ -4671,18 +6216,37 @@ app.put('/api/festive-events/:id', requireOwnerAuth, async (req: AuthenticatedRe
       return res.json({ success: true, festiveEvent: stored });
     }
 
-    productStorage.updateFestiveEvent(id, body);
-    return res.json({ success: true, festiveEvent: data });
+    const formatted = formatFestiveEventResponse(data);
+    try {
+      productStorage.updateFestiveEvent(id, formatted);
+    } catch {
+      try {
+        productStorage.createFestiveEvent(formatted);
+      } catch {}
+    }
+    return res.json({ success: true, festiveEvent: formatted });
   } catch (err: any) {
     console.error('Update festive event error:', err);
     return res.status(500).json({ success: false, error: 'Failed to update festive event' });
   }
 });
 
-// Festive Events: Delete (Protected - Owner/Manager)
+// Festive Events: Delete (Protected - Owner/Outlet-Scoped Manager)
 app.delete('/api/festive-events/:id', requireOwnerAuth, async (req: AuthenticatedRequest, res) => {
   try {
     const { id } = req.params;
+
+    // Verify outlet ownership for managers
+    const { data: existingEv } = await serverSupabase
+      .from('festive_events')
+      .select('outlet_id')
+      .eq('id', id)
+      .maybeSingle();
+    const existingOutletId = existingEv?.outlet_id || productStorage.getFestiveEventById(id)?.outletId;
+    const access = await resolveStaffOutletAccess(req, existingOutletId || null);
+    if (!access.allowed) {
+      return res.status(access.status || 403).json({ success: false, error: access.error });
+    }
 
     // Check if any confirmed orders exist
     const { data: activeOrders, error: checkErr } = await serverSupabase
@@ -4712,82 +6276,174 @@ app.delete('/api/festive-events/:id', requireOwnerAuth, async (req: Authenticate
   }
 });
 
-// Festive Events: Production Summary
-app.get('/api/outlets/:outletId/festive-events/:id/summary', async (req, res) => {
+// Festive Events: Production Summary (Protected - Owner/Outlet-Scoped Manager)
+app.get('/api/outlets/:outletId/festive-events/:id/summary', requireOwnerAuth, async (req: AuthenticatedRequest, res) => {
   try {
     const { outletId, id } = req.params;
 
+    const access = await resolveStaffOutletAccess(req, outletId);
+    if (!access.allowed) {
+      return res.status(access.status || 403).json({ success: false, error: access.error });
+    }
+
     // Fetch products associated with this festive event
-    const { data: productsData } = await serverSupabase
+    const { data: productsData, error: prodErr } = await serverSupabase
       .from('products')
       .select('*')
       .eq('festive_event_id', id);
 
-    const festiveProducts = productsData || [];
+    const festiveProducts = prodErr
+      ? productStorage.getAllProducts(true).filter((p) => String(p.festiveEventId || '') === String(id))
+      : productsData || [];
 
-    // Fetch confirmed orders for this festive collection
-    const { data: ordersData } = await serverSupabase
+    // Fetch confirmed (paid / partially_paid) non-cancelled orders for this festive collection & outlet
+    const { data: ordersData, error: ordErr } = await serverSupabase
       .from('orders')
       .select('id, items, order_status, payment_status')
       .eq('outlet_id', outletId)
       .eq('festive_event_id', id)
-      .neq('order_status', 'cancelled')
-      .neq('payment_status', 'failed');
+      .neq('order_status', 'cancelled');
 
-    const confirmedOrders = ordersData || [];
+    const ordersList = ordErr
+      ? productStorage
+          .getAllOrders()
+          .filter(
+            (o: any) =>
+              String(o.outletId || o.outlet_id || '') === String(outletId) &&
+              String(o.festiveEventId || o.festive_event_id || '') === String(id)
+          )
+      : ordersData || [];
 
-    // Calculate aggregated quantity per product
-    const bookedCountMap: Record<string, number> = {};
-    for (const order of confirmedOrders) {
-      const items = Array.isArray(order.items) ? order.items : [];
-      for (const item of items) {
-        const pId = String(item.productId || item.product?.id || item.id || '');
-        const qty = Number(item.quantity || 1);
-        bookedCountMap[pId] = (bookedCountMap[pId] || 0) + qty;
-      }
-    }
-
-    let totalBookedUnits = 0;
-    const itemsSummary = festiveProducts.map((p: any) => {
-      const pId = String(p.id);
-      const booked = bookedCountMap[pId] || 0;
-      totalBookedUnits += booked;
-
-      // Portions left / extra planned in product outlet config
-      let extraPlanned = 0;
-      if (Array.isArray(p.outlets)) {
-        const cfg = p.outlets.find((o: any) => String(o.outletId || o.outlet_id) === String(outletId));
-        if (cfg && cfg.portionsLeft !== null && cfg.portionsLeft !== undefined) {
-          extraPlanned = Number(cfg.portionsLeft);
-        }
-      }
-
-      return {
-        productId: pId,
-        productName: p.name,
-        hindiName: p.hindi_name,
-        image: p.image,
-        price: Number(p.price || 0),
-        availabilityMode: p.availability_mode || 'normal',
-        confirmedBookings: booked,
-        extraPlanned,
-        totalPreparation: booked + extraPlanned,
-        normalStockAvailable: extraPlanned,
-      };
-    });
+    const summary = computeProductionSummaryForEvent(outletId, id, festiveProducts, ordersList);
 
     return res.json({
       success: true,
-      festiveEventId: id,
-      outletId,
-      totalBookedUnits,
-      items: itemsSummary,
+      ...summary,
     });
   } catch (err: any) {
     console.error('Festive production summary error:', err);
     return res.status(500).json({ success: false, error: 'Failed to fetch production summary' });
   }
 });
+
+// Festive Events: Buffer Adjustment, Surplus Stock Conversion to Normal, and Delisting
+app.patch(
+  '/api/outlets/:outletId/festive-events/:eventId/products/:productId/stock',
+  requireOwnerAuth,
+  async (req: AuthenticatedRequest, res) => {
+    try {
+      const { outletId, eventId, productId } = req.params;
+      const { action, extraPlanned } = req.body as {
+        action: 'update_buffer' | 'convert_to_normal' | 'delist' | 'relist';
+        extraPlanned?: number;
+      };
+
+      const access = await resolveStaffOutletAccess(req, outletId);
+      if (!access.allowed) {
+        return res.status(access.status || 403).json({ success: false, error: access.error });
+      }
+
+      if (!['update_buffer', 'convert_to_normal', 'delist', 'relist'].includes(action)) {
+        return res.status(400).json({ success: false, error: 'Invalid production stock action' });
+      }
+
+      // Fetch product from Supabase or storage
+      const { data: productRow, error: fetchErr } = await serverSupabase
+        .from('products')
+        .select('*')
+        .eq('id', String(productId))
+        .maybeSingle();
+
+      const fallbackProduct = productStorage.getProductById(productId);
+      const target = productRow || fallbackProduct;
+
+      if (!target) {
+        return res.status(404).json({ success: false, error: 'Product not found' });
+      }
+
+      const currentOutlets: any[] = Array.isArray(target.outlets) ? [...target.outlets] : [];
+      const outletIdx = currentOutlets.findIndex(
+        (o: any) => String(o.outletId || o.outlet_id || '') === String(outletId)
+      );
+
+      if (outletIdx === -1) {
+        return res.status(400).json({
+          success: false,
+          error: 'This dish is not assigned to the selected outlet.',
+        });
+      }
+
+      const currentCfg = { ...currentOutlets[outletIdx] };
+      const parsedExtra =
+        extraPlanned !== undefined && extraPlanned !== null && !isNaN(Number(extraPlanned))
+          ? Math.max(0, Math.floor(Number(extraPlanned)))
+          : undefined;
+
+      const updateFields: Record<string, any> = {
+        updated_at: new Date().toISOString(),
+      };
+
+      if (action === 'update_buffer') {
+        if (parsedExtra === undefined) {
+          return res.status(400).json({ success: false, error: 'Valid extraPlanned portion count is required' });
+        }
+        currentCfg.portionsLeft = parsedExtra;
+      } else if (action === 'convert_to_normal') {
+        const finalPortions =
+          parsedExtra !== undefined
+            ? parsedExtra
+            : currentCfg.portionsLeft !== undefined && currentCfg.portionsLeft !== null
+              ? Math.max(0, Number(currentCfg.portionsLeft))
+              : 0;
+        currentCfg.portionsLeft = finalPortions;
+        currentCfg.inStock = finalPortions > 0;
+        updateFields.availability_mode = 'normal';
+      } else if (action === 'delist') {
+        currentCfg.inStock = false;
+      } else if (action === 'relist') {
+        currentCfg.inStock = true;
+      }
+
+      currentOutlets[outletIdx] = currentCfg;
+      updateFields.outlets = currentOutlets;
+
+      if (productRow) {
+        const { error: updErr } = await serverSupabase
+          .from('products')
+          .update(updateFields)
+          .eq('id', String(productId));
+        if (updErr) {
+          return res.status(500).json({ success: false, error: updErr.message || 'Failed to update product stock' });
+        }
+      }
+
+      // Sync in-memory fallback storage
+      try {
+        productStorage.updateProduct(productId, {
+          outlets: currentOutlets,
+          ...(action === 'convert_to_normal' ? { availabilityMode: 'normal' } : {}),
+        });
+      } catch {}
+
+      return res.json({
+        success: true,
+        eventId,
+        outletId,
+        productId: String(productId),
+        action,
+        portionsLeft: currentCfg.portionsLeft ?? 0,
+        inStock: currentCfg.inStock !== false,
+        availabilityMode:
+          action === 'convert_to_normal'
+            ? 'normal'
+            : target.availability_mode ?? target.availabilityMode ?? 'normal',
+      });
+    } catch (err: any) {
+      console.error('Update festive product stock error:', err);
+      return res.status(500).json({ success: false, error: err.message || 'Failed to update production stock' });
+    }
+  }
+);
 
 // Payment Transactions: List for Order
 app.get('/api/orders/:id/payment-transactions', async (req, res) => {
@@ -5129,7 +6785,31 @@ app.get('/api/orders/:orderId', authenticateToken, async (req, res) => {
           }
         }
 
-        return res.json({ success: true, order: mapDbOrderRow(data) });
+        const mappedOrder = mapDbOrderRow(data);
+        if (data.checkout_group_id) {
+          try {
+            const { data: cgRow } = await serverSupabase
+              .from('checkout_groups')
+              .select('id, checkout_reference, order_mode, prebook_payment_plan, grand_total, amount_paid, balance_due, payment_status')
+              .eq('id', data.checkout_group_id)
+              .maybeSingle();
+            if (cgRow) {
+              mappedOrder.checkoutReference = cgRow.checkout_reference;
+              mappedOrder.checkoutGroup = {
+                id: cgRow.id,
+                checkoutReference: cgRow.checkout_reference,
+                orderMode: cgRow.order_mode,
+                prebookPaymentPlan: cgRow.prebook_payment_plan,
+                grandTotal: Number(cgRow.grand_total || 0),
+                amountPaid: Number(cgRow.amount_paid || 0),
+                balanceDue: Number(cgRow.balance_due || 0),
+                paymentStatus: cgRow.payment_status,
+              };
+            }
+          } catch {}
+        }
+
+        return res.json({ success: true, order: mappedOrder });
       }
       if (!error) {
         return res.status(404).json({ success: false, error: 'Order not found' });
@@ -5197,6 +6877,40 @@ app.get('/api/orders', authenticateToken, async (req, res) => {
       }
 
       let mapped = (data || []).map(mapDbOrderRow);
+
+      // Hydrate parent checkoutReference & summary from checkout_groups
+      const groupIds = Array.from(new Set(mapped.map((o: any) => o.checkoutGroupId).filter(Boolean)));
+      if (groupIds.length > 0) {
+        try {
+          const { data: cgRows } = await serverSupabase
+            .from('checkout_groups')
+            .select('id, checkout_reference, order_mode, prebook_payment_plan, grand_total, amount_paid, balance_due, payment_status')
+            .in('id', groupIds);
+          if (Array.isArray(cgRows)) {
+            const cgMap = new Map<string, any>();
+            cgRows.forEach((g: any) => cgMap.set(String(g.id), g));
+            mapped = mapped.map((o: any) => {
+              const cg = o.checkoutGroupId ? cgMap.get(String(o.checkoutGroupId)) : null;
+              if (!cg) return o;
+              return {
+                ...o,
+                checkoutReference: cg.checkout_reference,
+                checkoutGroup: {
+                  id: cg.id,
+                  checkoutReference: cg.checkout_reference,
+                  orderMode: cg.order_mode,
+                  prebookPaymentPlan: cg.prebook_payment_plan,
+                  grandTotal: Number(cg.grand_total || 0),
+                  amountPaid: Number(cg.amount_paid || 0),
+                  balanceDue: Number(cg.balance_due || 0),
+                  paymentStatus: cg.payment_status,
+                },
+              };
+            });
+          }
+        } catch {}
+      }
+
       if (status) {
         const normStatus = status.toLowerCase().replace(/\s+/g, '_');
         mapped = mapped.filter((o: any) =>

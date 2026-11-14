@@ -25,6 +25,8 @@ import {
   SwadCoinDispatch,
   FestiveEvent,
   OrderPaymentTransaction,
+  CheckoutGroup,
+  PaymentAllocation,
 } from '../src/types';
 
 /**
@@ -80,6 +82,10 @@ export function serializeOrderItemForDb(it: any): CleanOrderItem {
   if (it.specialPackaging !== undefined || it.special_packaging !== undefined) {
     (cleanItem as any).specialPackaging = it.specialPackaging !== undefined ? Boolean(it.specialPackaging) : Boolean(it.special_packaging);
   }
+  const availMode = it.availabilityMode || it.availability_mode || p.availabilityMode || p.availability_mode;
+  if (availMode) (cleanItem as any).availabilityMode = availMode;
+  const fEventId = it.festiveEventId || it.festive_event_id || p.festiveEventId || p.festive_event_id;
+  if (fEventId) (cleanItem as any).festiveEventId = fEventId;
 
   return cleanItem;
 }
@@ -161,6 +167,8 @@ const SWAD_COIN_TRANSACTIONS_FILE = path.join(DATA_DIR, 'swad_coin_transactions_
 const SWAD_COIN_DISPATCH_FILE = path.join(DATA_DIR, 'swad_coin_dispatch_store.json');
 const FESTIVE_EVENTS_FILE = path.join(DATA_DIR, 'festive_events_store.json');
 const PAYMENT_TRANSACTIONS_FILE = path.join(DATA_DIR, 'payment_transactions_store.json');
+const CHECKOUT_GROUPS_FILE = path.join(DATA_DIR, 'checkout_groups_store.json');
+const PAYMENT_ALLOCATIONS_FILE = path.join(DATA_DIR, 'payment_allocations_store.json');
 
 /**
  * Weighted probability distribution for daily reward generation:
@@ -238,6 +246,8 @@ class AppStorage {
   private swadCoinDispatches: SwadCoinDispatch[] = [];
   private festiveEvents: FestiveEvent[] = [];
   private paymentTransactions: OrderPaymentTransaction[] = [];
+  private checkoutGroups: CheckoutGroup[] = [];
+  private paymentAllocations: PaymentAllocation[] = [];
   private isInitialized = false;
 
   constructor() {
@@ -266,6 +276,8 @@ class AppStorage {
     this.swadCoinDispatches = safeReadJson<SwadCoinDispatch[]>(SWAD_COIN_DISPATCH_FILE, []);
     this.festiveEvents = safeReadJson<FestiveEvent[]>(FESTIVE_EVENTS_FILE, []);
     this.paymentTransactions = safeReadJson<OrderPaymentTransaction[]>(PAYMENT_TRANSACTIONS_FILE, []);
+    this.checkoutGroups = safeReadJson<CheckoutGroup[]>(CHECKOUT_GROUPS_FILE, []);
+    this.paymentAllocations = safeReadJson<PaymentAllocation[]>(PAYMENT_ALLOCATIONS_FILE, []);
 
     this.isInitialized = true;
   }
@@ -329,6 +341,24 @@ class AppStorage {
       fs.writeFileSync(PAYMENT_TRANSACTIONS_FILE, JSON.stringify(this.paymentTransactions, null, 2), 'utf-8');
     } catch (e) {
       console.warn('Warning: Could not save payment transactions to disk.', e);
+    }
+  }
+
+  private saveCheckoutGroups() {
+    try {
+      if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+      fs.writeFileSync(CHECKOUT_GROUPS_FILE, JSON.stringify(this.checkoutGroups, null, 2), 'utf-8');
+    } catch (e) {
+      console.warn('Warning: Could not save checkout groups to disk.', e);
+    }
+  }
+
+  private savePaymentAllocations() {
+    try {
+      if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+      fs.writeFileSync(PAYMENT_ALLOCATIONS_FILE, JSON.stringify(this.paymentAllocations, null, 2), 'utf-8');
+    } catch (e) {
+      console.warn('Warning: Could not save payment allocations to disk.', e);
     }
   }
 
@@ -531,6 +561,19 @@ class AppStorage {
       variants: data.variants || [],
       addons: data.addons || [],
       reviewsList: [],
+      festiveEventId: data.festiveEventId ? String(data.festiveEventId) : null,
+      availabilityMode: data.availabilityMode || 'normal',
+      maxBookingQuantity:
+        data.maxBookingQuantity !== undefined &&
+        data.maxBookingQuantity !== null &&
+        String(data.maxBookingQuantity) !== ''
+          ? Number(data.maxBookingQuantity)
+          : null,
+      specialPackaging:
+        data.specialPackaging !== undefined
+          ? !!data.specialPackaging
+          : Boolean(data.festiveProduct || data.festiveEventId || data.availabilityMode === 'prebook_only'),
+      festiveProduct: !!(data.festiveProduct || data.festiveEventId || data.availabilityMode === 'prebook_only'),
     };
 
     this.products.unshift(newProduct);
@@ -595,6 +638,21 @@ class AppStorage {
       cookingMethodDesc: data.cookingMethodDesc !== undefined ? (data.cookingMethodDesc ? data.cookingMethodDesc.trim() : undefined) : existing.cookingMethodDesc,
       aromaTitle: data.aromaTitle !== undefined ? (data.aromaTitle ? data.aromaTitle.trim() : undefined) : existing.aromaTitle,
       aromaDesc: data.aromaDesc !== undefined ? (data.aromaDesc ? data.aromaDesc.trim() : undefined) : existing.aromaDesc,
+      festiveEventId:
+        data.festiveEventId !== undefined
+          ? (data.festiveEventId ? String(data.festiveEventId) : null)
+          : existing.festiveEventId,
+      availabilityMode: data.availabilityMode !== undefined ? data.availabilityMode : existing.availabilityMode,
+      maxBookingQuantity:
+        data.maxBookingQuantity !== undefined
+          ? (data.maxBookingQuantity !== null && String(data.maxBookingQuantity) !== ''
+              ? Number(data.maxBookingQuantity)
+              : null)
+          : existing.maxBookingQuantity,
+      specialPackaging:
+        data.specialPackaging !== undefined ? !!data.specialPackaging : existing.specialPackaging,
+      festiveProduct:
+        data.festiveProduct !== undefined ? !!data.festiveProduct : existing.festiveProduct,
     };
 
     this.products[index] = updated;
@@ -929,6 +987,12 @@ class AppStorage {
       expCard3Title: '❤️ Your Experience',
       expCard3Header: 'We Listen & Improve',
       expCard3Description: 'Your feedback helps us get better. Every rating, review, and suggestion helps shape the Swad Click experience.',
+      utsavPromoEnabled: false,
+      utsavPromoHeading: 'A Festival of Flavours!',
+      utsavPromoDescription: 'Celebrate every occasion with our exclusive Utsav Specials, freshly prepared with heritage recipes and pure desi ghee.',
+      utsavPromoCtaText: 'Explore Utsav Specials',
+      utsavPromoImage: 'https://images.unsplash.com/photo-1576871337632-b9aef4c17ab9?q=80&w=1200&auto=format&fit=crop',
+      utsavFestivalName: 'Utsav Specials',
     };
     return fallback;
   }
@@ -1292,14 +1356,32 @@ class AppStorage {
         }
       }
     }
-    const normalizedInputId = orderData.orderId ? orderData.orderId.replace(/^#+/, '').replace(/SWADCLK-#/i, 'SWADCLK-').replace(/GKSWAD-#?/i, 'SWADCLK-') : '';
-    const formattedOrderId =
-      normalizedInputId && normalizedInputId.startsWith('SWADCLK-')
-        ? normalizedInputId
+    const isPrebookOrder = orderData.orderType === 'prebook' || orderData.order_type === 'prebook';
+    const normalizedInputId = orderData.orderId
+      ? orderData.orderId
+          .trim()
+          .replace(/^#+/, '')
+          .replace(/SWADCLK-#/i, 'SWADCLK-')
+          .replace(/GKSWAD-#?/i, 'SWADCLK-')
+          .replace(/_PB$/i, '-PB')
+      : '';
+    const baseFromInput =
+      normalizedInputId && /^SWADCLK-\d+/i.test(normalizedInputId)
+        ? normalizedInputId.replace(/-(I|PB)$/i, '')
         : `SWADCLK-${String(nextSeq).padStart(5, '0')}`;
+    const formattedOrderId =
+      normalizedInputId && /^SWADCLK-\d+-(I|PB)$/i.test(normalizedInputId)
+        ? normalizedInputId
+        : `${baseFromInput}${isPrebookOrder ? '-PB' : '-I'}`;
+    const resolvedCheckoutRef =
+      orderData.checkout_reference || orderData.checkoutReference || baseFromInput;
 
     const newOrder: Order = {
       orderId: formattedOrderId,
+      checkoutGroupId: orderData.checkoutGroupId,
+      checkout_group_id: orderData.checkout_group_id || orderData.checkoutGroupId,
+      checkoutReference: resolvedCheckoutRef,
+      checkout_reference: resolvedCheckoutRef,
       customerId: customerId || undefined,
       addressId: orderData.addressId || undefined,
       isGuestCheckout: isGuest,
@@ -1323,6 +1405,8 @@ class AppStorage {
       payment_plan: orderData.payment_plan || orderData.paymentPlan || 'full',
       advanceAmount: Number(orderData.advanceAmount || 0),
       advance_amount: Number(orderData.advance_amount || orderData.advanceAmount || 0),
+      paidAmount: Number(orderData.paidAmount ?? orderData.advanceAmount ?? 0),
+      paid_amount: Number(orderData.paid_amount ?? orderData.paidAmount ?? orderData.advanceAmount ?? 0),
       balanceAmount: Number(orderData.balanceAmount || 0),
       balance_amount: Number(orderData.balance_amount || orderData.balanceAmount || 0),
       festiveEventId: orderData.festiveEventId,
@@ -3042,17 +3126,26 @@ class AppStorage {
 
   public recordPaymentTransaction(data: Partial<OrderPaymentTransaction>): OrderPaymentTransaction {
     this.init();
+    if (data.idempotencyKey) {
+      const existing = this.paymentTransactions.find((t) => t.idempotencyKey === data.idempotencyKey);
+      if (existing) return existing;
+    }
     const id = data.id || `ptx-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
     const now = new Date().toISOString();
     const tx: OrderPaymentTransaction = {
       id,
-      orderId: data.orderId || '',
+      orderId: data.orderId ?? null,
+      checkoutGroupId: data.checkoutGroupId ?? null,
       transactionType: data.transactionType || 'advance',
       amount: Number(data.amount || 0),
       paymentMethod: data.paymentMethod || 'online',
+      paymentGateway: data.paymentGateway,
       status: data.status || 'success',
+      gatewayOrderId: data.gatewayOrderId,
       gatewayPaymentId: data.gatewayPaymentId,
+      gatewaySignature: data.gatewaySignature,
       gatewayReference: data.gatewayReference,
+      idempotencyKey: data.idempotencyKey,
       notes: data.notes,
       paidAt: data.paidAt || now,
       createdAt: now,
@@ -3065,6 +3158,89 @@ class AppStorage {
   public getPaymentTransactions(orderId: string): OrderPaymentTransaction[] {
     this.init();
     return this.paymentTransactions.filter((t) => t.orderId === orderId);
+  }
+
+  public recordCheckoutGroup(data: Partial<CheckoutGroup>): CheckoutGroup {
+    this.init();
+    if (data.idempotencyKey) {
+      const existing = this.checkoutGroups.find((g) => g.idempotencyKey === data.idempotencyKey);
+      if (existing) return existing;
+    }
+    const id = data.id || `cg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    const now = new Date().toISOString();
+    const group: CheckoutGroup = {
+      id,
+      checkoutReference: data.checkoutReference || `SWADCLK-${Date.now().toString().slice(-5)}`,
+      customerId: data.customerId ?? null,
+      customerAddressId: data.customerAddressId ?? null,
+      outletId: data.outletId || 'outlet-1',
+      couponId: data.couponId ?? null,
+      couponCodeSnapshot: data.couponCodeSnapshot ?? null,
+      subtotal: Number(data.subtotal || 0),
+      discountAmount: Number(data.discountAmount || 0),
+      swadCoinDiscountAmount: Number(data.swadCoinDiscountAmount || 0),
+      packagingFee: Number(data.packagingFee || 0),
+      deliveryCharge: Number(data.deliveryCharge || 0),
+      taxAmount: Number(data.taxAmount || 0),
+      grandTotal: Number(data.grandTotal || 0),
+      orderMode: data.orderMode || 'normal',
+      prebookPaymentPlan: data.prebookPaymentPlan ?? null,
+      amountDueNow: Number(data.amountDueNow || 0),
+      amountPaid: Number(data.amountPaid || 0),
+      balanceDue: Number(data.balanceDue || 0),
+      paymentStatus: data.paymentStatus || 'pending',
+      idempotencyKey: data.idempotencyKey ?? null,
+      createdAt: data.createdAt || now,
+      updatedAt: data.updatedAt || now,
+    };
+    this.checkoutGroups.unshift(group);
+    this.saveCheckoutGroups();
+    return group;
+  }
+
+  public getCheckoutGroupById(id: string): CheckoutGroup | null {
+    this.init();
+    return this.checkoutGroups.find((g) => g.id === id || g.checkoutReference === id) || null;
+  }
+
+  public getCheckoutGroupByIdempotencyKey(key: string): CheckoutGroup | null {
+    this.init();
+    return this.checkoutGroups.find((g) => g.idempotencyKey === key) || null;
+  }
+
+  public updateCheckoutGroup(id: string, updates: Partial<CheckoutGroup>): CheckoutGroup | null {
+    this.init();
+    const idx = this.checkoutGroups.findIndex((g) => g.id === id);
+    if (idx < 0) return null;
+    const updated: CheckoutGroup = {
+      ...this.checkoutGroups[idx],
+      ...updates,
+      updatedAt: new Date().toISOString(),
+    };
+    this.checkoutGroups[idx] = updated;
+    this.saveCheckoutGroups();
+    return updated;
+  }
+
+  public recordPaymentAllocation(data: Partial<PaymentAllocation>): PaymentAllocation {
+    this.init();
+    const id = data.id || `palloc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    const alloc: PaymentAllocation = {
+      id,
+      paymentTransactionId: data.paymentTransactionId || '',
+      orderId: data.orderId || '',
+      allocatedAmount: Number(data.allocatedAmount || 0),
+      allocationType: data.allocationType || 'normal_full',
+      createdAt: data.createdAt || new Date().toISOString(),
+    };
+    this.paymentAllocations.push(alloc);
+    this.savePaymentAllocations();
+    return alloc;
+  }
+
+  public getPaymentAllocationsForOrder(orderId: string): PaymentAllocation[] {
+    this.init();
+    return this.paymentAllocations.filter((a) => a.orderId === orderId);
   }
 
   // =====================

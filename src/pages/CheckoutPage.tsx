@@ -4,13 +4,13 @@ import { useNavigation } from '../context/NavigationContext';
 import { useLocation } from '../context/LocationContext';
 import { useCustomer } from '../context/CustomerContext';
 import { useProducts } from '../context/ProductContext';
-import { CheckoutFormData, Order, Coupon } from '../types';
+import { CheckoutFormData, Order, Coupon, CheckoutGroup, FestiveEvent } from '../types';
 import { computeScheduledIsoTimestamp, formatScheduledAt } from '../utils/dateUtils';
+import { calculateMixedCheckoutBreakdown, isPrebookItem } from '../lib/mixedCheckoutCalc';
 import {
   getProductPortionsLeftAtOutlet,
   doesOutletDeliverToPinCode,
   findOutletDeliveringToPinCode,
-  getOutletById,
 } from '../lib/locationService';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
 import {
@@ -20,6 +20,7 @@ import {
   recordCouponRedemption,
   fetchSupabaseOrderById,
   formatDisplayOrderId,
+  fetchActiveFestiveEventsForOutlet,
 } from '../lib/supabaseService';
 import { fetchSwadCoinBalance } from '../lib/swadCoinService';
 import { lookupPincode } from '../lib/pincodeService';
@@ -161,6 +162,11 @@ export const CheckoutPage: React.FC = () => {
     deliveryFee,
     packagingFee,
     gst,
+    normalItems,
+    prebookItems,
+    hasNormalItems,
+    hasPrebookItems,
+    isMixedCart,
     appliedCoupon,
     applyCoupon,
     removeCoupon,
@@ -202,6 +208,13 @@ export const CheckoutPage: React.FC = () => {
   // Delivery vs Self-Pickup Mode
   const [orderType, setOrderType] = useState<'delivery' | 'pickup'>('delivery');
   const [isSelfPickup, setIsSelfPickup] = useState(false);
+
+  // Utsav Pre-book Payment Plan & Active Festive Events
+  const [prebookPaymentPlan, setPrebookPaymentPlan] = useState<'advance_25' | 'full'>('advance_25');
+  const [activeFestiveEvents, setActiveFestiveEvents] = useState<FestiveEvent[]>([]);
+  const checkoutIdempotencyKeyRef = useRef<string>(
+    `chk_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
+  );
 
   // Next 10 Days Calculation for Scheduled Slot
   const next10Days = useMemo(() => {
@@ -856,6 +869,54 @@ export const CheckoutPage: React.FC = () => {
     });
   };
 
+  // Fetch active festive events for current outlet to display delivery dates & validate booking windows
+  useEffect(() => {
+    const targetOutletId = selectedLocation?.outletId || currentOutlet?.id;
+    if (!targetOutletId || !hasPrebookItems) {
+      setActiveFestiveEvents([]);
+      return;
+    }
+    let mounted = true;
+    fetchActiveFestiveEventsForOutlet(targetOutletId)
+      .then((events) => {
+        if (mounted) setActiveFestiveEvents(events || []);
+      })
+      .catch(() => {
+        if (mounted) setActiveFestiveEvents([]);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, [selectedLocation?.outletId, currentOutlet?.id, hasPrebookItems]);
+
+  const festiveEventById = useMemo(() => {
+    const map: Record<string, FestiveEvent> = {};
+    for (const ev of activeFestiveEvents) {
+      if (ev?.id) map[ev.id] = ev;
+    }
+    return map;
+  }, [activeFestiveEvents]);
+
+  // Disable COD automatically when pre-book items exist in the cart
+  useEffect(() => {
+    if (hasPrebookItems && formData.paymentMethod === 'cod') {
+      setFormData((prev) => ({ ...prev, paymentMethod: 'upi' }));
+    }
+  }, [hasPrebookItems, formData.paymentMethod]);
+
+  // Reset idempotency key when cart items, outlet, coupon, coins, or plan change
+  useEffect(() => {
+    checkoutIdempotencyKeyRef.current = `chk_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+  }, [
+    cart,
+    selectedLocation?.outletId,
+    appliedCoupon?.code,
+    isUseSwadCoinsChecked,
+    prebookPaymentPlan,
+    isSelfPickup,
+    formData.paymentMethod,
+  ]);
+
   // Delivery fee is ₹0 for Self-Pickup / Takeaway
   const effectiveDeliveryFee = isSelfPickup || orderType === 'pickup' ? 0 : deliveryFee;
 
@@ -871,10 +932,42 @@ export const CheckoutPage: React.FC = () => {
     : 0;
   const swadCoinDiscount = coinsToUse; // 1 Coin = ₹1
 
-  const effectiveTotal = Math.max(
-    0,
-    subtotal - discount - swadCoinDiscount + packagingFee + gst + effectiveDeliveryFee
+  // Deterministic integer-paise parent/child breakdown
+  const checkoutBreakdown = useMemo(
+    () =>
+      calculateMixedCheckoutBreakdown({
+        items: cart,
+        couponDiscountTotal: discount,
+        swadCoinDiscountTotal: swadCoinDiscount,
+        packagingFeeTotal: packagingFee,
+        deliveryFeeTotal: effectiveDeliveryFee,
+        prebookPaymentPlan: hasPrebookItems ? prebookPaymentPlan : 'full',
+      }),
+    [cart, discount, swadCoinDiscount, packagingFee, effectiveDeliveryFee, hasPrebookItems, prebookPaymentPlan]
   );
+
+  const effectiveTotal = checkoutBreakdown.grandTotal;
+  const amountPayableNow = checkoutBreakdown.amountDueNow;
+  const balanceDueAtDelivery = checkoutBreakdown.balanceDue;
+
+  // Validate pre-book windows if any pre-book items exist
+  const prebookWindowError = useMemo(() => {
+    if (!hasPrebookItems) return null;
+    const now = Date.now();
+    for (const item of prebookItems) {
+      const evId = item.product.festiveEventId;
+      if (!evId) continue;
+      const ev = festiveEventById[evId];
+      if (!ev) continue;
+      if (ev.bookingStartAt && new Date(ev.bookingStartAt).getTime() > now) {
+        return `Pre-booking for ${ev.name} opens on ${new Date(ev.bookingStartAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}.`;
+      }
+      if (ev.bookingEndAt && new Date(ev.bookingEndAt).getTime() < now) {
+        return `Pre-booking for ${ev.name} has closed.`;
+      }
+    }
+    return null;
+  }, [hasPrebookItems, prebookItems, festiveEventById]);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -1039,13 +1132,38 @@ export const CheckoutPage: React.FC = () => {
       }
     }
 
+    // Check 7: Pre-book rules (Booking window & online payment requirement)
+    if (hasPrebookItems) {
+      if (prebookWindowError) {
+        return {
+          canPlaceOrder: false,
+          reason: prebookWindowError,
+          buttonLabel: 'Pre-booking Window Closed',
+          actionRequired: 'PREBOOK_WINDOW_ERROR' as const,
+        };
+      }
+      if (formData.paymentMethod === 'cod') {
+        return {
+          canPlaceOrder: false,
+          reason: 'Online payment is required when your order includes Utsav Pre-book dishes.',
+          buttonLabel: 'Select Online Payment',
+          actionRequired: 'SELECT_ONLINE_PAYMENT' as const,
+        };
+      }
+    }
+
     // All validation checks passed successfully!
+    const displayPayAmount = hasPrebookItems ? amountPayableNow : effectiveTotal;
     return {
       canPlaceOrder: true,
       reason: null,
-      buttonLabel: isSelfPickup
-        ? `Confirm Pickup Order (₹${effectiveTotal})`
-        : `Place Order (₹${effectiveTotal})`,
+      buttonLabel: hasPrebookItems
+        ? isSelfPickup
+          ? `Confirm & Pay Now (₹${displayPayAmount})`
+          : `Pay ₹${displayPayAmount} Now`
+        : isSelfPickup
+          ? `Confirm Pickup Order (₹${effectiveTotal})`
+          : `Place Order (₹${effectiveTotal})`,
       actionRequired: null,
     };
   }, [
@@ -1057,6 +1175,7 @@ export const CheckoutPage: React.FC = () => {
     formData.phone,
     formData.email,
     formData.address,
+    formData.paymentMethod,
     isCustomerLoggedIn,
     returningCustomerFound,
     isSelfPickup,
@@ -1067,12 +1186,17 @@ export const CheckoutPage: React.FC = () => {
     enteredPin,
     pinServiceability,
     effectiveTotal,
+    hasPrebookItems,
+    prebookWindowError,
+    amountPayableNow,
   ]);
 
   // Main flag for enabling/disabling "Place Order" button (extensible for future checks)
   const isPlaceOrderEnabled = placeOrderValidation.canPlaceOrder;
 
   const [placedOrder, setPlacedOrder] = useState<Order | null>(null);
+  const [placedOrders, setPlacedOrders] = useState<Order[]>([]);
+  const [placedCheckoutGroup, setPlacedCheckoutGroup] = useState<CheckoutGroup | null>(null);
   const [orderStage, setOrderStage] = useState<
     'Received' | 'Confirmed' | 'Preparing in Kitchen' | 'Out for Delivery' | 'Ready for Pickup' | 'Picked Up' | 'Delivered'
   >('Received');
@@ -1452,62 +1576,21 @@ export const CheckoutPage: React.FC = () => {
 
     setIsSubmitting(true);
 
-    let nextOrderId = '';
-    try {
-      nextOrderId = await getNextSequentialOrderId();
-    } catch {
-      nextOrderId = `SWADCLK-00016`;
-    }
-
     const cleanCustomerPin = (formData.pincode || '').trim();
-
-    const newOrder: Order = {
-      orderId: nextOrderId,
-      customerId: customer?.id,
-      addressId: defaultAddress?.id,
-      isGuestCheckout: !isCustomerLoggedIn && !formData.createAccount,
-      outletId: selectedLocation?.outletId || currentOutlet?.id || 'outlet-1',
-      outletName: selectedLocation?.outletName || currentOutlet?.name || 'Swad Click Kitchen',
-      deliveryPinCode: isSelfPickup
-        ? (currentOutlet?.pinCode || selectedLocation?.pinCode || cleanCustomerPin)
-        : cleanCustomerPin,
-      createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      items: [...cart],
-      subtotal,
-      discount,
-      welcomeDiscountAmount: 0,
-      isWelcomeDiscountApplied: false,
-      deliveryFee: effectiveDeliveryFee,
-      packagingFee,
-      gst,
-      total: effectiveTotal,
-      couponId: appliedCoupon?.id,
-      couponCode: appliedCoupon ? appliedCoupon.code : undefined,
-      couponDiscountAmount: discount > 0 ? discount : undefined,
-      swadCoinsUsed: coinsToUse,
-      swadCoinDiscountAmount: swadCoinDiscount,
-      customerDetails: {
-        ...formData,
-        orderType: isSelfPickup ? 'pickup' : 'delivery',
-        isSelfPickup,
-      },
-      orderType: isSelfPickup ? 'pickup' : 'delivery',
-      isSelfPickup,
-      kitchenAddress:
-        currentOutlet?.address ||
-        `${selectedLocation?.outletName || 'Swad Click Kitchen Facility'}, Main Commercial Hub`,
-      deliveryAddressSnapshot: isSelfPickup
-        ? undefined
-        : {
-            fullAddress: formData.address || '',
-            landmark: formData.landmark || '',
-            city: formData.city || '',
-            state: formData.state || '',
-            pincode: cleanCustomerPin,
-          },
-      status: 'Received',
-      estimatedDeliveryMinutes: isSelfPickup ? 25 : 35,
-    };
+    const resolvedOutletId = selectedLocation?.outletId || currentOutlet?.id || 'outlet-1';
+    const resolvedOutletName = selectedLocation?.outletName || currentOutlet?.name || 'Swad Click Kitchen';
+    const resolvedDeliveryPin = isSelfPickup
+      ? (currentOutlet?.pinCode || selectedLocation?.pinCode || cleanCustomerPin)
+      : cleanCustomerPin;
+    const resolvedDeliverySnapshot = isSelfPickup
+      ? undefined
+      : {
+          fullAddress: formData.address || '',
+          landmark: formData.landmark || '',
+          city: formData.city || '',
+          state: formData.state || '',
+          pincode: cleanCustomerPin,
+        };
 
     // Automatically persist customer profile and address for 1-click future reorders
     let resolvedCustId = customer?.id;
@@ -1534,83 +1617,212 @@ export const CheckoutPage: React.FC = () => {
         });
         if (profRes?.customer?.id) {
           resolvedCustId = profRes.customer.id;
-          newOrder.customerId = profRes.customer.id;
         }
         if (!isSelfPickup && profRes?.address?.id) {
           resolvedAddrId = profRes.address.id;
-          newOrder.addressId = profRes.address.id;
         }
       } catch (err) {
         console.warn('Customer address auto-persist notice:', err);
       }
     }
 
-    let savedOrderObj = newOrder;
-    let orderPersisted = false;
+    // Unified Parent + Child Checkout Orchestration (/api/orders/checkout)
+    let checkoutHandled = false;
+    let savedOrderObj: Order | null = null;
+    let savedOrdersList: Order[] = [];
+    let savedGroup: CheckoutGroup | null = null;
+    let checkoutApiError: string | null = null;
+    let allowLegacyNormalFallback = false;
 
     try {
-      const res = await fetch('/api/orders', {
+      const checkoutRes = await fetch('/api/orders/checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          ...newOrder,
+          idempotencyKey: checkoutIdempotencyKeyRef.current,
+          outletId: resolvedOutletId,
+          outletName: resolvedOutletName,
+          deliveryPinCode: resolvedDeliveryPin,
+          customerId: resolvedCustId || undefined,
+          addressId: isSelfPickup ? null : (resolvedAddrId || null),
+          isGuestCheckout: !isCustomerLoggedIn && !formData.createAccount,
+          orderType: isSelfPickup ? 'pickup' : 'delivery',
+          isSelfPickup,
+          deliveryType: formData.deliveryType,
+          scheduledAt: formData.scheduledAt,
+          kitchenAddress:
+            currentOutlet?.address ||
+            `${selectedLocation?.outletName || 'Swad Click Kitchen Facility'}, Main Commercial Hub`,
+          customerDetails: {
+            ...formData,
+            orderType: isSelfPickup ? 'pickup' : 'delivery',
+            isSelfPickup,
+          },
+          deliveryAddressSnapshot: resolvedDeliverySnapshot || null,
+          items: [...cart],
+          couponId: appliedCoupon?.id,
+          couponCode: appliedCoupon?.code,
           requestedSwadCoins: coinsToUse,
           swadCoinsUsed: coinsToUse,
-          customerId: resolvedCustId || newOrder.customerId,
-          addressId: isSelfPickup ? null : (resolvedAddrId || newOrder.addressId || null),
-          deliveryAddressSnapshot: isSelfPickup ? null : (newOrder.deliveryAddressSnapshot || null),
+          prebookPaymentPlan: hasPrebookItems ? prebookPaymentPlan : 'full',
+          includeCutlery,
+          specialInstructions,
         }),
       });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.success && data.order) {
-          savedOrderObj = data.order;
-          orderPersisted = true;
+
+      const data = await checkoutRes.json().catch(() => ({} as any));
+      if (checkoutRes.ok && data.success && Array.isArray(data.orders) && data.orders.length > 0) {
+        savedOrdersList = data.orders;
+        savedOrderObj = data.orders[0];
+        savedGroup = data.checkoutGroup || null;
+        checkoutHandled = true;
+      } else {
+        checkoutApiError = data?.error || `Checkout failed (HTTP ${checkoutRes.status})`;
+        if (!hasPrebookItems && checkoutRes.status >= 500) {
+          allowLegacyNormalFallback = true;
         }
       }
-    } catch (apiErr) {
-      console.warn('Backend order API notice, falling back to direct Supabase persistence:', apiErr);
+    } catch (apiErr: any) {
+      console.warn('Unified checkout API error:', apiErr);
+      checkoutApiError = apiErr?.message || 'Unable to connect to checkout service';
+      if (!hasPrebookItems) {
+        allowLegacyNormalFallback = true;
+      }
     }
 
-    // Direct Supabase persistence fallback if backend API is unreachable
-    if (!orderPersisted && isSupabaseConfigured()) {
+    // Abort cleanly on mixed/prebook or validation errors without losing cart state
+    if (!checkoutHandled && !allowLegacyNormalFallback) {
+      setIsSubmitting(false);
+      showToast(
+        'Checkout Could Not Be Completed',
+        checkoutApiError || 'Please review your cart items and try again.',
+        'error'
+      );
+      return;
+    }
+
+    // Legacy fallback ONLY for normal-only orders when server checkout route hits 5xx (e.g. unmigrated DB)
+    if (!checkoutHandled && allowLegacyNormalFallback) {
+      let baseOrderRef = '';
       try {
-        const directSaved = await createSupabaseOrder(
-          {
-            ...newOrder,
+        baseOrderRef = (await getNextSequentialOrderId()).replace(/(-I|-PB|_PB)$/i, '');
+      } catch {
+        baseOrderRef = `SWADCLK-00016`;
+      }
+      const nextOrderId = `${baseOrderRef}-I`;
+
+      const legacyOrder: Order = {
+        orderId: nextOrderId,
+        checkoutReference: baseOrderRef,
+        customerId: resolvedCustId,
+        addressId: isSelfPickup ? undefined : resolvedAddrId,
+        isGuestCheckout: !isCustomerLoggedIn && !formData.createAccount,
+        outletId: resolvedOutletId,
+        outletName: resolvedOutletName,
+        deliveryPinCode: resolvedDeliveryPin,
+        createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        items: [...cart],
+        subtotal,
+        discount,
+        welcomeDiscountAmount: 0,
+        isWelcomeDiscountApplied: false,
+        deliveryFee: effectiveDeliveryFee,
+        packagingFee,
+        gst,
+        total: effectiveTotal,
+        couponId: appliedCoupon?.id,
+        couponCode: appliedCoupon ? appliedCoupon.code : undefined,
+        couponDiscountAmount: discount > 0 ? discount : undefined,
+        swadCoinsUsed: coinsToUse,
+        swadCoinDiscountAmount: swadCoinDiscount,
+        customerDetails: {
+          ...formData,
+          orderType: isSelfPickup ? 'pickup' : 'delivery',
+          isSelfPickup,
+        },
+        orderType: isSelfPickup ? 'pickup' : 'delivery',
+        isSelfPickup,
+        kitchenAddress:
+          currentOutlet?.address ||
+          `${selectedLocation?.outletName || 'Swad Click Kitchen Facility'}, Main Commercial Hub`,
+        deliveryAddressSnapshot: resolvedDeliverySnapshot,
+        status: 'Received',
+        estimatedDeliveryMinutes: isSelfPickup ? 25 : 35,
+      };
+
+      let orderPersisted = false;
+      try {
+        const res = await fetch('/api/orders', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...legacyOrder,
+            requestedSwadCoins: coinsToUse,
             swadCoinsUsed: coinsToUse,
-            customerId: resolvedCustId || newOrder.customerId,
-            addressId: isSelfPickup ? null : (resolvedAddrId || newOrder.addressId || null),
-            deliveryAddressSnapshot: isSelfPickup ? null : (newOrder.deliveryAddressSnapshot || null),
-          },
-          true
-        );
-        if (directSaved) {
-          savedOrderObj = directSaved;
-          orderPersisted = true;
+            customerId: resolvedCustId || legacyOrder.customerId,
+            addressId: isSelfPickup ? null : (resolvedAddrId || legacyOrder.addressId || null),
+            deliveryAddressSnapshot: isSelfPickup ? null : (legacyOrder.deliveryAddressSnapshot || null),
+          }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && data.order) {
+            savedOrderObj = data.order;
+            if (data.checkoutGroup) {
+              savedGroup = data.checkoutGroup;
+            }
+            orderPersisted = true;
+          }
         }
-      } catch (supaErr) {
-        console.warn('Direct Supabase order creation notice:', supaErr);
+      } catch (apiErr) {
+        console.warn('Legacy order API fallback notice:', apiErr);
+      }
+
+      if (!orderPersisted && isSupabaseConfigured()) {
+        try {
+          const directSaved = await createSupabaseOrder(
+            {
+              ...legacyOrder,
+              swadCoinsUsed: coinsToUse,
+              customerId: resolvedCustId || legacyOrder.customerId,
+              addressId: isSelfPickup ? null : (resolvedAddrId || legacyOrder.addressId || null),
+              deliveryAddressSnapshot: isSelfPickup ? null : (legacyOrder.deliveryAddressSnapshot || null),
+            },
+            true
+          );
+          if (directSaved) {
+            savedOrderObj = directSaved;
+            orderPersisted = true;
+          }
+        } catch (supaErr) {
+          console.warn('Direct Supabase order creation notice:', supaErr);
+        }
+      }
+
+      savedOrderObj = savedOrderObj || legacyOrder;
+      savedOrdersList = [savedOrderObj];
+
+      if (appliedCoupon && discount > 0) {
+        try {
+          await recordCouponRedemption({
+            couponId: appliedCoupon.id,
+            couponCode: appliedCoupon.code,
+            orderId: savedOrderObj.id || savedOrderObj.orderId || nextOrderId,
+            customerId: resolvedCustId || customer?.id,
+            customerPhone: formData.phone || customer?.phone,
+            discountAmount: discount,
+            orderTotal: effectiveTotal,
+          });
+        } catch (couponErr) {
+          console.warn('Coupon redemption logging notice:', couponErr);
+        }
       }
     }
 
-    setPlacedOrder(savedOrderObj);
-
-    // Record coupon redemption
-    if (appliedCoupon && discount > 0) {
-      try {
-        await recordCouponRedemption({
-          couponId: appliedCoupon.id,
-          couponCode: appliedCoupon.code,
-          orderId: savedOrderObj.id || savedOrderObj.orderId || nextOrderId,
-          customerId: resolvedCustId || customer?.id,
-          customerPhone: formData.phone || customer?.phone,
-          discountAmount: discount,
-          orderTotal: effectiveTotal,
-        });
-      } catch (couponErr) {
-        console.warn('Coupon redemption logging notice:', couponErr);
-      }
+    if (savedOrderObj) {
+      setPlacedOrder(savedOrderObj);
+      setPlacedOrders(savedOrdersList);
+      setPlacedCheckoutGroup(savedGroup);
     }
 
     setIsSubmitting(false);
@@ -1619,7 +1831,6 @@ export const CheckoutPage: React.FC = () => {
       setSwadCoinBalance((prev) => Math.max(0, prev - coinsToUse));
     }
     clearCart();
-    // Immediately refresh products so portion decrements reflect in the customer's state without page refresh
     refreshProducts().catch((e) => console.warn('Product refresh notice after checkout:', e));
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -1774,13 +1985,92 @@ export const CheckoutPage: React.FC = () => {
             </p>
           </div>
 
-          {/* Order ID Pill */}
-          <div className="inline-block bg-gray-900 text-gray-100 rounded-xl px-5 py-2.5 border border-gray-800">
-            <span className="text-[10px] text-gray-400 block font-medium">Your Order ID</span>
-            <span className="font-mono font-bold text-base text-orange-400">
-              {formatDisplayOrderId(placedOrder.orderId)}
+          {/* Parent Transaction / Order ID Box */}
+          <div className="inline-block bg-stone-900 text-stone-100 rounded-xl px-5 py-2.5 border border-stone-800">
+            <span className="text-[10px] text-stone-400 block font-medium">
+              {placedCheckoutGroup?.checkoutReference || placedOrders.length > 1
+                ? 'Customer Transaction Reference'
+                : 'Your Order ID'}
+            </span>
+            <span className="font-mono font-bold text-base text-amber-400 tabular-nums">
+              {formatDisplayOrderId(
+                placedCheckoutGroup?.checkoutReference ||
+                  placedOrder.checkoutReference ||
+                  placedOrder.orderId
+              )}
             </span>
           </div>
+
+          {/* Mixed / Pre-book Split Summary Card on Confirmation */}
+          {(placedOrders.length > 1 || placedOrder.orderType === 'prebook' || (placedCheckoutGroup && placedCheckoutGroup.balanceDue > 0)) && (
+            <div className="max-w-2xl mx-auto text-left bg-amber-50/70 border border-amber-200 rounded-xl p-4 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-amber-200/70">
+                <div>
+                  <p className="text-xs font-bold text-stone-900">
+                    {placedOrders.length > 1
+                      ? 'Two Kitchen Orders Created from One Checkout'
+                      : 'Utsav Pre-book Order Confirmed'}
+                  </p>
+                  <p className="text-[11px] text-stone-600">
+                    Your instant dishes and festival pre-book dishes are dispatched separately on their respective dates.
+                  </p>
+                </div>
+                {placedCheckoutGroup && (
+                  <div className="text-right tabular-nums text-xs">
+                    <span className="text-stone-500 block text-[10px]">Paid Now</span>
+                    <span className="font-bold text-emerald-800">₹{placedCheckoutGroup.amountPaid}</span>
+                    {placedCheckoutGroup.balanceDue > 0 && (
+                      <span className="block text-[11px] font-semibold text-amber-900">
+                        Balance Due: ₹{placedCheckoutGroup.balanceDue}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                {(placedOrders.length > 0 ? placedOrders : [placedOrder]).map((child) => {
+                  const isChildPrebook = child.orderType === 'prebook';
+                  const paidAmt = child.paidAmount ?? child.advanceAmount ?? (isChildPrebook && child.paymentPlan === 'advance_25' ? 0 : child.total);
+                  const balAmt = child.balanceAmount ?? Math.max(0, child.total - paidAmt);
+                  return (
+                    <div
+                      key={child.orderId}
+                      className="bg-white border border-stone-200 rounded-lg p-3 space-y-1 text-xs"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-mono font-bold text-stone-900">
+                          {formatDisplayOrderId(child.orderId)}
+                        </span>
+                        <span className="text-[11px] font-semibold text-stone-600">
+                          {isChildPrebook ? 'Utsav Pre-book' : 'Instant Order'}
+                        </span>
+                      </div>
+                      {isChildPrebook && child.festivalName && (
+                        <p className="text-[11px] text-amber-900 font-medium">
+                          {child.festivalName}
+                          {child.festivalDeliveryAt
+                            ? ` · ${new Date(child.festivalDeliveryAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}`
+                            : ''}
+                        </p>
+                      )}
+                      {isChildPrebook && (
+                        <p className="text-[11px] text-stone-500">Special Festive Packaging Included</p>
+                      )}
+                      <div className="pt-1 flex items-center justify-between text-[11px] text-stone-700 tabular-nums border-t border-stone-100">
+                        <span>Paid: ₹{paidAmt}</span>
+                        {balAmt > 0 ? (
+                          <span className="font-bold text-amber-900">Due: ₹{balAmt}</span>
+                        ) : (
+                          <span className="font-semibold text-emerald-700">Paid in Full</span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {/* Account Creation Status Banner */}
           {placedOrder.customerDetails?.createAccount && (
@@ -1980,81 +2270,121 @@ export const CheckoutPage: React.FC = () => {
           {/* Ordered items list */}
           <div className="space-y-2">
             <h4 className="font-bold text-[10px] text-gray-800 uppercase tracking-wider">
-              Dishes in this Order ({placedOrder.items.length})
+              Dishes in this Purchase (
+              {(placedOrders.length > 0 ? placedOrders : [placedOrder]).reduce(
+                (acc, o) => acc + (o.items?.length || 0),
+                0
+              )}
+              )
             </h4>
             <div className="divide-y divide-gray-100 border border-gray-200 rounded-xl overflow-hidden">
-              {placedOrder.items.map((item, idx) => (
-                <div key={idx} className="p-2.5 flex items-center justify-between text-xs">
-                  <div className="flex items-center gap-2.5">
-                    <img
-                      src={(item as any).image || item.product?.image}
-                      alt={(item as any).name || item.product?.name}
-                      className="w-10 h-10 rounded-lg object-cover border border-gray-200"
-                      referrerPolicy="no-referrer"
-                    />
-                    <div>
-                      <h5 className="font-bold text-gray-900">{(item as any).name || item.product?.name}</h5>
-                      <p className="text-gray-500 text-[10px]">
-                        Qty: {item.quantity} {item.selectedVariant ? `• ${item.selectedVariant.name}` : ''}
-                      </p>
+              {(placedOrders.length > 0 ? placedOrders : [placedOrder]).flatMap((child) =>
+                (child.items || []).map((item, idx) => (
+                  <div key={`${child.orderId}-${idx}`} className="p-2.5 flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2.5">
+                      <img
+                        src={(item as any).image || item.product?.image}
+                        alt={(item as any).name || item.product?.name}
+                        className="w-10 h-10 rounded-lg object-cover border border-gray-200"
+                        referrerPolicy="no-referrer"
+                      />
+                      <div>
+                        <h5 className="font-bold text-gray-900">{(item as any).name || item.product?.name}</h5>
+                        <p className="text-gray-500 text-[10px]">
+                          Qty: {item.quantity} {item.selectedVariant ? `• ${item.selectedVariant.name}` : ''}
+                          {placedOrders.length > 1
+                            ? ` · ${child.orderType === 'prebook' ? 'Utsav Pre-book' : 'Instant'}`
+                            : ''}
+                        </p>
+                      </div>
                     </div>
+                    <span className="font-bold text-gray-900 tabular-nums">
+                      ₹{(item.unitPrice || (item as any).price || 0) * item.quantity}
+                    </span>
                   </div>
-                  <span className="font-bold text-gray-900">₹{item.unitPrice * item.quantity}</span>
-                </div>
-              ))}
+                ))
+              )}
             </div>
           </div>
 
           {/* Pricing Total Breakdown */}
-          <div className="pt-2 space-y-1 text-xs text-gray-600 max-w-xs ml-auto">
-            <div className="flex justify-between">
-              <span>Subtotal</span>
-              <span className="font-semibold text-gray-900">₹{placedOrder.subtotal}</span>
-            </div>
-            {placedOrder.discount > 0 && (
-              <div className="flex justify-between text-emerald-600 font-semibold">
-                <span>Coupon Discount ({placedOrder.couponCode})</span>
-                <span>- ₹{placedOrder.discount}</span>
-              </div>
-            )}
-            {(placedOrder.welcomeDiscountAmount || 0) > 0 && (
-              <div className="flex justify-between text-emerald-700 font-bold bg-emerald-50 px-2 py-1 rounded">
-                <span>🎉 10% Welcome Discount</span>
-                <span>- ₹{placedOrder.welcomeDiscountAmount}</span>
-              </div>
-            )}
-            {(placedOrder.swadCoinsUsed || 0) > 0 && (
-              <div className="flex justify-between text-amber-800 font-bold bg-amber-50 px-2 py-1 rounded border border-amber-200/60">
-                <span className="flex items-center gap-1">
-                  <Coins className="w-3 h-3 text-amber-700" />
-                  Swad Coins Redeemed ({placedOrder.swadCoinsUsed} Coins)
-                </span>
-                <span>- ₹{placedOrder.swadCoinDiscountAmount || placedOrder.swadCoinsUsed}</span>
-              </div>
-            )}
-            <div className="flex justify-between">
-              <span>Packaging Fee</span>
-              <span>₹{placedOrder.packagingFee}</span>
-            </div>
-            <div className="flex justify-between">
-              <span>GST (5%)</span>
-              <span>₹{placedOrder.gst}</span>
-            </div>
-            <div className="flex justify-between">
-              <span>Delivery Fee</span>
-              <span>
-                {placedOrder.deliveryFee === 0 ? (
-                  <span className="text-emerald-600 font-bold">FREE</span>
-                ) : (
-                  `₹${placedOrder.deliveryFee}`
+          {(() => {
+            const summarySubtotal = placedCheckoutGroup?.subtotal ?? placedOrder.subtotal;
+            const summaryDiscount = placedCheckoutGroup?.discountAmount ?? placedOrder.discount;
+            const summaryCoins = placedCheckoutGroup?.swadCoinDiscountAmount ?? placedOrder.swadCoinsUsed ?? 0;
+            const summaryPackaging = placedCheckoutGroup?.packagingFee ?? placedOrder.packagingFee;
+            const summaryGst = placedCheckoutGroup?.taxAmount ?? placedOrder.gst;
+            const summaryDelivery = placedCheckoutGroup?.deliveryCharge ?? placedOrder.deliveryFee;
+            const summaryGrand = placedCheckoutGroup?.grandTotal ?? placedOrder.total;
+            const summaryPaid = placedCheckoutGroup?.amountPaid ?? placedOrder.paidAmount ?? summaryGrand;
+            const summaryBalance = placedCheckoutGroup?.balanceDue ?? placedOrder.balanceAmount ?? 0;
+
+            return (
+              <div className="pt-2 space-y-1 text-xs text-gray-600 max-w-xs ml-auto tabular-nums">
+                <div className="flex justify-between">
+                  <span>Subtotal</span>
+                  <span className="font-semibold text-gray-900">₹{summarySubtotal}</span>
+                </div>
+                {summaryDiscount > 0 && (
+                  <div className="flex justify-between text-emerald-600 font-semibold">
+                    <span>
+                      Coupon Discount ({placedCheckoutGroup?.couponCodeSnapshot || placedOrder.couponCode})
+                    </span>
+                    <span>- ₹{summaryDiscount}</span>
+                  </div>
                 )}
-              </span>
-            </div>
-            <div className="pt-2 border-t border-gray-200 flex justify-between font-bold text-gray-900 text-xs">
-              <span>Total Paid</span>
-              <span className="font-extrabold text-orange-600 text-sm">₹{placedOrder.total}</span>
-            </div>
-          </div>
+                {(placedOrder.welcomeDiscountAmount || 0) > 0 && (
+                  <div className="flex justify-between text-emerald-700 font-bold bg-emerald-50 px-2 py-1 rounded">
+                    <span>10% Welcome Discount</span>
+                    <span>- ₹{placedOrder.welcomeDiscountAmount}</span>
+                  </div>
+                )}
+                {summaryCoins > 0 && (
+                  <div className="flex justify-between text-amber-800 font-bold bg-amber-50 px-2 py-1 rounded border border-amber-200/60">
+                    <span className="flex items-center gap-1">
+                      <Coins className="w-3 h-3 text-amber-700" />
+                      Swad Coins Redeemed
+                    </span>
+                    <span>- ₹{summaryCoins}</span>
+                  </div>
+                )}
+                <div className="flex justify-between">
+                  <span>Packaging Fee</span>
+                  <span>₹{summaryPackaging}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>GST (5%)</span>
+                  <span>₹{summaryGst}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Delivery Fee</span>
+                  <span>
+                    {summaryDelivery === 0 ? (
+                      <span className="text-emerald-600 font-bold">FREE</span>
+                    ) : (
+                      `₹${summaryDelivery}`
+                    )}
+                  </span>
+                </div>
+                {summaryBalance > 0 && (
+                  <div className="flex justify-between pt-1.5 border-t border-gray-100 text-stone-700 font-semibold">
+                    <span>Grand Order Value</span>
+                    <span>₹{summaryGrand}</span>
+                  </div>
+                )}
+                <div className="pt-2 border-t border-gray-200 flex justify-between font-bold text-gray-900 text-xs">
+                  <span>{summaryBalance > 0 ? 'Paid Now' : 'Total Paid'}</span>
+                  <span className="font-extrabold text-orange-600 text-sm">₹{summaryPaid}</span>
+                </div>
+                {summaryBalance > 0 && (
+                  <div className="flex justify-between font-bold text-amber-900 text-xs bg-amber-50 px-2 py-1 rounded">
+                    <span>Balance Due on Delivery</span>
+                    <span>₹{summaryBalance}</span>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           {/* Next Steps CTA */}
           <div className="pt-3 flex flex-col sm:flex-row gap-2.5">
@@ -3153,12 +3483,94 @@ export const CheckoutPage: React.FC = () => {
               )}
             </div>
 
-            {/* 4. Payment Method */}
+            {/* 4. Utsav Pre-book Payment Option (shown only when Pre-book items exist) */}
+            {hasPrebookItems && (
+              <div className="bg-amber-50/70 rounded-2xl border border-amber-200 p-5 shadow-xs space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h3 className="font-bold text-sm text-stone-900 flex items-center gap-1.5">
+                      <Calendar className="w-4 h-4 text-amber-800" />
+                      <span>Choose your Utsav payment option</span>
+                    </h3>
+                    <p className="text-[11px] text-stone-600 mt-0.5">
+                      {isMixedCart
+                        ? 'Your instant order is paid in full now. Choose how you want to pay for the Utsav Pre-book portion.'
+                        : 'Lock your festival batch with 25% advance or pay 100% upfront.'}
+                    </p>
+                  </div>
+                </div>
+
+                {prebookWindowError && (
+                  <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    <span>{prebookWindowError}</span>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <label
+                    className={`p-3.5 rounded-xl border flex items-start gap-2.5 cursor-pointer transition-all bg-white ${
+                      prebookPaymentPlan === 'advance_25'
+                        ? 'border-amber-800 ring-1 ring-amber-800/30'
+                        : 'border-stone-200 hover:border-amber-400'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="prebookPaymentPlan"
+                      value="advance_25"
+                      checked={prebookPaymentPlan === 'advance_25'}
+                      onChange={() => setPrebookPaymentPlan('advance_25')}
+                      className="accent-amber-800 mt-0.5"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-bold text-stone-900">Pay 25% Advance on Pre-book</p>
+                      <p className="text-[11px] text-stone-600 mt-0.5 tabular-nums">
+                        Pay{' '}
+                        <strong className="text-amber-900">
+                          ₹{checkoutBreakdown.prebookChild ? Math.round(checkoutBreakdown.prebookChild.total * 0.25) : 0}
+                        </strong>{' '}
+                        now for pre-book items · Balance on delivery
+                      </p>
+                    </div>
+                  </label>
+
+                  <label
+                    className={`p-3.5 rounded-xl border flex items-start gap-2.5 cursor-pointer transition-all bg-white ${
+                      prebookPaymentPlan === 'full'
+                        ? 'border-amber-800 ring-1 ring-amber-800/30'
+                        : 'border-stone-200 hover:border-amber-400'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="prebookPaymentPlan"
+                      value="full"
+                      checked={prebookPaymentPlan === 'full'}
+                      onChange={() => setPrebookPaymentPlan('full')}
+                      className="accent-amber-800 mt-0.5"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-bold text-stone-900">Pay 100% Upfront</p>
+                      <p className="text-[11px] text-stone-600 mt-0.5 tabular-nums">
+                        Settle full pre-book amount (
+                        <strong className="text-stone-900">
+                          ₹{checkoutBreakdown.prebookChild?.total ?? 0}
+                        </strong>
+                        ) with zero balance later
+                      </p>
+                    </div>
+                  </label>
+                </div>
+              </div>
+            )}
+
+            {/* 4 / 5. Payment Method */}
             <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-xs space-y-3">
               <div className="flex items-center justify-between">
                 <h3 className="font-bold text-sm text-gray-900 flex items-center gap-1.5">
                   <span className="w-5 h-5 rounded-full bg-orange-600 text-white text-[10px] flex items-center justify-center font-bold">
-                    4
+                    {hasPrebookItems ? 5 : 4}
                   </span>
                   <span>Payment Method (Demo Mode)</span>
                 </h3>
@@ -3193,16 +3605,19 @@ export const CheckoutPage: React.FC = () => {
                 </label>
 
                 <label
-                  className={`p-3 rounded-xl border flex items-center gap-2.5 cursor-pointer transition-all ${
-                    formData.paymentMethod === 'cod'
-                      ? 'border-orange-600 bg-orange-50/70 ring-1 ring-orange-600/30'
-                      : 'border-gray-200 bg-white hover:bg-gray-50'
+                  className={`p-3 rounded-xl border flex items-center gap-2.5 transition-all ${
+                    hasPrebookItems
+                      ? 'border-stone-200 bg-stone-50 opacity-55 cursor-not-allowed'
+                      : formData.paymentMethod === 'cod'
+                        ? 'border-orange-600 bg-orange-50/70 ring-1 ring-orange-600/30 cursor-pointer'
+                        : 'border-gray-200 bg-white hover:bg-gray-50 cursor-pointer'
                   }`}
                 >
                   <input
                     type="radio"
                     name="paymentMethod"
                     value="cod"
+                    disabled={hasPrebookItems}
                     checked={formData.paymentMethod === 'cod'}
                     onChange={handleChange}
                     className="accent-orange-600"
@@ -3211,7 +3626,11 @@ export const CheckoutPage: React.FC = () => {
                     <Banknote className="w-4 h-4 text-emerald-600" />
                     <div>
                       <p className="text-xs font-bold text-gray-900">Cash on Delivery</p>
-                      <p className="text-[10px] text-gray-500">Pay cash/UPI upon delivery</p>
+                      <p className="text-[10px] text-gray-500">
+                        {hasPrebookItems
+                          ? 'Unavailable for Utsav Pre-book'
+                          : 'Pay cash/UPI upon delivery'}
+                      </p>
                     </div>
                   </div>
                 </label>
@@ -3277,29 +3696,104 @@ export const CheckoutPage: React.FC = () => {
                 </span>
               </h3>
 
-              {/* Items preview list */}
-              <div className="max-h-56 overflow-y-auto divide-y divide-gray-100 pr-1">
-                {cart.map((item) => (
-                  <div key={item.id} className="py-2 flex items-center justify-between gap-2.5 text-xs">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <img
-                        src={item.product.image}
-                        alt={item.product.name}
-                        className="w-9 h-9 rounded-lg object-cover border border-gray-200 shrink-0"
-                        referrerPolicy="no-referrer"
-                      />
-                      <div className="min-w-0">
-                        <p className="font-bold text-gray-900 truncate">{item.product.name}</p>
-                        <p className="text-[10px] text-gray-500">
-                          {item.quantity}x • {item.selectedVariant ? item.selectedVariant.name : 'Standard'}
+              {/* Items preview list (grouped when Pre-book items exist) */}
+              <div className="max-h-64 overflow-y-auto pr-1 space-y-3">
+                {hasPrebookItems ? (
+                  <>
+                    {hasNormalItems && (
+                      <div className="space-y-1">
+                        <p className="text-[11px] font-bold text-stone-700">
+                          Normal Orders · Instant Dispatch
                         </p>
+                        <div className="divide-y divide-gray-100">
+                          {normalItems.map((item) => (
+                            <div key={item.id} className="py-2 flex items-center justify-between gap-2.5 text-xs">
+                              <div className="flex items-center gap-2 min-w-0">
+                                <img
+                                  src={item.product.image}
+                                  alt={item.product.name}
+                                  className="w-9 h-9 rounded-lg object-cover border border-gray-200 shrink-0"
+                                  referrerPolicy="no-referrer"
+                                />
+                                <div className="min-w-0">
+                                  <p className="font-bold text-gray-900 truncate">{item.product.name}</p>
+                                  <p className="text-[10px] text-gray-500">
+                                    {item.quantity}x • {item.selectedVariant ? item.selectedVariant.name : 'Standard'}
+                                  </p>
+                                </div>
+                              </div>
+                              <span className="font-bold text-gray-900 shrink-0 tabular-nums">
+                                ₹{item.unitPrice * item.quantity}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="space-y-1">
+                      <p className="text-[11px] font-bold text-amber-900">
+                        Utsav Pre-book Orders · Festive Packaging
+                      </p>
+                      <div className="divide-y divide-amber-100 bg-amber-50/40 rounded-xl px-2.5 border border-amber-200/70">
+                        {prebookItems.map((item) => {
+                          const ev = item.product.festiveEventId
+                            ? festiveEventById[item.product.festiveEventId]
+                            : undefined;
+                          return (
+                            <div key={item.id} className="py-2 flex items-center justify-between gap-2.5 text-xs">
+                              <div className="flex items-center gap-2 min-w-0">
+                                <img
+                                  src={item.product.image}
+                                  alt={item.product.name}
+                                  className="w-9 h-9 rounded-lg object-cover border border-amber-200 shrink-0"
+                                  referrerPolicy="no-referrer"
+                                />
+                                <div className="min-w-0">
+                                  <p className="font-bold text-gray-900 truncate">{item.product.name}</p>
+                                  <p className="text-[10px] text-amber-900">
+                                    {item.quantity}x • {item.selectedVariant ? item.selectedVariant.name : 'Standard'}
+                                    {ev?.name ? ` · ${ev.name}` : ''}
+                                    {ev?.festivalDate
+                                      ? ` (${new Date(ev.festivalDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })})`
+                                      : ''}
+                                  </p>
+                                </div>
+                              </div>
+                              <span className="font-bold text-gray-900 shrink-0 tabular-nums">
+                                ₹{item.unitPrice * item.quantity}
+                              </span>
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
-                    <span className="font-bold text-gray-900 shrink-0">
-                      ₹{item.unitPrice * item.quantity}
-                    </span>
+                  </>
+                ) : (
+                  <div className="divide-y divide-gray-100">
+                    {cart.map((item) => (
+                      <div key={item.id} className="py-2 flex items-center justify-between gap-2.5 text-xs">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <img
+                            src={item.product.image}
+                            alt={item.product.name}
+                            className="w-9 h-9 rounded-lg object-cover border border-gray-200 shrink-0"
+                            referrerPolicy="no-referrer"
+                          />
+                          <div className="min-w-0">
+                            <p className="font-bold text-gray-900 truncate">{item.product.name}</p>
+                            <p className="text-[10px] text-gray-500">
+                              {item.quantity}x • {item.selectedVariant ? item.selectedVariant.name : 'Standard'}
+                            </p>
+                          </div>
+                        </div>
+                        <span className="font-bold text-gray-900 shrink-0 tabular-nums">
+                          ₹{item.unitPrice * item.quantity}
+                        </span>
+                      </div>
+                    ))}
                   </div>
-                ))}
+                )}
               </div>
 
               {/* Coupons & Promotional Offers Box */}
@@ -3516,11 +4010,30 @@ export const CheckoutPage: React.FC = () => {
               )}
 
               {/* Pricing breakdown */}
-              <div className="pt-2 border-t border-gray-100 space-y-1.5 text-xs text-gray-600">
-                <div className="flex justify-between">
-                  <span>Item Subtotal</span>
-                  <span className="font-semibold text-gray-900">₹{subtotal}</span>
-                </div>
+              <div className="pt-2 border-t border-gray-100 space-y-1.5 text-xs text-gray-600 tabular-nums">
+                {hasPrebookItems ? (
+                  <>
+                    {hasNormalItems && (
+                      <div className="flex justify-between">
+                        <span>Normal Products</span>
+                        <span className="font-semibold text-gray-900">₹{checkoutBreakdown.normalSubtotal}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between">
+                      <span>Utsav Pre-book Products</span>
+                      <span className="font-semibold text-amber-900">₹{checkoutBreakdown.prebookSubtotal}</span>
+                    </div>
+                    <div className="flex justify-between pt-1 border-t border-gray-100">
+                      <span>Combined Subtotal</span>
+                      <span className="font-semibold text-gray-900">₹{subtotal}</span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex justify-between">
+                    <span>Item Subtotal</span>
+                    <span className="font-semibold text-gray-900">₹{subtotal}</span>
+                  </div>
+                )}
 
                 {discount > 0 && (
                   <div className="flex justify-between text-emerald-600 font-semibold">
@@ -3546,7 +4059,7 @@ export const CheckoutPage: React.FC = () => {
 
                 <div className="flex justify-between">
                   <span>GST (5%)</span>
-                  <span>₹{gst}</span>
+                  <span>₹{checkoutBreakdown.totalGst}</span>
                 </div>
 
                 <div className="flex justify-between">
@@ -3564,12 +4077,26 @@ export const CheckoutPage: React.FC = () => {
                   </span>
                 </div>
 
+                {hasPrebookItems && (
+                  <div className="flex justify-between pt-2 border-t border-gray-100 text-stone-700 font-semibold">
+                    <span>Total Order Value</span>
+                    <span>₹{effectiveTotal}</span>
+                  </div>
+                )}
+
                 <div className="pt-2.5 border-t border-gray-200 flex justify-between items-baseline text-xs font-bold text-gray-900">
-                  <span>Final Amount</span>
+                  <span>{hasPrebookItems ? 'Payable Now' : 'Final Amount'}</span>
                   <span className="font-extrabold text-xl text-orange-600">
-                    ₹{effectiveTotal}
+                    ₹{hasPrebookItems ? amountPayableNow : effectiveTotal}
                   </span>
                 </div>
+
+                {hasPrebookItems && balanceDueAtDelivery > 0 && (
+                  <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200/80 flex items-center justify-between text-xs text-amber-950 font-semibold">
+                    <span>Remaining Balance (Festival Delivery)</span>
+                    <span className="font-bold">₹{balanceDueAtDelivery}</span>
+                  </div>
+                )}
               </div>
 
               {placeOrderValidation.actionRequired === 'SIGN_IN_REQUIRED' ? (

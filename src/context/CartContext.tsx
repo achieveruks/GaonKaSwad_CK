@@ -3,6 +3,7 @@ import { Product, CartItem, ProductVariant, ProductAddon, Coupon } from '../type
 import { useLocation } from './LocationContext';
 import { isProductAvailableAtOutlet, isProductInStockAtOutlet, getProductPortionsLeftAtOutlet } from '../lib/locationService';
 import { validateCoupon } from '../lib/supabaseService';
+import { calculateMixedCheckoutBreakdown, isPrebookItem, MixedCheckoutBreakdown } from '../lib/mixedCheckoutCalc';
 
 interface ToastMessage {
   id: string;
@@ -31,6 +32,14 @@ interface CartContextType {
   packagingFee: number;
   gst: number;
   total: number;
+  normalItems: CartItem[];
+  prebookItems: CartItem[];
+  hasNormalItems: boolean;
+  hasPrebookItems: boolean;
+  isMixedCart: boolean;
+  normalSubtotal: number;
+  prebookSubtotal: number;
+  mixedBreakdown: MixedCheckoutBreakdown;
   appliedCoupon: Coupon | null;
   applyCoupon: (
     code: string,
@@ -428,6 +437,25 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const total = Math.max(0, subtotal - discount + deliveryFee + packagingFee + gst);
 
+  const mixedBreakdown = useMemo(
+    () =>
+      calculateMixedCheckoutBreakdown({
+        items: cart,
+        couponDiscountTotal: discount,
+        swadCoinDiscountTotal: 0,
+        packagingFeeTotal: packagingFee,
+        deliveryFeeTotal: deliveryFee,
+        prebookPaymentPlan: 'full',
+      }),
+    [cart, discount, packagingFee, deliveryFee]
+  );
+
+  const normalItems = useMemo(() => cart.filter((it) => !isPrebookItem(it)), [cart]);
+  const prebookItems = useMemo(() => cart.filter((it) => isPrebookItem(it)), [cart]);
+  const hasNormalItems = normalItems.length > 0;
+  const hasPrebookItems = prebookItems.length > 0;
+  const isMixedCart = hasNormalItems && hasPrebookItems;
+
   const applyCoupon = async (
     code: string,
     customerIdOrOptions?:
@@ -519,6 +547,14 @@ export const CartProvider: React.FC<{ children: React.ReactNode }> = ({ children
         packagingFee,
         gst,
         total,
+        normalItems,
+        prebookItems,
+        hasNormalItems,
+        hasPrebookItems,
+        isMixedCart,
+        normalSubtotal: mixedBreakdown.normalSubtotal,
+        prebookSubtotal: mixedBreakdown.prebookSubtotal,
+        mixedBreakdown,
         appliedCoupon,
         applyCoupon,
         removeCoupon,

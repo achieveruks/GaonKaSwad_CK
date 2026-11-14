@@ -1588,6 +1588,9 @@ export function mapDbOrderToOrder(row: any): Order {
     id: row.id || cleanDbOrderId,
     orderId: cleanDbOrderId,
     orderNumber: cleanDbOrderNum,
+    checkoutGroupId: row.checkout_group_id || undefined,
+    checkout_group_id: row.checkout_group_id || undefined,
+    checkoutReference: row.checkout_reference || undefined,
     outletId: resolvedOutlet.outletId,
     outletName: resolvedOutlet.outletName,
     kitchenAddress: resolvedOutlet.kitchenAddress,
@@ -1601,6 +1604,8 @@ export function mapDbOrderToOrder(row: any): Order {
     payment_plan: row.payment_plan || 'full',
     advanceAmount: Number(row.advance_amount || 0),
     advance_amount: Number(row.advance_amount || 0),
+    paidAmount: Number(row.paid_amount ?? row.advance_amount ?? 0),
+    paid_amount: Number(row.paid_amount ?? row.advance_amount ?? 0),
     balanceAmount: Number(row.balance_amount || 0),
     balance_amount: Number(row.balance_amount || 0),
     festiveEventId: row.festive_event_id || undefined,
@@ -1665,6 +1670,33 @@ export function mapDbOrderToOrder(row: any): Order {
   };
 }
 
+async function hydrateCheckoutReferences(orders: Order[]): Promise<Order[]> {
+  if (!isSupabaseConfigured() || !orders || orders.length === 0) return orders;
+  const groupIds = Array.from(new Set(orders.map((o) => o.checkoutGroupId).filter(Boolean))) as string[];
+  if (groupIds.length === 0) return orders;
+  try {
+    const { data: cgRows } = await supabase
+      .from('checkout_groups')
+      .select('id, checkout_reference')
+      .in('id', groupIds);
+    if (Array.isArray(cgRows) && cgRows.length > 0) {
+      const cgMap = new Map<string, string>();
+      cgRows.forEach((g: any) => {
+        if (g?.id && g?.checkout_reference) {
+          cgMap.set(String(g.id), String(g.checkout_reference));
+        }
+      });
+      return orders.map((o) => {
+        const ref = o.checkoutGroupId ? cgMap.get(String(o.checkoutGroupId)) : undefined;
+        return ref ? { ...o, checkoutReference: ref } : o;
+      });
+    }
+  } catch {
+    // Gracefully skip if checkout_groups migration is pending
+  }
+  return orders;
+}
+
 export async function fetchSupabaseOrders(outletId?: string, customerId?: string): Promise<Order[]> {
   if (!isSupabaseConfigured()) return [];
 
@@ -1683,7 +1715,7 @@ export async function fetchSupabaseOrders(outletId?: string, customerId?: string
       return [];
     }
     if (!data || data.length === 0) return [];
-    return data.map(mapDbOrderToOrder);
+    return await hydrateCheckoutReferences(data.map(mapDbOrderToOrder));
   } catch (err) {
     console.warn('fetchSupabaseOrders exception:', err);
     return [];
@@ -1700,7 +1732,8 @@ export async function fetchSupabaseOrdersByPhone(phone: string): Promise<{ order
       .ilike('customer_phone', `%${cleanPhone}%`)
       .order('created_at', { ascending: false });
     if (error || !data) return { orders: [] };
-    return { orders: data.map(mapDbOrderToOrder) };
+    const hydrated = await hydrateCheckoutReferences(data.map(mapDbOrderToOrder));
+    return { orders: hydrated };
   } catch (err) {
     console.warn('fetchSupabaseOrdersByPhone error:', err);
     return { orders: [] };
@@ -1720,7 +1753,9 @@ export async function fetchSupabaseOrderById(orderId: string): Promise<Order | n
       .maybeSingle();
 
     if (error || !data) return null;
-    return mapDbOrderToOrder(data);
+    const mapped = mapDbOrderToOrder(data);
+    const hydrated = await hydrateCheckoutReferences([mapped]);
+    return hydrated[0] || mapped;
   } catch {
     return null;
   }
@@ -1814,10 +1849,14 @@ export async function createSupabaseOrder(
   if (!isSupabaseConfigured()) throw new Error('Supabase not configured');
 
   const id = `order-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
-  let orderId = orderData.orderId ? normalizeOrderId(orderData.orderId) : '';
-  if (!orderId || !orderId.startsWith('SWADCLK-')) {
-    orderId = await getNextSequentialOrderId();
+  const isPrebookDirect = orderData.orderType === 'prebook' || (orderData as any).order_type === 'prebook';
+  let baseRef = orderData.orderId
+    ? normalizeOrderId(orderData.orderId).replace(/(-I|-PB|_PB)$/i, '')
+    : '';
+  if (!baseRef || !baseRef.startsWith('SWADCLK-')) {
+    baseRef = await getNextSequentialOrderId();
   }
+  const orderId = `${baseRef}${isPrebookDirect ? '-PB' : '-I'}`;
   const now = new Date().toISOString();
 
   const isUUID = (str?: string | null) =>
@@ -1861,6 +1900,7 @@ export async function createSupabaseOrder(
     id,
     order_id: orderId,
     order_number: orderId,
+    checkout_group_id: orderData.checkoutGroupId || null,
     outlet_id: safeOutletId,
     customer_id: isUUID(orderData.customerId) ? orderData.customerId : null,
     address_id: isSelfPickup ? null : (isUUID(orderData.addressId) ? orderData.addressId : null),
@@ -1870,6 +1910,7 @@ export async function createSupabaseOrder(
     is_self_pickup: isSelfPickup,
     payment_plan: orderData.paymentPlan || 'full',
     advance_amount: Number(orderData.advanceAmount || 0),
+    paid_amount: Number(orderData.paidAmount ?? orderData.advanceAmount ?? 0),
     balance_amount: Number(orderData.balanceAmount || 0),
     festive_event_id: orderData.festiveEventId || null,
     festival_delivery_at: orderData.festivalDeliveryAt || null,
@@ -1887,7 +1928,7 @@ export async function createSupabaseOrder(
     welcome_discount_applied: !!orderData.isWelcomeDiscountApplied,
     welcome_discount_amount: Number(orderData.welcomeDiscountAmount || 0),
     payment_method: orderData.customerDetails?.paymentMethod || 'cod',
-    payment_status: 'PENDING',
+    payment_status: orderData.paymentStatus || (orderData.paymentPlan === 'advance_25' ? 'partially_paid' : 'pending'),
     delivery_type: deliveryType,
     scheduled_at: scheduledAt,
     delivery_instructions: supaDeliveryInstructions,
@@ -1916,17 +1957,16 @@ export async function createSupabaseOrder(
 
   if (data) {
     const rawOid = String(data.order_id || data.order_number || '');
-    if (rawOid.includes('SWADCLK-#') || rawOid.includes('GKSWAD')) {
-      const cleanOid = rawOid.replace(/SWADCLK-#/g, 'SWADCLK-').replace(/GKSWAD-#?/g, 'SWADCLK-');
+    if (rawOid !== orderId) {
       try {
         await supabase
           .from('orders')
-          .update({ order_id: cleanOid, order_number: cleanOid })
+          .update({ order_id: orderId, order_number: orderId })
           .eq('id', data.id);
-        data.order_id = cleanOid;
-        data.order_number = cleanOid;
+        data.order_id = orderId;
+        data.order_number = orderId;
       } catch (cleanErr) {
-        console.warn('Direct order post-insert normalization notice:', cleanErr);
+        console.warn('Direct order post-insert alignment notice:', cleanErr);
       }
     }
 
@@ -3175,17 +3215,17 @@ export async function verifySupabaseOtp(
 export function mapDbFestiveEventToFestiveEvent(row: any): FestiveEvent {
   return {
     id: row.id,
-    outletId: row.outlet_id,
-    name: row.name,
-    slug: row.slug,
+    outletId: row.outletId ?? row.outlet_id ?? '',
+    name: row.name || '',
+    slug: row.slug || '',
     description: row.description || '',
-    bannerImage: row.banner_image || '',
-    festivalDate: row.festival_date,
-    bookingStartAt: row.booking_start_at,
-    bookingEndAt: row.booking_end_at,
+    bannerImage: row.bannerImage ?? row.banner_image ?? '',
+    festivalDate: row.festivalDate ?? row.festival_date ?? '',
+    bookingStartAt: row.bookingStartAt ?? row.booking_start_at ?? '',
+    bookingEndAt: row.bookingEndAt ?? row.booking_end_at ?? '',
     status: row.status || 'active',
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    createdAt: row.createdAt ?? row.created_at,
+    updatedAt: row.updatedAt ?? row.updated_at,
   };
 }
 
@@ -3368,6 +3408,26 @@ export async function recordSupabasePaymentTransaction(data: Partial<OrderPaymen
   if (error) throw error;
   return mapDbPaymentTxToPaymentTx(res);
 }
+
+/**
+ * Fetch active festive collections for an outlet via API with Supabase fallback.
+ */
+export async function fetchActiveFestiveEventsForOutlet(outletId?: string): Promise<FestiveEvent[]> {
+  try {
+    const params = new URLSearchParams();
+    if (outletId) params.set('outletId', outletId);
+    params.set('active', 'true');
+    const res = await fetch(`/api/festive-events?${params.toString()}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && Array.isArray(data.events)) {
+        return data.events;
+      }
+    }
+  } catch {}
+  return fetchSupabaseFestiveEvents(outletId, true);
+}
+
 
 
 

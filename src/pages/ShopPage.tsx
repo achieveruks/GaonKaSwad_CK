@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigation } from '../context/NavigationContext';
 import { useProducts } from '../context/ProductContext';
+import { useLocation } from '../context/LocationContext';
 import { ProductCard } from '../components/ProductCard';
 import { FilterSidebar } from '../components/FilterSidebar';
-import { FilterState, Product } from '../types';
+import { FilterState, Product, FestiveEvent } from '../types';
+import { fetchActiveFestiveEventsForOutlet } from '../lib/supabaseService';
 import {
   Search,
   SlidersHorizontal,
@@ -12,13 +14,18 @@ import {
   Sparkles,
   Flame,
   ArrowUpDown,
-  Utensils
+  Utensils,
+  Calendar,
+  ArrowRight,
+  PackageCheck
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 export const ShopPage: React.FC = () => {
   const { currentRoute, goToShop } = useNavigation();
   const { outletProducts, categories } = useProducts();
+  const { selectedLocation } = useLocation();
+  const [festiveEvents, setFestiveEvents] = useState<FestiveEvent[]>([]);
 
   // Extract route params if passed
   const initialCategory = currentRoute.path === '/shop' ? currentRoute.category || '' : '';
@@ -48,6 +55,25 @@ export const ShopPage: React.FC = () => {
       }
     }
   }, [currentRoute]);
+
+  // Load PIN-routed active festive events for active outlet
+  useEffect(() => {
+    let active = true;
+    fetchActiveFestiveEventsForOutlet(selectedLocation?.outletId).then((events) => {
+      if (active) setFestiveEvents(events || []);
+    });
+    return () => {
+      active = false;
+    };
+  }, [selectedLocation?.outletId]);
+
+  const festiveEventById = useMemo(() => {
+    const map = new Map<string, FestiveEvent>();
+    for (const ev of festiveEvents) {
+      map.set(String(ev.id), ev);
+    }
+    return map;
+  }, [festiveEvents]);
 
   const handleResetFilters = () => {
     setFilters({
@@ -197,6 +223,79 @@ export const ShopPage: React.FC = () => {
           </p>
         </div>
       </div>
+
+      {/* Active Festival Collections Banner (PIN-routed per Outlet) */}
+      {festiveEvents.length > 0 && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {festiveEvents.slice(0, 2).map((ev) => {
+            const nowMs = Date.now();
+            const startMs = ev.bookingStartAt ? new Date(ev.bookingStartAt).getTime() : 0;
+            const endMs = ev.bookingEndAt ? new Date(ev.bookingEndAt).getTime() : Infinity;
+            const isOpen = ev.status === 'active' && nowMs >= startMs && nowMs <= endMs;
+            const notStarted = nowMs < startMs;
+            const festDateFormatted = ev.festivalDate
+              ? new Date(ev.festivalDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+              : '';
+            const endFormatted = ev.bookingEndAt
+              ? new Date(ev.bookingEndAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
+              : '';
+
+            return (
+              <div
+                key={ev.id}
+                onClick={() => setFilters((prev) => ({ ...prev, category: 'utsav_specials' }))}
+                className="p-3.5 bg-gradient-to-r from-amber-50 via-stone-50 to-orange-50/40 border border-amber-300/80 rounded-2xl flex items-center gap-3.5 cursor-pointer hover:border-amber-500 transition-colors shadow-2xs"
+              >
+                {ev.bannerImage && (
+                  <img
+                    src={ev.bannerImage}
+                    alt={ev.name}
+                    className="w-16 h-16 rounded-xl object-cover border border-amber-200 shrink-0"
+                    referrerPolicy="no-referrer"
+                  />
+                )}
+                <div className="flex-1 min-w-0 space-y-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-amber-900">
+                      <Sparkles className="w-3 h-3 text-amber-600 fill-amber-400" />
+                      {ev.name}
+                    </span>
+                    <span
+                      className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${
+                        isOpen
+                          ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                          : notStarted
+                            ? 'bg-amber-100 text-amber-900 border-amber-300'
+                            : 'bg-stone-100 text-stone-600 border-stone-200'
+                      }`}
+                    >
+                      {isOpen ? `Booking Open • Till ${endFormatted}` : notStarted ? 'Opening Soon' : 'Booking Closed'}
+                    </span>
+                  </div>
+                  {ev.description && (
+                    <p className="text-[11px] text-stone-600 line-clamp-1">{ev.description}</p>
+                  )}
+                  <div className="flex items-center gap-3 text-[11px] text-stone-700 font-medium tabular-nums">
+                    {festDateFormatted && (
+                      <span className="inline-flex items-center gap-1">
+                        <Calendar className="w-3 h-3 text-amber-700" />
+                        Festival: {festDateFormatted}
+                      </span>
+                    )}
+                    <span className="inline-flex items-center gap-1 text-amber-900">
+                      <PackageCheck className="w-3 h-3 text-amber-700" />
+                      25% Advance Available
+                    </span>
+                  </div>
+                </div>
+                {filters.category !== 'utsav_specials' && (
+                  <ArrowRight className="w-4 h-4 text-amber-800 shrink-0" />
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* Top Search & Category Pills */}
       <div className="space-y-3">
@@ -392,7 +491,11 @@ export const ShopPage: React.FC = () => {
           {filteredProducts.length > 0 ? (
             <div className="grid grid-cols-2 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
               {filteredProducts.map((product) => (
-                <ProductCard key={product.id} product={product} />
+                <ProductCard
+                  key={product.id}
+                  product={product}
+                  festiveEvent={product.festiveEventId ? festiveEventById.get(String(product.festiveEventId)) : undefined}
+                />
               ))}
             </div>
           ) : (

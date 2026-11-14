@@ -12,6 +12,8 @@ import {
   deleteFestiveEvent,
   getFestiveProductionSummary,
 } from '../../lib/festiveService';
+import { FestiveProductionWidget } from '../../components/owner/FestiveProductionWidget';
+import { supabase, isSupabaseConfigured } from '../../lib/supabase';
 import {
   Sparkles,
   Plus,
@@ -67,7 +69,7 @@ const FESTIVE_IMAGE_PRESETS = [
 export const OwnerUtsavSpecialsPage: React.FC = () => {
   const { token } = useAuth();
   const { goToOwnerProducts, goToOwnerAddProduct, goToShop } = useNavigation();
-  const { allProducts } = useProducts();
+  const { allProducts, refreshProducts } = useProducts();
 
   const [outlets, setOutlets] = useState<Outlet[]>([]);
   const [selectedOutletId, setSelectedOutletId] = useState<string>('all');
@@ -114,8 +116,8 @@ export const OwnerUtsavSpecialsPage: React.FC = () => {
       ]);
       setOutlets(allOutlets || []);
       setEvents(allEvents || []);
-      if (allOutlets.length > 0 && !formOutletId) {
-        setFormOutletId(allOutlets[0].id);
+      if (allOutlets && allOutlets.length > 0) {
+        setFormOutletId((prev) => prev || allOutlets[0].id);
       }
     } catch (err) {
       console.error('Failed to load festive events:', err);
@@ -123,7 +125,7 @@ export const OwnerUtsavSpecialsPage: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  }, [selectedOutletId, token, formOutletId]);
+  }, [selectedOutletId, token]);
 
   useEffect(() => {
     loadData();
@@ -318,26 +320,55 @@ export const OwnerUtsavSpecialsPage: React.FC = () => {
   };
 
   // Open Production Summary Modal
+  const loadModalSummary = useCallback(
+    async (event: FestiveEvent, silent = false) => {
+      if (!silent) {
+        setIsLoadingSummary(true);
+        setSummaryError(null);
+      }
+      try {
+        const data = await getFestiveProductionSummary(event.outletId, event.id, token || undefined);
+        setSummaryData({
+          totalBookedUnits: data.totalBookedUnits || 0,
+          items: data.items || [],
+        });
+      } catch (err: any) {
+        console.error('Error loading production summary:', err);
+        if (!silent) {
+          setSummaryError(err.message || 'Failed to load production planning summary.');
+        }
+      } finally {
+        if (!silent) {
+          setIsLoadingSummary(false);
+        }
+      }
+    },
+    [token]
+  );
+
   const handleOpenSummary = async (event: FestiveEvent) => {
     setSelectedEventForSummary(event);
     setIsSummaryModalOpen(true);
-    setIsLoadingSummary(true);
-    setSummaryError(null);
     setSummaryData(null);
-
-    try {
-      const data = await getFestiveProductionSummary(event.outletId, event.id, token || undefined);
-      setSummaryData({
-        totalBookedUnits: data.totalBookedUnits || 0,
-        items: data.items || [],
-      });
-    } catch (err: any) {
-      console.error('Error loading production summary:', err);
-      setSummaryError(err.message || 'Failed to load production planning summary.');
-    } finally {
-      setIsLoadingSummary(false);
-    }
+    await loadModalSummary(event, false);
   };
+
+  useEffect(() => {
+    if (!isSummaryModalOpen || !selectedEventForSummary || !isSupabaseConfigured()) return;
+    const channel = supabase
+      .channel(`utsav-modal-summary:${selectedEventForSummary.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => {
+        loadModalSummary(selectedEventForSummary, true);
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'products' }, () => {
+        loadModalSummary(selectedEventForSummary, true);
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [isSummaryModalOpen, selectedEventForSummary, loadModalSummary]);
 
   const getOutletName = (outletId: string) => {
     const found = outlets.find((o) => o.id === outletId);
@@ -361,7 +392,7 @@ export const OwnerUtsavSpecialsPage: React.FC = () => {
     if (now > end) {
       return { label: 'Pre-booking Closed', color: 'bg-rose-50 text-rose-700 border-rose-200' };
     }
-    return { label: 'Booking Active Now', color: 'bg-emerald-50 text-emerald-700 border-emerald-200 animate-pulse' };
+    return { label: 'Booking Active Now', color: 'bg-emerald-50 text-emerald-700 border-emerald-200' };
   };
 
   const formatDate = (dateStr?: string) => {
@@ -557,6 +588,19 @@ export const OwnerUtsavSpecialsPage: React.FC = () => {
             </button>
           </div>
         </div>
+
+        {/* Inline Real-Time Production Planning Widget */}
+        {!isLoading && filteredEvents.length > 0 && (
+          <FestiveProductionWidget
+            events={filteredEvents}
+            outlets={outlets}
+            token={token}
+            onPrintSheet={handleOpenSummary}
+            onProductsChanged={() => {
+              refreshProducts();
+            }}
+          />
+        )}
 
         {/* Collections List */}
         {isLoading ? (

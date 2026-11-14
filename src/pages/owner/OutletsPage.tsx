@@ -531,7 +531,16 @@ export const OutletsPage: React.FC = () => {
     getAboutByOutletId(outlet.id)
       .then((ab) => {
         if (ab) {
-          setAboutFormData(ab);
+          setAboutFormData((prev) => ({
+            ...prev,
+            ...ab,
+            utsavPromoEnabled: ab.utsavPromoEnabled ?? prev.utsavPromoEnabled ?? false,
+            utsavPromoHeading: ab.utsavPromoHeading || prev.utsavPromoHeading,
+            utsavPromoDescription: ab.utsavPromoDescription || prev.utsavPromoDescription,
+            utsavPromoCtaText: ab.utsavPromoCtaText || prev.utsavPromoCtaText,
+            utsavPromoImage: ab.utsavPromoImage || prev.utsavPromoImage,
+            utsavFestivalName: ab.utsavFestivalName || prev.utsavFestivalName,
+          }));
         }
       })
       .catch((err) => {
@@ -573,7 +582,7 @@ export const OutletsPage: React.FC = () => {
         showFeedback('success', `New kitchen outlet "${formData.name}" and page customizations created!`);
       }
 
-      // Save About Page customization to Supabase
+      // Save About Page & Utsav Promo customization to Supabase
       try {
         await saveAboutByOutletId(
           savedOutlet.id,
@@ -583,8 +592,10 @@ export const OutletsPage: React.FC = () => {
           },
           token || ''
         );
-      } catch (aboutErr) {
-        console.warn('Failed to save about configuration:', aboutErr);
+      } catch (aboutErr: any) {
+        const msg = aboutErr?.message || 'Outlet details saved, but Utsav/About customization failed to save.';
+        showFeedback('error', msg);
+        throw new Error(msg);
       }
 
       // Save dish merchandising & stock configurations if updated

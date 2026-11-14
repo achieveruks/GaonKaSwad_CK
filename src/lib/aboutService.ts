@@ -48,6 +48,7 @@ export async function saveAboutByOutletId(
   if (!outletId) throw new Error('outletId is required to save about configuration');
 
   let savedRecord: OutletAbout | null = null;
+  let lastError: string | null = null;
 
   // 1. Save directly to Supabase
   if (isSupabaseConfigured()) {
@@ -56,7 +57,8 @@ export async function saveAboutByOutletId(
         ...aboutData,
         outletId,
       });
-    } catch (err) {
+    } catch (err: any) {
+      lastError = err?.message || 'Supabase about save failed';
       console.warn('Supabase upsertSupabaseAbout error:', err);
     }
   }
@@ -72,21 +74,20 @@ export async function saveAboutByOutletId(
       body: JSON.stringify({ ...aboutData, outletId }),
     });
 
-    if (res.ok) {
-      const data = await res.json();
-      if (data.success && data.about) {
-        if (!savedRecord) savedRecord = data.about;
-      }
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.success && data.about) {
+      if (!savedRecord) savedRecord = data.about;
+    } else if (!savedRecord && !res.ok) {
+      lastError = data.error || lastError || 'Server API failed to save about configuration';
     }
-  } catch (err) {
+  } catch (err: any) {
+    if (!savedRecord) {
+      lastError = err?.message || lastError || 'Network error while saving about configuration';
+    }
     console.warn('Server API save about failed:', err);
   }
 
   if (savedRecord) return savedRecord;
 
-  return {
-    ...aboutData,
-    outletId,
-    updatedAt: new Date().toISOString(),
-  };
+  throw new Error(lastError || 'Failed to save outlet About & Utsav promo configuration');
 }

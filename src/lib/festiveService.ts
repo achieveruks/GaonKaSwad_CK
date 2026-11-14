@@ -1,10 +1,11 @@
-import { FestiveEvent, FestiveProductionItemSummary } from '../types';
+import { FestiveEvent, FestiveOverviewSummary, FestiveProductionItemSummary } from '../types';
 import {
   fetchSupabaseFestiveEvents,
   fetchSupabaseFestiveEventById,
   createSupabaseFestiveEvent,
   updateSupabaseFestiveEvent,
   deleteSupabaseFestiveEvent,
+  mapDbFestiveEventToFestiveEvent,
 } from './supabaseService';
 import { isSupabaseConfigured } from './supabase';
 
@@ -44,7 +45,7 @@ export async function getFestiveEvents(
   try {
     const params = new URLSearchParams();
     if (outletId) params.append('outletId', outletId);
-    if (onlyActive) params.append('status', 'active');
+    if (onlyActive) params.append('active', 'true');
     const queryString = params.toString() ? `?${params.toString()}` : '';
 
     const res = await fetch(`${API_BASE}/festive-events${queryString}`, {
@@ -53,7 +54,7 @@ export async function getFestiveEvents(
     if (res.ok) {
       const json = await res.json();
       if (json.success && Array.isArray(json.festiveEvents)) {
-        return json.festiveEvents;
+        return json.festiveEvents.map(mapDbFestiveEventToFestiveEvent);
       }
     }
   } catch (apiErr) {
@@ -85,7 +86,7 @@ export async function getFestiveEventById(id: string, token?: string): Promise<F
     if (res.ok) {
       const json = await res.json();
       if (json.success && json.festiveEvent) {
-        return json.festiveEvent;
+        return mapDbFestiveEventToFestiveEvent(json.festiveEvent);
       }
     }
   } catch (err) {
@@ -96,78 +97,62 @@ export async function getFestiveEventById(id: string, token?: string): Promise<F
 }
 
 /**
- * Create a new festive event
+ * Create a new festive event (single authoritative write to avoid duplicate DB rows)
  */
 export async function createFestiveEvent(
   eventData: Partial<FestiveEvent>,
   token?: string
 ): Promise<FestiveEvent> {
-  let created: FestiveEvent | null = null;
-
   if (isSupabaseConfigured()) {
     try {
-      created = await createSupabaseFestiveEvent(eventData);
+      const created = await createSupabaseFestiveEvent(eventData);
+      if (created) return created;
     } catch (err) {
       console.warn('Supabase create festive event failed, falling back to API:', err);
     }
   }
 
-  try {
-    const res = await fetch(`${API_BASE}/festive-events`, {
-      method: 'POST',
-      headers: getAuthHeaders(token),
-      body: JSON.stringify(created || eventData),
-    });
-    if (res.ok) {
-      const json = await res.json();
-      if (json.success && json.festiveEvent) {
-        return json.festiveEvent;
-      }
-    }
-  } catch (apiErr) {
-    console.warn('API create festive event sync error:', apiErr);
+  const res = await fetch(`${API_BASE}/festive-events`, {
+    method: 'POST',
+    headers: getAuthHeaders(token),
+    body: JSON.stringify(eventData),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (res.ok && json.success && json.festiveEvent) {
+    return mapDbFestiveEventToFestiveEvent(json.festiveEvent);
   }
 
-  if (created) return created;
-  throw new Error('Failed to create festive event collection');
+  throw new Error(json.error || 'Failed to create festive event collection');
 }
 
 /**
- * Update an existing festive event
+ * Update an existing festive event (single authoritative write)
  */
 export async function updateFestiveEvent(
   id: string,
   eventData: Partial<FestiveEvent>,
   token?: string
 ): Promise<FestiveEvent> {
-  let updated: FestiveEvent | null = null;
-
   if (isSupabaseConfigured()) {
     try {
-      updated = await updateSupabaseFestiveEvent(id, eventData);
+      const updated = await updateSupabaseFestiveEvent(id, eventData);
+      if (updated) return updated;
     } catch (err) {
       console.warn('Supabase update festive event failed, falling back to API:', err);
     }
   }
 
-  try {
-    const res = await fetch(`${API_BASE}/festive-events/${encodeURIComponent(id)}`, {
-      method: 'PUT',
-      headers: getAuthHeaders(token),
-      body: JSON.stringify(updated || eventData),
-    });
-    if (res.ok) {
-      const json = await res.json();
-      if (json.success && json.festiveEvent) {
-        return json.festiveEvent;
-      }
-    }
-  } catch (apiErr) {
-    console.warn('API update festive event sync error:', apiErr);
+  const res = await fetch(`${API_BASE}/festive-events/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    headers: getAuthHeaders(token),
+    body: JSON.stringify(eventData),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (res.ok && json.success && json.festiveEvent) {
+    return mapDbFestiveEventToFestiveEvent(json.festiveEvent);
   }
 
-  if (updated) return updated;
-  throw new Error('Failed to update festive event');
+  throw new Error(json.error || 'Failed to update festive event');
 }
 
 /**
@@ -221,6 +206,9 @@ export async function getFestiveProductionSummary(
   festiveEventId: string;
   outletId: string;
   totalBookedUnits: number;
+  totalExtraBuffer?: number;
+  totalKitchenPrep?: number;
+  specialPackagingUnits?: number;
   items: FestiveProductionItemSummary[];
 }> {
   const res = await fetch(
@@ -230,10 +218,67 @@ export async function getFestiveProductionSummary(
     }
   );
 
+  const json = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error('Failed to load festive production summary');
+    throw new Error(json.error || 'Failed to load festive production summary');
   }
 
-  return res.json();
+  return json;
 }
+
+/**
+ * Fetch cross-event live Utsav production overview (owner: all or filtered outlet, manager: assigned outlet only)
+ */
+export async function getFestiveOverview(
+  outletId?: string,
+  token?: string
+): Promise<FestiveOverviewSummary> {
+  const query = outletId ? `?outletId=${encodeURIComponent(outletId)}` : '';
+  const res = await fetch(`${API_BASE}/festive-events/overview${query}`, {
+    headers: getAuthHeaders(token),
+  });
+
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || !json.success) {
+    throw new Error(json.error || 'Failed to load Utsav production overview');
+  }
+
+  return json.overview;
+}
+
+/**
+ * Update extra buffer portions, convert surplus stock to normal listing, or delist/relist a festive dish at an outlet
+ */
+export async function updateFestiveProductStock(
+  outletId: string,
+  eventId: string,
+  productId: string,
+  payload: {
+    action: 'update_buffer' | 'convert_to_normal' | 'delist' | 'relist';
+    extraPlanned?: number;
+  },
+  token?: string
+): Promise<{
+  success: boolean;
+  portionsLeft: number;
+  inStock: boolean;
+  availabilityMode: 'normal' | 'prebook_only';
+}> {
+  const res = await fetch(
+    `${API_BASE}/outlets/${encodeURIComponent(outletId)}/festive-events/${encodeURIComponent(eventId)}/products/${encodeURIComponent(productId)}/stock`,
+    {
+      method: 'PATCH',
+      headers: getAuthHeaders(token),
+      body: JSON.stringify(payload),
+    }
+  );
+
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || !json.success) {
+    throw new Error(json.error || 'Failed to update festive production stock');
+  }
+
+  return json;
+}
+
 

@@ -44,6 +44,26 @@ export const ManagerOrderDetailsModal: React.FC<ManagerOrderDetailsModalProps> =
   const resolvedOutlet = resolveOrderOutletInfo(order);
   const activeBranchName = order.outletName || resolvedOutlet.outletName || outletName;
   const isPickup = !!(order.isSelfPickup || order.orderType === 'pickup');
+  const isPrebook =
+    order.orderType === 'prebook' ||
+    (order as any).order_type === 'prebook' ||
+    Boolean(order.festiveEventId || (order as any).festive_event_id);
+  const rawOrderId = (order.orderId || order.id || '').toString().trim();
+  const parentRef =
+    order.checkoutReference ||
+    (order.checkoutGroupId && /(-I|-PB|_PB)$/i.test(rawOrderId) ? rawOrderId.replace(/(-I|-PB|_PB)$/i, '') : '');
+  const paidAmount = Number(
+    order.paidAmount ??
+      (order as any).paid_amount ??
+      (isPrebook && order.paymentPlan === 'advance_25'
+        ? order.advanceAmount || 0
+        : order.total || 0)
+  );
+  const balanceAmount = Number(
+    order.balanceAmount ??
+      (order as any).balance_amount ??
+      Math.max(0, Number(order.total || 0) - paidAmount)
+  );
   const rawStatus = ((order as any).order_status || order.orderStatus || order.status || 'received').toLowerCase().trim();
   const displayStatus =
     rawStatus === 'received'
@@ -142,6 +162,40 @@ export const ManagerOrderDetailsModal: React.FC<ManagerOrderDetailsModalProps> =
 
         {/* Modal Body / Printable Content */}
         <div className="p-6 overflow-y-auto space-y-6 flex-1" ref={printAreaRef}>
+          {/* Utsav Pre-book Festival & Festive Packaging KOT Banner */}
+          {isPrebook && (
+            <div className="bg-amber-50 rounded-xl border border-amber-300 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+              <div className="space-y-0.5">
+                <p className="font-bold text-amber-950">
+                  Utsav Pre-book Order · {order.festivalName || 'Festival Collection'}
+                </p>
+                <p className="text-amber-900">
+                  Special Festive Packaging Required ·{' '}
+                  {order.paymentPlan === 'advance_25' ? '25% Advance Paid' : '100% Upfront Paid'}
+                </p>
+                {parentRef && formatDisplayOrderId(parentRef) !== formatDisplayOrderId(rawOrderId) && (
+                  <p className="text-[11px] font-mono text-stone-600">
+                    Parent Checkout Reference: {formatDisplayOrderId(parentRef)}
+                  </p>
+                )}
+              </div>
+              {order.festivalDeliveryAt && (
+                <div className="sm:text-right tabular-nums shrink-0">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-amber-800 block">
+                    Festival Delivery Date
+                  </span>
+                  <span className="font-mono font-bold text-stone-950 text-sm">
+                    {new Date(order.festivalDeliveryAt).toLocaleDateString('en-IN', {
+                      day: 'numeric',
+                      month: 'short',
+                      year: 'numeric',
+                    })}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Scheduled Order Attention Banner */}
           {(order.deliveryType === 'scheduled' || order.customerDetails?.deliveryType === 'scheduled') && (
             <div className="bg-gradient-to-r from-amber-100 via-amber-50 to-orange-50 rounded-xl border-2 border-amber-400 p-4 flex items-center justify-between gap-3 text-amber-950 shadow-2xs">
@@ -437,10 +491,22 @@ export const ManagerOrderDetailsModal: React.FC<ManagerOrderDetailsModalProps> =
               <span>GST (5%):</span>
               <span className="font-mono">₹{order.gst || 0}</span>
             </div>
-            <div className="pt-2 border-t border-stone-200 flex justify-between text-sm font-extrabold text-stone-950">
+            <div className="pt-2 border-t border-stone-200 flex justify-between text-sm font-extrabold text-stone-950 tabular-nums">
               <span>Grand Total:</span>
               <span className="font-mono text-base text-amber-900">₹{order.total || 0}</span>
             </div>
+            {(isPrebook || balanceAmount > 0) && (
+              <div className="pt-2 border-t border-stone-200/70 space-y-1 text-xs tabular-nums">
+                <div className="flex justify-between text-emerald-800 font-semibold">
+                  <span>Paid / Advance Collected:</span>
+                  <span className="font-mono">₹{paidAmount.toFixed(0)}</span>
+                </div>
+                <div className={`flex justify-between font-bold ${balanceAmount > 0 ? 'text-amber-900' : 'text-emerald-800'}`}>
+                  <span>Balance Due:</span>
+                  <span className="font-mono">₹{balanceAmount.toFixed(0)}</span>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Detailed Timestamps Audit History */}

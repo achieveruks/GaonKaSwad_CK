@@ -14,10 +14,13 @@ import {
   Check,
   MapPin,
   AlertCircle,
+  Sparkles,
+  Calendar,
+  Clock,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { fetchAvailableCouponsForCustomer } from '../lib/supabaseService';
-import { Coupon } from '../types';
+import { fetchAvailableCouponsForCustomer, fetchActiveFestiveEventsForOutlet } from '../lib/supabaseService';
+import { Coupon, FestiveEvent } from '../types';
 
 export const CartDrawer: React.FC = () => {
   const {
@@ -44,6 +47,13 @@ export const CartDrawer: React.FC = () => {
     isFreeDeliveryUnlocked,
     amountNeededForFreeDelivery,
     freeDeliveryProgress,
+    normalItems,
+    prebookItems,
+    hasNormalItems,
+    hasPrebookItems,
+    isMixedCart,
+    normalSubtotal,
+    prebookSubtotal,
   } = useCart();
 
   const { goToCheckout, goToShop, goToCart } = useNavigation();
@@ -52,6 +62,7 @@ export const CartDrawer: React.FC = () => {
   const [couponInput, setCouponInput] = useState('');
   const [couponError, setCouponError] = useState('');
   const [availableCoupons, setAvailableCoupons] = useState<Coupon[]>([]);
+  const [festiveEvents, setFestiveEvents] = useState<FestiveEvent[]>([]);
   const [isApplying, setIsApplying] = useState(false);
 
   useEffect(() => {
@@ -64,10 +75,22 @@ export const CartDrawer: React.FC = () => {
       })
       .catch((e) => console.warn('Failed to load available coupons in drawer', e));
 
+    if (isCartDrawerOpen) {
+      fetchActiveFestiveEventsForOutlet(selectedLocation?.outletId)
+        .then((evs) => {
+          if (isMounted) setFestiveEvents(evs || []);
+        })
+        .catch(() => {});
+    }
+
     return () => {
       isMounted = false;
     };
   }, [profile?.id, profile?.phone, subtotal, selectedLocation?.outletId, isCartDrawerOpen]);
+
+  const festiveEventById = new Map<string, FestiveEvent>(
+    festiveEvents.map((e) => [String(e.id), e])
+  );
 
   const handleApplyCoupon = async (e?: React.FormEvent, codeToApply?: string) => {
     if (e) e.preventDefault();
@@ -239,12 +262,66 @@ export const CartDrawer: React.FC = () => {
                 </div>
               ) : (
                 <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-4">
-                  {/* Cart Items List */}
-                  <div className="space-y-1">
-                    {cart.map((item) => (
-                      <CartItemRow key={item.id} item={item} compact={true} />
-                    ))}
-                  </div>
+                  {/* Cart Items List (Grouped cleanly if Utsav Pre-book items are present) */}
+                  {hasPrebookItems ? (
+                    <div className="space-y-3">
+                      {hasNormalItems && (
+                        <div className="rounded-xl border border-stone-200 p-3 space-y-1 bg-white">
+                          <div className="flex items-center justify-between pb-1.5 border-b border-stone-100 text-[11px]">
+                            <span className="font-bold text-stone-800 inline-flex items-center gap-1">
+                              <Clock className="w-3.5 h-3.5 text-orange-600" />
+                              Normal Orders (Instant)
+                            </span>
+                            <span className="font-bold text-stone-900 tabular-nums">₹{normalSubtotal}</span>
+                          </div>
+                          {normalItems.map((item) => (
+                            <CartItemRow key={item.id} item={item} compact={true} />
+                          ))}
+                        </div>
+                      )}
+
+                      <div className="rounded-xl border border-amber-300 bg-amber-50/30 p-3 space-y-1">
+                        {(() => {
+                          const firstEvId = prebookItems.find((i) => i.product.festiveEventId)?.product.festiveEventId;
+                          const ev = firstEvId ? festiveEventById.get(String(firstEvId)) : festiveEvents[0];
+                          return (
+                            <div className="pb-1.5 border-b border-amber-200/70 space-y-0.5">
+                              <div className="flex items-center justify-between text-[11px]">
+                                <span className="font-bold text-amber-950 inline-flex items-center gap-1">
+                                  <Sparkles className="w-3.5 h-3.5 text-amber-600 fill-amber-400" />
+                                  Utsav Pre-book Orders
+                                </span>
+                                <span className="font-bold text-amber-900 tabular-nums">₹{prebookSubtotal}</span>
+                              </div>
+                              {ev && (
+                                <p className="text-[10px] text-amber-800 flex items-center gap-1 tabular-nums">
+                                  <Calendar className="w-3 h-3 shrink-0" />
+                                  <span>
+                                    {ev.name} • Delivers{' '}
+                                    {new Date(ev.festivalDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+                                  </span>
+                                </p>
+                              )}
+                            </div>
+                          );
+                        })()}
+                        {prebookItems.map((item) => (
+                          <CartItemRow
+                            key={item.id}
+                            item={item}
+                            compact={true}
+                            festiveEvent={item.product.festiveEventId ? festiveEventById.get(String(item.product.festiveEventId)) : festiveEvents[0]}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-1">
+                      {cart.map((item) => (
+                        <CartItemRow key={item.id} item={item} compact={true} />
+                      ))}
+                    </div>
+                  )}
 
                   {/* Cutlery preference */}
                   <div className="bg-stone-50 border border-stone-200 rounded-xl p-3 flex items-center justify-between">
@@ -357,9 +434,21 @@ export const CartDrawer: React.FC = () => {
 
                   {/* Cost breakdown */}
                   <div className="space-y-1.5 text-xs text-stone-500">
+                    {isMixedCart && (
+                      <>
+                        <div className="flex justify-between text-stone-600">
+                          <span>Normal Orders</span>
+                          <span className="font-semibold tabular-nums">₹{normalSubtotal}</span>
+                        </div>
+                        <div className="flex justify-between text-amber-900">
+                          <span>Utsav Pre-book</span>
+                          <span className="font-semibold tabular-nums">₹{prebookSubtotal}</span>
+                        </div>
+                      </>
+                    )}
                     <div className="flex justify-between">
                       <span>Subtotal</span>
-                      <span className="font-medium text-stone-900">₹{subtotal}</span>
+                      <span className="font-medium text-stone-900 tabular-nums">₹{subtotal}</span>
                     </div>
 
                     {discount > 0 && (

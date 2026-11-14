@@ -56,6 +56,7 @@ interface ManagerOrdersTabProps {
 
 type StatusFilter =
   | 'all'
+  | 'prebook'
   | 'received'
   | 'confirmed'
   | 'preparing'
@@ -75,6 +76,7 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
 
   // Filters & Search
   const [activeFilter, setActiveFilter] = useState<StatusFilter>('all');
+  const [prebookSubFilter, setPrebookSubFilter] = useState<'all' | 'balance_due' | 'settled'>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [orderTypeFilter, setOrderTypeFilter] = useState<'all' | 'delivery' | 'pickup'>('all');
   const [deliveryTimingFilter, setDeliveryTimingFilter] = useState<'all' | 'immediate' | 'scheduled'>('all');
@@ -123,6 +125,14 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
   const [selectedDetailsOrder, setSelectedDetailsOrder] = useState<Order | null>(null);
   const [cancelTargetOrder, setCancelTargetOrder] = useState<Order | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  // Balance Collection Modal State
+  const [collectBalanceOrder, setCollectBalanceOrder] = useState<Order | null>(null);
+  const [collectAmount, setCollectAmount] = useState<string>('');
+  const [collectMethod, setCollectMethod] = useState<'cash' | 'upi' | 'card' | 'netbanking'>('cash');
+  const [collectNotes, setCollectNotes] = useState<string>('');
+  const [isCollectingBalance, setIsCollectingBalance] = useState<boolean>(false);
+  const collectIdempotencyKeyRef = useRef<string>('');
 
   // Notification Sound
   const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
@@ -389,9 +399,90 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
     }
   };
 
+  const isPrebookOrder = (order: Order): boolean => {
+    return (
+      order.orderType === 'prebook' ||
+      (order as any).order_type === 'prebook' ||
+      Boolean(order.festiveEventId || (order as any).festive_event_id)
+    );
+  };
+
+  const getOrderPaymentLedger = (order: Order) => {
+    const isPrebook = isPrebookOrder(order);
+    const total = Number(order.total || 0);
+    const paid = Number(
+      order.paidAmount ??
+        (order as any).paid_amount ??
+        (isPrebook && order.paymentPlan === 'advance_25' ? order.advanceAmount || 0 : total)
+    );
+    const balance = Number(
+      order.balanceAmount ?? (order as any).balance_amount ?? Math.max(0, total - paid)
+    );
+    const rawId = (order.orderId || order.id || '').toString().trim();
+    const parentRef =
+      order.checkoutReference ||
+      (order.checkoutGroupId && /(-I|-PB|_PB)$/i.test(rawId) ? rawId.replace(/(-I|-PB|_PB)$/i, '') : '');
+    return { isPrebook, total, paid, balance, parentRef };
+  };
+
+  const openCollectBalanceModal = (order: Order) => {
+    const { balance } = getOrderPaymentLedger(order);
+    setCollectBalanceOrder(order);
+    setCollectAmount(balance > 0 ? String(Math.round(balance)) : '0');
+    setCollectMethod('cash');
+    setCollectNotes('');
+    collectIdempotencyKeyRef.current = `bal_${order.orderId || order.id}_${Date.now()}`;
+  };
+
+  const handleConfirmCollectBalance = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!collectBalanceOrder) return;
+    const targetId = collectBalanceOrder.orderId || collectBalanceOrder.id;
+    const amountNum = Number(collectAmount);
+    if (!Number.isFinite(amountNum) || amountNum <= 0) {
+      showFeedback('error', 'Please enter a valid collection amount greater than ₹0.');
+      return;
+    }
+
+    setIsCollectingBalance(true);
+    try {
+      const res = await fetch(`/api/orders/${encodeURIComponent(targetId)}/collect-balance`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          amount: amountNum,
+          paymentMethod: collectMethod,
+          notes: collectNotes.trim() || undefined,
+          idempotencyKey: collectIdempotencyKeyRef.current,
+        }),
+      });
+      const data = await res.json().catch(() => ({} as any));
+      if (!res.ok || !data.success) {
+        showFeedback('error', data?.error || 'Failed to record balance collection.');
+        setIsCollectingBalance(false);
+        return;
+      }
+
+      showFeedback(
+        'success',
+        `Recorded ₹${amountNum} (${collectMethod.toUpperCase()}) for ${formatDisplayOrderId(targetId)}.`
+      );
+      setCollectBalanceOrder(null);
+      await loadOrders(true);
+    } catch (err: any) {
+      showFeedback('error', err?.message || 'Network error while recording balance.');
+    } finally {
+      setIsCollectingBalance(false);
+    }
+  };
+
   // Status Counts
   const counts = {
     all: orders.length,
+    prebook: orders.filter((o) => isPrebookOrder(o)).length,
+    prebookBalancePending: orders.filter(
+      (o) => isPrebookOrder(o) && getOrderPaymentLedger(o).balance > 0 && normalizeStatus(o) !== 'cancelled'
+    ).length,
     received: orders.filter((o) => normalizeStatus(o) === 'received').length,
     confirmed: orders.filter((o) => normalizeStatus(o) === 'confirmed').length,
     preparing: orders.filter((o) => normalizeStatus(o) === 'preparing').length,
@@ -414,9 +505,14 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
         const normSt = normalizeStatus(order);
         const isScheduled =
           order.deliveryType === 'scheduled' || order.customerDetails?.deliveryType === 'scheduled';
+        const ledger = getOrderPaymentLedger(order);
 
-        // Status filter
-        if (activeFilter !== 'all' && normSt !== activeFilter) {
+        // Status / Pre-book filter
+        if (activeFilter === 'prebook') {
+          if (!ledger.isPrebook) return false;
+          if (prebookSubFilter === 'balance_due' && ledger.balance <= 0) return false;
+          if (prebookSubFilter === 'settled' && ledger.balance > 0) return false;
+        } else if (activeFilter !== 'all' && normSt !== activeFilter) {
           return false;
         }
 
@@ -446,13 +542,14 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
         if (searchQuery.trim()) {
           const q = searchQuery.toLowerCase().trim();
           const matchId = (order.orderId || order.id || '').toLowerCase().includes(q);
+          const matchGroup = (order.checkoutReference || ledger.parentRef || '').toLowerCase().includes(q);
           const matchName = (order.customerDetails?.fullName || '').toLowerCase().includes(q);
           const matchPhone = (order.customerDetails?.phone || '').includes(q);
           const matchAddress = (order.deliveryAddressSnapshot?.fullAddress || '').toLowerCase().includes(q);
           const matchPin = (order.deliveryPinCode || order.customerDetails?.pincode || '').includes(q);
           const matchItems = order.items?.some((item: any) => (item.name || item.product?.name || '').toLowerCase().includes(q));
 
-          if (!matchId && !matchName && !matchPhone && !matchAddress && !matchPin && !matchItems) {
+          if (!matchId && !matchGroup && !matchName && !matchPhone && !matchAddress && !matchPin && !matchItems) {
             return false;
           }
         }
@@ -463,6 +560,7 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
   }, [
     orders,
     activeFilter,
+    prebookSubFilter,
     orderTypeFilter,
     deliveryTimingFilter,
     dateFilter,
@@ -823,6 +921,25 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
           </button>
           <button
             type="button"
+            onClick={() => setActiveFilter('prebook')}
+            className={`px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap flex items-center gap-1.5 cursor-pointer tabular-nums ${
+              activeFilter === 'prebook'
+                ? 'bg-amber-800 text-white'
+                : 'bg-amber-50 hover:bg-amber-100 text-amber-950 border border-amber-300'
+            }`}
+          >
+            <Calendar className="w-3.5 h-3.5" />
+            <span>Utsav Pre-book ({counts.prebook})</span>
+            {counts.prebookBalancePending > 0 && (
+              <span className={`px-1.5 py-0.2 rounded text-[10px] font-extrabold ${
+                activeFilter === 'prebook' ? 'bg-white/20 text-white' : 'bg-amber-200 text-amber-950'
+              }`}>
+                {counts.prebookBalancePending} Due
+              </span>
+            )}
+          </button>
+          <button
+            type="button"
             onClick={() => setActiveFilter('received')}
             className={`px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap flex items-center gap-1.5 cursor-pointer ${
               activeFilter === 'received'
@@ -920,6 +1037,36 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
             </span>
           </button>
         </div>
+
+        {/* Utsav Pre-book Sub-filters when Utsav Pre-book tab is active */}
+        {activeFilter === 'prebook' && (
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-stone-100 text-xs">
+            <div className="flex items-center gap-1.5">
+              <span className="text-stone-500 font-semibold">Pre-book Filter:</span>
+              {([
+                { id: 'all', label: 'All Pre-book' },
+                { id: 'balance_due', label: `Balance Due (${counts.prebookBalancePending})` },
+                { id: 'settled', label: 'Settled in Full' },
+              ] as const).map((sub) => (
+                <button
+                  key={sub.id}
+                  type="button"
+                  onClick={() => setPrebookSubFilter(sub.id)}
+                  className={`px-2.5 py-1 rounded-lg font-bold transition-colors cursor-pointer tabular-nums ${
+                    prebookSubFilter === sub.id
+                      ? 'bg-amber-800 text-white'
+                      : 'bg-stone-100 hover:bg-stone-200 text-stone-700'
+                  }`}
+                >
+                  {sub.label}
+                </button>
+              ))}
+            </div>
+            <span className="text-[11px] text-stone-500">
+              Use &ldquo;Record Balance Collection&rdquo; on any 25% advance order once final balance is collected.
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Orders List Content */}
@@ -1234,6 +1381,7 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
 
             const isScheduled =
               order.deliveryType === 'scheduled' || order.customerDetails?.deliveryType === 'scheduled';
+            const ledger = getOrderPaymentLedger(order);
 
             return (
               <div
@@ -1271,6 +1419,24 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
                       </button>
                     </div>
 
+                    {/* Utsav Pre-book & Group Reference Metadata */}
+                    {ledger.isPrebook && (
+                      <span className="text-[10px] font-extrabold px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-950 border border-amber-300 tabular-nums">
+                        Utsav Pre-book{order.festivalName ? ` · ${order.festivalName}` : ''}
+                        {order.festivalDeliveryAt
+                          ? ` (${new Date(order.festivalDeliveryAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })})`
+                          : ''}
+                      </span>
+                    )}
+
+                    {ledger.parentRef &&
+                      formatDisplayOrderId(ledger.parentRef) !==
+                        formatDisplayOrderId(order.orderId || order.id) && (
+                        <span className="text-[10px] font-mono font-semibold text-stone-600">
+                          Group {formatDisplayOrderId(ledger.parentRef)}
+                        </span>
+                      )}
+
                     {/* Delivery Timing Indicator (Scheduled vs Express) */}
                     {isScheduled ? (
                       <span className="text-[11px] font-black px-3 py-1 rounded-lg bg-amber-900 text-amber-50 border border-amber-950 shadow-xs flex items-center gap-1.5 ring-2 ring-amber-400/60 uppercase tracking-wide">
@@ -1302,10 +1468,16 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
                       <span>{isPickup ? 'Self-Pickup' : 'Home Delivery'}</span>
                     </span>
 
-                    {order.customerDetails?.paymentMethod && (
-                      <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-stone-200/80 text-stone-800 uppercase">
-                        {(order.customerDetails.paymentMethod as string) !== 'cod' ? 'Paid Online' : 'COD'}
+                    {ledger.balance > 0 ? (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-amber-200/80 text-amber-950 tabular-nums">
+                        Balance Due ₹{ledger.balance.toFixed(0)}
                       </span>
+                    ) : (
+                      order.customerDetails?.paymentMethod && (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-stone-200/80 text-stone-800 uppercase">
+                          {(order.customerDetails.paymentMethod as string) !== 'cod' ? 'Paid Online' : 'COD'}
+                        </span>
+                      )
                     )}
 
                     <span className="text-xs text-stone-600 font-medium">
@@ -1535,11 +1707,25 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
                         <span>GST (5%): <strong className="text-stone-900 font-mono">₹{order.gst || 0}</strong></span>
                       </div>
 
-                      <div className="flex items-center gap-2">
-                        <span className="text-stone-500 font-bold uppercase text-[10px]">Grand Total:</span>
-                        <span className="text-base font-black text-amber-900 font-mono">
-                          ₹{order.total || 0}
-                        </span>
+                      <div className="flex items-center gap-3 flex-wrap tabular-nums">
+                        {(ledger.isPrebook || ledger.balance > 0) && (
+                          <div className="flex items-center gap-2 text-xs">
+                            <span className="text-emerald-800 font-semibold">
+                              Paid: ₹{ledger.paid.toFixed(0)}
+                            </span>
+                            {ledger.balance > 0 && (
+                              <span className="font-bold text-amber-900 bg-amber-100 px-2 py-0.5 rounded">
+                                Due: ₹{ledger.balance.toFixed(0)}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                        <div className="flex items-center gap-2">
+                          <span className="text-stone-500 font-bold uppercase text-[10px]">Grand Total:</span>
+                          <span className="text-base font-black text-amber-900 font-mono">
+                            ₹{order.total || 0}
+                          </span>
+                        </div>
                       </div>
                     </div>
 
@@ -1633,7 +1819,7 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
 
                     {/* Operational Status Action Buttons */}
                     <div className="pt-3 border-t border-stone-100 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <button
                           type="button"
                           onClick={() => setSelectedDetailsOrder(order)}
@@ -1642,6 +1828,17 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
                           <Eye className="w-3.5 h-3.5 text-stone-600" />
                           <span>Full Details & KOT</span>
                         </button>
+
+                        {ledger.balance > 0 && normSt !== 'cancelled' && (
+                          <button
+                            type="button"
+                            onClick={() => openCollectBalanceModal(order)}
+                            className="px-3.5 py-2 bg-amber-800 hover:bg-amber-900 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer tabular-nums"
+                          >
+                            <IndianRupee className="w-3.5 h-3.5" />
+                            <span>Record Balance Collection (₹{ledger.balance.toFixed(0)})</span>
+                          </button>
+                        )}
                       </div>
 
                       {/* Sequential Progress Action Button Group */}
@@ -1768,6 +1965,124 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
           onClose={() => setSelectedDetailsOrder(null)}
           outletName={currentOutlet.name}
         />
+      )}
+
+      {/* One-Click Record Balance Collection Modal */}
+      {collectBalanceOrder && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl border border-stone-200 shadow-2xl max-w-md w-full overflow-hidden">
+            <div className="px-5 py-4 bg-stone-900 text-white flex items-center justify-between">
+              <div>
+                <h3 className="font-bold text-sm text-white">Record Balance Collection</h3>
+                <p className="text-[11px] text-stone-300 font-mono">
+                  {formatDisplayOrderId(collectBalanceOrder.orderId || collectBalanceOrder.id)}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCollectBalanceOrder(null)}
+                className="p-1.5 rounded-lg text-stone-300 hover:text-white hover:bg-white/10 cursor-pointer"
+              >
+                <XCircle className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleConfirmCollectBalance} className="p-5 space-y-4 text-xs">
+              {(() => {
+                const ledger = getOrderPaymentLedger(collectBalanceOrder);
+                return (
+                  <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 space-y-1 tabular-nums">
+                    <div className="flex justify-between text-stone-700">
+                      <span>Customer</span>
+                      <span className="font-semibold text-stone-900">
+                        {collectBalanceOrder.customerDetails?.fullName || 'Customer'}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-stone-700">
+                      <span>Order Total</span>
+                      <span className="font-semibold text-stone-900">₹{ledger.total.toFixed(0)}</span>
+                    </div>
+                    <div className="flex justify-between text-emerald-800">
+                      <span>Advance / Already Paid</span>
+                      <span className="font-semibold">₹{ledger.paid.toFixed(0)}</span>
+                    </div>
+                    <div className="flex justify-between pt-1.5 border-t border-amber-200 font-bold text-amber-950">
+                      <span>Outstanding Balance</span>
+                      <span>₹{ledger.balance.toFixed(0)}</span>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              <div>
+                <label className="block font-semibold text-stone-700 mb-1">
+                  Collection Amount (₹)
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  step="1"
+                  required
+                  value={collectAmount}
+                  onChange={(e) => setCollectAmount(e.target.value)}
+                  className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-sm font-mono font-bold text-stone-900 focus:outline-none focus:border-amber-800 focus:bg-white"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-stone-700 mb-1.5">
+                  Collection Method
+                </label>
+                <div className="grid grid-cols-4 gap-1.5">
+                  {(['cash', 'upi', 'card', 'netbanking'] as const).map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => setCollectMethod(m)}
+                      className={`py-2 px-2 rounded-xl font-bold uppercase text-[11px] border transition-colors cursor-pointer ${
+                        collectMethod === m
+                          ? 'bg-amber-800 text-white border-amber-800'
+                          : 'bg-stone-50 text-stone-700 border-stone-200 hover:bg-stone-100'
+                      }`}
+                    >
+                      {m}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-stone-700 mb-1">
+                  Reference / Notes (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={collectNotes}
+                  onChange={(e) => setCollectNotes(e.target.value)}
+                  placeholder="e.g. Collected at delivery via PhonePe"
+                  className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-800 focus:bg-white"
+                />
+              </div>
+
+              <div className="pt-2 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCollectBalanceOrder(null)}
+                  className="px-4 py-2 rounded-xl bg-stone-100 hover:bg-stone-200 text-stone-700 font-bold cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isCollectingBalance}
+                  className="px-4 py-2 rounded-xl bg-amber-800 hover:bg-amber-900 disabled:opacity-60 text-white font-bold cursor-pointer"
+                >
+                  {isCollectingBalance ? 'Recording...' : 'Confirm Collection'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
     </div>
   );

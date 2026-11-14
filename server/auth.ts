@@ -26,8 +26,35 @@ export interface TokenPayload {
   phone?: string;
   role: 'owner' | 'manager' | 'customer';
   outletId?: string;
+  assignedOutletIds?: string[];
   name?: string;
   exp?: number;
+}
+
+function deriveOutletIdFromManagerEmail(email: string): string | undefined {
+  const clean = email.toLowerCase().trim();
+  if (!clean.includes('manager') && !clean.endsWith('@swadclick.com')) return undefined;
+  if (clean.includes('hsr')) return 'blr-hsr';
+  if (clean.includes('kadabeesan')) return 'blr-kadabeesanhalli';
+  if (clean.includes('kvbbsr') || clean.includes('kendriya')) return 'bbsr-kendriyavihar';
+  if (clean.includes('indiranagar')) return 'blr-indiranagar';
+  if (clean.includes('whitefield')) return 'blr-whitefield';
+  if (clean.includes('patia')) return 'bbsr-patia';
+  if (clean.includes('khandagiri')) return 'bbsr-khandagiri';
+  return undefined;
+}
+
+export interface StaffProfileLookup {
+  role: 'owner' | 'manager' | 'customer';
+  outletId?: string;
+  assignedOutletIds?: string[];
+}
+
+type StaffProfileResolver = (userId: string) => Promise<StaffProfileLookup | null>;
+let staffProfileResolver: StaffProfileResolver | null = null;
+
+export function registerStaffProfileResolver(resolver: StaffProfileResolver) {
+  staffProfileResolver = resolver;
 }
 
 export interface AuthenticatedRequest extends Request {
@@ -171,19 +198,44 @@ export function verifySessionToken(token: string): TokenPayload | null {
       const email = (
         decodedPayload.email ||
         decodedPayload.user_metadata?.email ||
-        OWNER_EMAIL
+        ''
       ).toLowerCase().trim();
 
-      const role =
-        decodedPayload.user_metadata?.role === 'manager'
-          ? 'manager'
-          : 'owner';
+      const metaRole = String(
+        decodedPayload.user_metadata?.role || decodedPayload.app_metadata?.role || ''
+      ).toLowerCase().trim();
+
+      let role: 'owner' | 'manager' | 'customer' = 'customer';
+      if (email === OWNER_EMAIL || email === 'achieveruks@gmail.com' || metaRole === 'owner') {
+        role = 'owner';
+      } else if (
+        metaRole === 'manager' ||
+        metaRole === 'outlet_manager' ||
+        (email.startsWith('manager.') && email.endsWith('@swadclick.com'))
+      ) {
+        role = 'manager';
+      }
+
+      const metaOutletId =
+        decodedPayload.user_metadata?.outlet_id ||
+        decodedPayload.user_metadata?.outletId ||
+        decodedPayload.app_metadata?.outlet_id ||
+        decodedPayload.app_metadata?.outletId ||
+        (role === 'manager' ? deriveOutletIdFromManagerEmail(email) : undefined);
+
+      const metaAssignedOutletIds = Array.isArray(decodedPayload.user_metadata?.assigned_outlet_ids)
+        ? decodedPayload.user_metadata.assigned_outlet_ids
+        : Array.isArray(decodedPayload.app_metadata?.assigned_outlet_ids)
+          ? decodedPayload.app_metadata.assigned_outlet_ids
+          : undefined;
 
       return {
         id: decodedPayload.sub,
         email,
         role,
-        name: decodedPayload.user_metadata?.full_name || email.split('@')[0],
+        outletId: metaOutletId || undefined,
+        assignedOutletIds: metaAssignedOutletIds,
+        name: decodedPayload.user_metadata?.full_name || (email ? email.split('@')[0] : 'User'),
         exp: decodedPayload.exp || now + 7 * 86400,
       };
     }
@@ -264,9 +316,9 @@ export function authenticateToken(req: Request, res: Response, next: NextFunctio
 }
 
 /**
- * Middleware: Requires staff (owner or manager) role
+ * Middleware: Requires staff (owner or manager) role, resolving Supabase profile role/outletId when needed
  */
-export function requireOwnerAuth(req: Request, res: Response, next: NextFunction) {
+export async function requireOwnerAuth(req: Request, res: Response, next: NextFunction) {
   const token = extractAuthToken(req);
 
   if (!token) {
@@ -283,6 +335,25 @@ export function requireOwnerAuth(req: Request, res: Response, next: NextFunction
       success: false,
       error: 'Session invalid or expired. Please log in again.',
     });
+  }
+
+  // Hydrate role / outletId from Supabase profiles table if needed
+  if (
+    staffProfileResolver &&
+    payload.id &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(payload.id) &&
+    (payload.role === 'customer' || (payload.role === 'manager' && !payload.outletId))
+  ) {
+    try {
+      const profileInfo = await staffProfileResolver(payload.id);
+      if (profileInfo) {
+        payload.role = profileInfo.role;
+        if (profileInfo.outletId) payload.outletId = profileInfo.outletId;
+        if (profileInfo.assignedOutletIds) payload.assignedOutletIds = profileInfo.assignedOutletIds;
+      }
+    } catch {
+      // Keep token-derived claims on transient lookup error
+    }
   }
 
   if (payload.role !== 'owner' && payload.role !== 'manager') {

@@ -49,6 +49,7 @@ export const OwnerProductsPage: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [selectedOutlet, setSelectedOutlet] = useState('all');
+  const [selectedFestiveFilter, setSelectedFestiveFilter] = useState<'all' | 'festive' | 'prebook_only' | 'normal'>('all');
   const [selectedStatus, setSelectedStatus] = useState<'all' | 'active' | 'inactive'>('all');
 
   // Deletion modal state
@@ -120,13 +121,24 @@ export const OwnerProductsPage: React.FC = () => {
         }
       }
 
+      // Festive / Pre-book filter
+      if (selectedFestiveFilter === 'festive' && !product.festiveProduct && !product.festiveEventId) {
+        return false;
+      }
+      if (selectedFestiveFilter === 'prebook_only' && product.availabilityMode !== 'prebook_only') {
+        return false;
+      }
+      if (selectedFestiveFilter === 'normal' && product.availabilityMode === 'prebook_only') {
+        return false;
+      }
+
       // Active status
       if (selectedStatus === 'active' && product.active === false) return false;
       if (selectedStatus === 'inactive' && product.active !== false) return false;
 
       return true;
     });
-  }, [allProducts, searchQuery, selectedCategory, selectedOutlet, selectedStatus]);
+  }, [allProducts, searchQuery, selectedCategory, selectedOutlet, selectedFestiveFilter, selectedStatus]);
 
   const handleToggleActive = async (id: string | number) => {
     setActionLoadingId(id);
@@ -313,7 +325,7 @@ export const OwnerProductsPage: React.FC = () => {
       <div className="bg-white rounded-2xl border border-gray-200 p-4 shadow-2xs space-y-3">
         <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
           {/* Search Input */}
-          <div className="sm:col-span-5 relative">
+          <div className="sm:col-span-3 relative">
             <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-gray-400">
               <Search className="w-3.5 h-3.5" />
             </div>
@@ -363,6 +375,20 @@ export const OwnerProductsPage: React.FC = () => {
             </select>
           </div>
 
+          {/* Festive / Availability Mode Filter */}
+          <div className="sm:col-span-2">
+            <select
+              value={selectedFestiveFilter}
+              onChange={(e) => setSelectedFestiveFilter(e.target.value as any)}
+              className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs text-gray-700 font-medium focus:outline-none focus:border-amber-700 focus:bg-white"
+            >
+              <option value="all">All Order Modes</option>
+              <option value="festive">Utsav Festive Dishes</option>
+              <option value="prebook_only">Pre-book Only</option>
+              <option value="normal">Normal Menu</option>
+            </select>
+          </div>
+
           {/* Visibility Status Filter */}
           <div className="sm:col-span-2">
             <select
@@ -383,13 +409,14 @@ export const OwnerProductsPage: React.FC = () => {
             Showing <strong className="text-gray-900">{filteredProducts.length}</strong> of{' '}
             {allProducts.length} dishes
           </span>
-          {(searchQuery || selectedCategory !== 'all' || selectedOutlet !== 'all' || selectedStatus !== 'all') && (
+          {(searchQuery || selectedCategory !== 'all' || selectedOutlet !== 'all' || selectedFestiveFilter !== 'all' || selectedStatus !== 'all') && (
             <button
               type="button"
               onClick={() => {
                 setSearchQuery('');
                 setSelectedCategory('all');
                 setSelectedOutlet('all');
+                setSelectedFestiveFilter('all');
                 setSelectedStatus('all');
               }}
               className="text-orange-600 hover:text-orange-700 font-semibold cursor-pointer"
@@ -468,6 +495,12 @@ export const OwnerProductsPage: React.FC = () => {
                               <p className="text-[10px] text-gray-400 font-mono truncate">
                                 /{product.slug}
                               </p>
+                              {(product.festiveProduct || product.festiveEventId || product.availabilityMode === 'prebook_only') && (
+                                <p className="text-[10px] font-semibold text-amber-800 mt-0.5">
+                                  {product.availabilityMode === 'prebook_only' ? 'Utsav · Pre-book Only' : 'Utsav Festive Dish'}
+                                  {product.specialPackaging ? ' · Gift Box' : ''}
+                                </p>
+                              )}
                             </div>
                           </div>
                         </td>
@@ -630,6 +663,11 @@ export const OwnerProductsPage: React.FC = () => {
                           <h4 className="font-bold text-xs text-gray-900 truncate">{product.name}</h4>
                         </div>
                         <p className="text-[10px] text-gray-500 font-medium">{getCategoryLabel(product.category)}</p>
+                        {(product.festiveProduct || product.festiveEventId || product.availabilityMode === 'prebook_only') && (
+                          <p className="text-[10px] font-semibold text-amber-800 mt-0.5">
+                            {product.availabilityMode === 'prebook_only' ? 'Utsav · Pre-book Only' : 'Utsav Festive Dish'}
+                          </p>
+                        )}
                         <div className="flex items-baseline gap-2 mt-1">
                           <span className="font-extrabold text-xs text-gray-950">₹{product.price}</span>
                           {product.originalPrice && (

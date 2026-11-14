@@ -15,7 +15,8 @@ import {
 import { ProductGallery } from '../components/ProductGallery';
 import { QuantitySelector } from '../components/QuantitySelector';
 import { ProductCard } from '../components/ProductCard';
-import { ProductVariant, ProductAddon, Review } from '../types';
+import { ProductVariant, ProductAddon, Review, FestiveEvent } from '../types';
+import { fetchSupabaseFestiveEventById } from '../lib/supabaseService';
 import { getCulinaryHighlights } from '../utils/culinaryHighlights';
 import {
   Star,
@@ -42,6 +43,8 @@ import {
   Lock,
   UserCheck,
   RefreshCw,
+  Calendar,
+  PackageCheck,
 } from 'lucide-react';
 
 interface ProductDetailPageProps {
@@ -95,6 +98,7 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
     orderId?: string;
     message?: string;
   }>({ checked: false, eligible: false });
+  const [festiveEvent, setFestiveEvent] = useState<FestiveEvent | null>(null);
 
   // Sync state when switching between products
   useEffect(() => {
@@ -106,6 +110,13 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
       setReviews(product.reviewsList || []);
       setIsAddingReview(false);
       setEligibilityResult({ checked: false, eligible: false });
+      setFestiveEvent(null);
+
+      if (product.festiveEventId) {
+        fetchSupabaseFestiveEventById(product.festiveEventId)
+          .then((ev) => setFestiveEvent(ev))
+          .catch(() => setFestiveEvent(null));
+      }
 
       // Fetch verified reviews from backend
       fetch(`/api/products/${encodeURIComponent(product.id)}/reviews`)
@@ -564,6 +575,33 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
             </div>
           ) : null}
 
+          {/* Utsav Specials Pre-book Banner & Packaging Card */}
+          {(product.availabilityMode === 'prebook_only' || product.festiveProduct) && (
+            <div className="p-3.5 bg-gradient-to-r from-amber-50 via-stone-50 to-amber-50/50 border border-amber-300/90 rounded-xl space-y-2 text-xs">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <span className="inline-flex items-center gap-1.5 font-bold text-amber-900">
+                  <Sparkles className="w-4 h-4 text-amber-600 fill-amber-400" />
+                  {festiveEvent ? festiveEvent.name : 'Utsav Specials Pre-Book Delicacy'}
+                </span>
+                {product.specialPackaging !== false && (
+                  <span className="inline-flex items-center gap-1 bg-white border border-amber-200 text-amber-900 px-2 py-0.5 rounded-md text-[11px] font-semibold">
+                    <PackageCheck className="w-3.5 h-3.5 text-amber-700" />
+                    Special Festive Packaging Included
+                  </span>
+                )}
+              </div>
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-stone-700 tabular-nums">
+                {festiveEvent?.festivalDate && (
+                  <span className="inline-flex items-center gap-1 font-medium">
+                    <Calendar className="w-3.5 h-3.5 text-amber-700" />
+                    Festival Delivery: <strong>{new Date(festiveEvent.festivalDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</strong>
+                  </span>
+                )}
+                <span>Pay <strong>25% Advance (₹{Math.round(currentUnitPrice * 0.25)})</strong> or 100% Upfront at checkout — even alongside instant items.</span>
+              </div>
+            </div>
+          )}
+
           {/* Pricing Box */}
           <div className="bg-gray-50 border border-gray-200 rounded-xl p-3.5 flex items-baseline justify-between">
             <div>
@@ -729,63 +767,110 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
               />
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
-              <button
-                type="button"
-                id="product-add-to-cart-btn"
-                onClick={handleAddToCart}
-                disabled={!isItemInStock || !isAvailableAtOutlet}
-                className={`py-2.5 px-5 rounded-xl font-bold text-xs sm:text-sm shadow-xs transition-all flex items-center justify-center gap-1.5 ${
-                  isItemInStock && isAvailableAtOutlet
-                    ? 'bg-amber-800 hover:bg-amber-900 active:bg-stone-950 text-white cursor-pointer'
-                    : 'bg-stone-200 text-stone-400 border border-stone-300 cursor-not-allowed shadow-none'
-                }`}
-              >
-                <ShoppingBag className="w-4 h-4" />
-                <span>
-                  {!isAvailableAtOutlet && selectedLocation
-                    ? 'Unavailable at Outlet'
-                    : !isItemInStock
-                    ? 'Currently Out of Stock'
-                    : `Add to Cart (₹${currentTotalPrice})`}
-                </span>
-              </button>
+            {(() => {
+              const isPrebookOnly = product.availabilityMode === 'prebook_only';
+              const nowMs = Date.now();
+              const bookingNotOpenYet = Boolean(
+                isPrebookOnly && festiveEvent?.bookingStartAt && new Date(festiveEvent.bookingStartAt).getTime() > nowMs
+              );
+              const bookingClosed = Boolean(
+                isPrebookOnly &&
+                  festiveEvent &&
+                  (festiveEvent.status !== 'active' ||
+                    (festiveEvent.bookingEndAt && new Date(festiveEvent.bookingEndAt).getTime() < nowMs))
+              );
+              const canOrderNow = isItemInStock && isAvailableAtOutlet && !bookingNotOpenYet && !bookingClosed;
 
-              <button
-                type="button"
-                onClick={handleBuyNow}
-                disabled={!isItemInStock || !isAvailableAtOutlet}
-                className={`py-2.5 px-5 rounded-xl font-bold text-xs sm:text-sm shadow-xs transition-all flex items-center justify-center gap-1.5 ${
-                  isItemInStock && isAvailableAtOutlet
-                    ? 'bg-stone-900 hover:bg-black active:bg-stone-950 text-white cursor-pointer'
-                    : 'bg-stone-200 text-stone-400 border border-stone-300 cursor-not-allowed shadow-none'
-                }`}
-              >
-                <Zap
-                  className={`w-4 h-4 ${
-                    isItemInStock && isAvailableAtOutlet
-                      ? 'text-amber-400 fill-amber-400'
-                      : 'text-stone-400'
-                  }`}
-                />
-                <span>
-                  {!isAvailableAtOutlet && selectedLocation
-                    ? 'Unavailable'
-                    : !isItemInStock
-                    ? 'Out of Stock'
-                    : 'Express Buy Now'}
-                </span>
-              </button>
-            </div>
+              return (
+                <>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                    <button
+                      type="button"
+                      id="product-add-to-cart-btn"
+                      onClick={handleAddToCart}
+                      disabled={!canOrderNow}
+                      className={`py-2.5 px-5 rounded-xl font-bold text-xs sm:text-sm shadow-xs transition-all flex items-center justify-center gap-1.5 ${
+                        canOrderNow
+                          ? isPrebookOnly
+                            ? 'bg-gradient-to-r from-amber-700 to-amber-900 hover:from-amber-800 hover:to-amber-950 text-white cursor-pointer'
+                            : 'bg-amber-800 hover:bg-amber-900 active:bg-stone-950 text-white cursor-pointer'
+                          : 'bg-stone-200 text-stone-400 border border-stone-300 cursor-not-allowed shadow-none'
+                      }`}
+                    >
+                      {isPrebookOnly ? <Sparkles className="w-4 h-4 text-amber-300" /> : <ShoppingBag className="w-4 h-4" />}
+                      <span>
+                        {!isAvailableAtOutlet && selectedLocation
+                          ? 'Unavailable at Outlet'
+                          : !isItemInStock
+                          ? 'Currently Out of Stock'
+                          : bookingNotOpenYet && festiveEvent?.bookingStartAt
+                          ? `Opens ${new Date(festiveEvent.bookingStartAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}`
+                          : bookingClosed
+                          ? 'Pre-booking Closed'
+                          : isPrebookOnly
+                          ? `Pre-book Now (₹${currentTotalPrice})`
+                          : `Add to Cart (₹${currentTotalPrice})`}
+                      </span>
+                    </button>
 
-            {/* Micro delivery promise */}
-            <div className="bg-gray-50 rounded-xl p-2.5 border border-gray-200 flex items-center justify-between text-xs text-gray-600">
-              <div className="flex items-center gap-1.5">
-                <Truck className="w-3.5 h-3.5 text-orange-600" />
-                <span>Insulated Handi Delivery in <strong>30-40 mins</strong></span>
-              </div>
-              <span className="text-emerald-700 font-semibold text-[11px]">Hot & Fresh</span>
-            </div>
+                    <button
+                      type="button"
+                      onClick={handleBuyNow}
+                      disabled={!canOrderNow}
+                      className={`py-2.5 px-5 rounded-xl font-bold text-xs sm:text-sm shadow-xs transition-all flex items-center justify-center gap-1.5 ${
+                        canOrderNow
+                          ? 'bg-stone-900 hover:bg-black active:bg-stone-950 text-white cursor-pointer'
+                          : 'bg-stone-200 text-stone-400 border border-stone-300 cursor-not-allowed shadow-none'
+                      }`}
+                    >
+                      <Zap
+                        className={`w-4 h-4 ${
+                          canOrderNow ? 'text-amber-400 fill-amber-400' : 'text-stone-400'
+                        }`}
+                      />
+                      <span>
+                        {!isAvailableAtOutlet && selectedLocation
+                          ? 'Unavailable'
+                          : !isItemInStock
+                          ? 'Out of Stock'
+                          : bookingNotOpenYet || bookingClosed
+                          ? 'Unavailable'
+                          : isPrebookOnly
+                          ? 'Pre-book & Checkout'
+                          : 'Express Buy Now'}
+                      </span>
+                    </button>
+                  </div>
+
+                  {/* Micro delivery promise */}
+                  <div className="bg-gray-50 rounded-xl p-2.5 border border-gray-200 flex items-center justify-between text-xs text-gray-600">
+                    <div className="flex items-center gap-1.5">
+                      {isPrebookOnly ? (
+                        <>
+                          <Calendar className="w-3.5 h-3.5 text-amber-700" />
+                          <span>
+                            Scheduled for{' '}
+                            <strong>
+                              {festiveEvent?.festivalDate
+                                ? new Date(festiveEvent.festivalDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+                                : 'Festival Day'}
+                            </strong>
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <Truck className="w-3.5 h-3.5 text-orange-600" />
+                          <span>Insulated Handi Delivery in <strong>30-40 mins</strong></span>
+                        </>
+                      )}
+                    </div>
+                    <span className="text-emerald-700 font-semibold text-[11px]">
+                      {isPrebookOnly ? 'Festive Batch' : 'Hot & Fresh'}
+                    </span>
+                  </div>
+                </>
+              );
+            })()}
           </div>
         </div>
       </div>

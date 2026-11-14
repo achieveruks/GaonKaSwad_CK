@@ -176,6 +176,31 @@ export const OrderCard: React.FC<OrderCardProps> = ({
   const rawId = (order.orderId || order.id || '').toString().trim();
   const formattedOrderId = formatDisplayOrderId(rawId);
 
+  const isPrebook =
+    order.orderType === 'prebook' || (order as any).order_type === 'prebook';
+  const parentRef =
+    order.checkoutReference ||
+    (order.checkoutGroupId && /(-I|-PB|_PB)$/i.test(rawId) ? rawId.replace(/(-I|-PB|_PB)$/i, '') : '');
+  const paidAmt = Number(
+    order.paidAmount ??
+      (order as any).paid_amount ??
+      (isPrebook && order.paymentPlan === 'advance_25'
+        ? order.advanceAmount || 0
+        : order.total || 0)
+  );
+  const balanceAmt = Number(
+    order.balanceAmount ??
+      (order as any).balance_amount ??
+      Math.max(0, Number(order.total || 0) - paidAmt)
+  );
+  const festivalDeliveryDisplay = order.festivalDeliveryAt
+    ? new Date(order.festivalDeliveryAt).toLocaleDateString('en-IN', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+      })
+    : '';
+
   return (
     <div
       className={`bg-white rounded-2xl p-4 sm:p-5 border transition-all duration-200 shadow-xs hover:shadow-md overflow-hidden ${
@@ -215,19 +240,50 @@ export const OrderCard: React.FC<OrderCardProps> = ({
           </div>
         </div>
 
-        {/* Thin line above Express Delivery, right aligned */}
-        <div className="pt-2 border-t border-stone-100 flex items-center justify-end">
-          {isScheduled ? (
-            <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-800 bg-indigo-50 border border-indigo-200 px-2.5 py-1 rounded-lg">
-              <Calendar className="w-3 h-3 text-indigo-600" />
-              {scheduledTimeDisplay || 'Scheduled'}
-            </span>
-          ) : (
-            <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-800 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-lg">
-              <Zap className="w-3 h-3 text-amber-600" />
-              ⚡ Express Delivery
-            </span>
-          )}
+        {/* Metadata & Delivery Mode Line */}
+        <div className="pt-2 border-t border-stone-100 flex flex-wrap items-center justify-between gap-2 text-[11px]">
+          <div className="flex flex-wrap items-center gap-2 text-stone-600">
+            {isPrebook && (
+              <>
+                <span className="font-semibold text-amber-900">Utsav Pre-book</span>
+                {order.festivalName && (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span className="font-medium text-stone-800">{order.festivalName}</span>
+                  </>
+                )}
+                <span aria-hidden="true">·</span>
+                <span className="text-stone-500">Special Festive Packaging</span>
+              </>
+            )}
+            {parentRef && formatDisplayOrderId(parentRef) !== formattedOrderId && (
+              <>
+                {isPrebook && <span aria-hidden="true">·</span>}
+                <span className="text-stone-500 font-mono">
+                  Checkout {formatDisplayOrderId(parentRef)}
+                </span>
+              </>
+            )}
+          </div>
+
+          <div className="ml-auto">
+            {isPrebook && festivalDeliveryDisplay ? (
+              <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-900 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-lg tabular-nums">
+                <Calendar className="w-3 h-3 text-amber-700" />
+                Festival Delivery: {festivalDeliveryDisplay}
+              </span>
+            ) : isScheduled ? (
+              <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-800 bg-indigo-50 border border-indigo-200 px-2.5 py-1 rounded-lg">
+                <Calendar className="w-3 h-3 text-indigo-600" />
+                {scheduledTimeDisplay || 'Scheduled'}
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-800 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-lg">
+                <Zap className="w-3 h-3 text-amber-600" />
+                Express Delivery
+              </span>
+            )}
+          </div>
         </div>
       </div>
 
@@ -256,14 +312,21 @@ export const OrderCard: React.FC<OrderCardProps> = ({
 
       {/* Footer: Total Paid (2 lines) on left, View Details and Reorder to its right-hand side */}
       <div className="pt-3 border-t border-stone-100 flex flex-nowrap items-center justify-between gap-3">
-        {/* Total Paid in 2 lines */}
-        <div className="flex flex-col justify-center shrink-0">
+        {/* Total / Paid / Balance in tabular numerals */}
+        <div className="flex flex-col justify-center shrink-0 tabular-nums">
           <span className="text-[10px] text-stone-400 uppercase tracking-wider font-semibold leading-tight whitespace-nowrap">
-            Total Paid:
+            {balanceAmt > 0 ? 'Paid / Balance:' : 'Total Paid:'}
           </span>
-          <span className="text-base font-extrabold text-stone-900 font-serif leading-tight whitespace-nowrap">
-            ₹{Number(order.total || 0).toFixed(0)}
-          </span>
+          <div className="flex items-baseline gap-2 whitespace-nowrap">
+            <span className="text-base font-extrabold text-stone-900 font-serif leading-tight">
+              ₹{Number(balanceAmt > 0 ? paidAmt : order.total || 0).toFixed(0)}
+            </span>
+            {balanceAmt > 0 && (
+              <span className="text-xs font-bold text-amber-900">
+                · Due ₹{balanceAmt.toFixed(0)}
+              </span>
+            )}
+          </div>
         </div>
 
         {/* View Details and Reorder on right-hand side */}

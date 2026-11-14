@@ -2,7 +2,9 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useNavigation } from '../../context/NavigationContext';
 import { useProducts } from '../../context/ProductContext';
-import { Outlet, DeliveryZone, Product } from '../../types';
+import { Outlet, DeliveryZone, Product, FestiveEvent } from '../../types';
+import { getFestiveEvents } from '../../lib/festiveService';
+import { FestiveProductionWidget } from '../../components/owner/FestiveProductionWidget';
 import {
   getOutlets,
   getDeliveryZones,
@@ -76,11 +78,12 @@ export const ManagerDashboardPage: React.FC = () => {
     categories,
   } = useProducts();
 
-  // Active Tab: 'orders' (Received orders & live kitchen queue), 'kitchen' (Menu & branch settings), or 'delivery-zones'
-  const [activeTab, setActiveTab] = useState<'orders' | 'kitchen' | 'delivery-zones'>('orders');
+  // Active Tab: 'orders' (Received orders & live kitchen queue), 'kitchen' (Menu & branch settings), 'delivery-zones', or 'utsav'
+  const [activeTab, setActiveTab] = useState<'orders' | 'kitchen' | 'delivery-zones' | 'utsav'>('orders');
 
   const [outlets, setOutlets] = useState<Outlet[]>([]);
   const [zones, setZones] = useState<DeliveryZone[]>([]);
+  const [outletFestiveEvents, setOutletFestiveEvents] = useState<FestiveEvent[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [selectedOutletId, setSelectedOutletId] = useState<string>('');
 
@@ -214,8 +217,12 @@ export const ManagerDashboardPage: React.FC = () => {
       if (filtered.length > 0) return filtered;
     }
 
-    // 3. Fallback: If user is admin/owner or testing with no explicit restriction, show loaded outlets
-    return outlets;
+    // 3. Strict outlet isolation: only owner role sees unassigned outlets
+    const userRole = ownerUser?.role || profile?.role;
+    if (userRole === 'owner') {
+      return outlets;
+    }
+    return [];
   }, [outlets, ownerUser, profile]);
 
   const currentOutlet = useMemo(() => {
@@ -232,6 +239,17 @@ export const ManagerDashboardPage: React.FC = () => {
       }
     }
   }, [managedOutlets, selectedOutletId]);
+
+  // Fetch Utsav festive collections strictly for manager's current outlet
+  useEffect(() => {
+    if (!currentOutlet?.id) {
+      setOutletFestiveEvents([]);
+      return;
+    }
+    getFestiveEvents(currentOutlet.id, false, token || undefined)
+      .then((list) => setOutletFestiveEvents(Array.isArray(list) ? list : []))
+      .catch(() => setOutletFestiveEvents([]));
+  }, [currentOutlet?.id, token]);
 
   const currentOutletZones = useMemo(() => {
     if (!currentOutlet) return [];
@@ -811,6 +829,20 @@ export const ManagerDashboardPage: React.FC = () => {
                 <MapPin className="w-3.5 h-3.5" />
                 <span>Delivery Zones & PINs</span>
               </button>
+
+              <button
+                type="button"
+                id="manager-nav-utsav"
+                onClick={() => setActiveTab('utsav')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
+                  activeTab === 'utsav'
+                    ? 'bg-amber-800 text-white shadow-2xs'
+                    : 'text-stone-300 hover:text-white hover:bg-stone-800'
+                }`}
+              >
+                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                <span>Utsav Production</span>
+              </button>
             </nav>
 
             {/* Right Controls: View Live Storefront and Logout */}
@@ -1158,6 +1190,38 @@ export const ManagerDashboardPage: React.FC = () => {
                 </button>
               </div>
             </div>
+          </div>
+        )}
+
+        {/* TAB 3: UTSAV SPECIALS LIVE PRODUCTION (Strictly Outlet-Isolated) */}
+        {activeTab === 'utsav' && currentOutlet && (
+          <div className="space-y-5">
+            <div>
+              <h1 className="text-xl font-black text-stone-900 font-heading tracking-tight">
+                Utsav Specials Production — {currentOutlet.name}
+              </h1>
+              <p className="text-xs text-stone-500">
+                Real-time confirmed pre-bookings, prep buffer quantities, and surplus menu conversion for your assigned kitchen.
+              </p>
+            </div>
+
+            {outletFestiveEvents.length === 0 ? (
+              <div className="bg-white border border-stone-200 rounded-2xl p-10 text-center space-y-2">
+                <Sparkles className="w-6 h-6 text-amber-700 mx-auto" />
+                <p className="text-sm font-bold text-stone-900">No Utsav Collections for {currentOutlet.name}</p>
+                <p className="text-xs text-stone-500">
+                  When a festival collection is scheduled for this outlet, live confirmed bookings and prep buffers appear here automatically.
+                </p>
+              </div>
+            ) : (
+              <FestiveProductionWidget
+                events={outletFestiveEvents}
+                outlets={managedOutlets}
+                token={token}
+                lockedOutletId={currentOutlet.id}
+                onProductsChanged={() => refreshProducts()}
+              />
+            )}
           </div>
         )}
 

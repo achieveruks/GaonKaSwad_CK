@@ -187,8 +187,11 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
         setFestiveEventId(found.festiveEventId || '');
         setAvailabilityMode(found.availabilityMode || 'normal');
         setMaxBookingQuantity(found.maxBookingQuantity ? String(found.maxBookingQuantity) : '');
-        setSpecialPackaging(found.specialPackaging !== false && (!!found.festiveEventId || !!found.festiveProduct));
-        setFestiveProduct(!!found.festiveProduct || !!found.festiveEventId);
+        setSpecialPackaging(
+          found.specialPackaging !== false &&
+            (!!found.festiveEventId || !!found.festiveProduct || found.availabilityMode === 'prebook_only')
+        );
+        setFestiveProduct(!!found.festiveProduct || !!found.festiveEventId || found.availabilityMode === 'prebook_only');
 
         // Map outlet configs
         const configs: Record<string, { isAssigned: boolean; inStock: boolean; isFeatured: boolean; isBestseller: boolean; isChefSpecial: boolean; portionsLeft: number | null }> = {};
@@ -378,9 +381,9 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
       outlets: assignedOutletsList,
       ingredients: ingredients.length > 0 ? ingredients : ['Pure Cow Ghee', 'Heirloom Spices'],
       // Utsav Specials festive fields
-      festiveEventId: festiveEventId ? festiveEventId : undefined,
+      festiveEventId: festiveEventId ? festiveEventId : null,
       availabilityMode,
-      maxBookingQuantity: maxBookingQuantity ? parseInt(maxBookingQuantity, 10) : undefined,
+      maxBookingQuantity: maxBookingQuantity ? parseInt(maxBookingQuantity, 10) : null,
       specialPackaging,
       festiveProduct: festiveProduct || !!festiveEventId || availabilityMode === 'prebook_only',
     };
@@ -1065,6 +1068,7 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
                           onChange={() => {
                             setAvailabilityMode('prebook_only');
                             setFestiveProduct(true);
+                            setSpecialPackaging(true);
                           }}
                           className="mt-0.5 text-amber-700 focus:ring-amber-600"
                         />
@@ -1108,7 +1112,13 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
                     <input
                       type="checkbox"
                       checked={festiveProduct}
-                      onChange={(e) => setFestiveProduct(e.target.checked)}
+                      onChange={(e) => {
+                        const checked = e.target.checked;
+                        setFestiveProduct(checked);
+                        if (checked) {
+                          setSpecialPackaging(true);
+                        }
+                      }}
                       className="w-4 h-4 rounded text-amber-700 focus:ring-amber-600 border-gray-300"
                     />
                     <div>

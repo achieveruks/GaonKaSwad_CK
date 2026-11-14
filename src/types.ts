@@ -85,16 +85,56 @@ export interface FestiveEvent {
 
 export interface OrderPaymentTransaction {
   id: string;
-  orderId: string;
-  transactionType: 'advance' | 'balance' | 'full' | 'refund';
+  orderId?: string | null;
+  checkoutGroupId?: string | null;
+  transactionType: 'initial' | 'advance' | 'balance' | 'full' | 'refund';
   amount: number;
   paymentMethod?: string;
+  paymentGateway?: string;
   status: 'pending' | 'success' | 'failed' | 'refunded';
+  gatewayOrderId?: string;
   gatewayPaymentId?: string;
+  gatewaySignature?: string;
   gatewayReference?: string;
+  idempotencyKey?: string;
   notes?: string;
   paidAt?: string;
   createdAt?: string;
+}
+
+export interface PaymentAllocation {
+  id: string;
+  paymentTransactionId: string;
+  orderId: string;
+  allocatedAmount: number;
+  allocationType: 'normal_full' | 'prebook_advance' | 'prebook_full' | 'prebook_balance';
+  createdAt?: string;
+}
+
+export interface CheckoutGroup {
+  id: string;
+  checkoutReference: string;
+  customerId?: string | null;
+  customerAddressId?: string | null;
+  outletId: string;
+  couponId?: string | null;
+  couponCodeSnapshot?: string | null;
+  subtotal: number;
+  discountAmount: number;
+  swadCoinDiscountAmount?: number;
+  packagingFee: number;
+  deliveryCharge: number;
+  taxAmount: number;
+  grandTotal: number;
+  orderMode: 'normal' | 'prebook' | 'mixed';
+  prebookPaymentPlan?: 'advance_25' | 'full' | null;
+  amountDueNow: number;
+  amountPaid: number;
+  balanceDue: number;
+  paymentStatus: 'pending' | 'partially_paid' | 'paid' | 'failed' | 'refunded';
+  idempotencyKey?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface FestiveProductionItemSummary {
@@ -108,6 +148,32 @@ export interface FestiveProductionItemSummary {
   normalStockAvailable: number;
   availabilityMode: 'normal' | 'prebook_only';
   price: number;
+  specialPackaging?: boolean;
+  maxBookingQuantity?: number | null;
+  active?: boolean;
+  inStock?: boolean;
+}
+
+export interface FestiveOverviewSummary {
+  activeCollectionsCount: number;
+  activeBookingWindowsCount: number;
+  totalBookedUnits: number;
+  totalExtraBuffer: number;
+  totalKitchenPrep: number;
+  specialPackagingUnits: number;
+  events: Array<{
+    id: string;
+    outletId: string;
+    name: string;
+    festivalDate: string;
+    bookingStartAt: string;
+    bookingEndAt: string;
+    status: string;
+    bookedUnits: number;
+    extraBuffer: number;
+    totalPrep: number;
+    dishCount: number;
+  }>;
 }
 
 export interface DeliveryZone {
@@ -277,9 +343,9 @@ export interface Product {
   allergens?: string[];
   reviewsList?: Review[];
   // Utsav Specials Festival Configuration
-  festiveEventId?: string;
+  festiveEventId?: string | null;
   availabilityMode?: 'normal' | 'prebook_only';
-  maxBookingQuantity?: number;
+  maxBookingQuantity?: number | null;
   specialPackaging?: boolean;
   festiveProduct?: boolean;
 }
@@ -491,18 +557,24 @@ export interface Order {
   id?: string;
   orderId: string;
   orderNumber?: string;
+  checkoutGroupId?: string;
+  checkout_group_id?: string;
+  checkoutReference?: string;
+  checkout_reference?: string;
   customerId?: string;
   addressId?: string;
   isGuestCheckout?: boolean;
   outletId: string;
   outletName?: string;
-  orderType?: 'delivery' | 'pickup' | 'prebook';
+  orderType?: 'delivery' | 'pickup' | 'prebook' | 'normal';
   order_type?: string;
   isSelfPickup?: boolean;
   paymentPlan?: 'full' | 'advance_25';
   payment_plan?: string;
   advanceAmount?: number;
   advance_amount?: number;
+  paidAmount?: number;
+  paid_amount?: number;
   balanceAmount?: number;
   balance_amount?: number;
   festiveEventId?: string;

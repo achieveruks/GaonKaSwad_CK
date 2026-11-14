@@ -4,9 +4,11 @@ import { useProducts } from '../../context/ProductContext';
 import { useNavigation } from '../../context/NavigationContext';
 import { useAuth } from '../../context/AuthContext';
 import { getDashboardStats } from '../../lib/products';
-import { DashboardStats, Product, Outlet, DeliveryZone, Order } from '../../types';
+import { DashboardStats, Product, Outlet, DeliveryZone, Order, FestiveOverviewSummary } from '../../types';
 import { getOutlets, getDeliveryZones } from '../../lib/locationService';
 import { fetchSupabaseOrders } from '../../lib/supabaseService';
+import { getFestiveOverview } from '../../lib/festiveService';
+import { supabase, isSupabaseConfigured } from '../../lib/supabase';
 import { CloudDatabaseStatus } from '../../components/CloudDatabaseStatus';
 import {
   UtensilsCrossed,
@@ -43,6 +45,7 @@ export const OwnerDashboardPage: React.FC = () => {
     goToOwnerEditProduct,
     goToOwnerOutlets,
     goToOwnerDeliveryZones,
+    goToOwnerUtsavSpecials,
   } = useNavigation();
 
   // Compute live product stats directly from catalog state as reliable baseline
@@ -70,6 +73,7 @@ export const OwnerDashboardPage: React.FC = () => {
 
   // Raw orders list stored for live in-client date filtering
   const [rawOrders, setRawOrders] = useState<Order[]>([]);
+  const [utsavOverview, setUtsavOverview] = useState<FestiveOverviewSummary | null>(null);
 
   // Date Filter State
   const [dateFilterPreset, setDateFilterPreset] = useState<DatePreset>('all');
@@ -128,6 +132,16 @@ export const OwnerDashboardPage: React.FC = () => {
       }
 
       setRawOrders(loadedOrders);
+
+      // 4. Fetch Utsav Specials Live Production Overview
+      if (token) {
+        try {
+          const ov = await getFestiveOverview(undefined, token);
+          setUtsavOverview(ov);
+        } catch (utsavErr) {
+          console.warn('Dashboard Utsav overview notice:', utsavErr);
+        }
+      }
     } catch (err) {
       console.warn('Using computed stats fallback:', err);
     } finally {
@@ -138,6 +152,23 @@ export const OwnerDashboardPage: React.FC = () => {
   useEffect(() => {
     loadDashboardData();
   }, [token, allProducts.length]);
+
+  useEffect(() => {
+    if (!token || !isSupabaseConfigured()) return;
+    const channel = supabase
+      .channel('owner-dashboard-utsav-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => {
+        getFestiveOverview(undefined, token).then(setUtsavOverview).catch(() => {});
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'festive_events' }, () => {
+        getFestiveOverview(undefined, token).then(setUtsavOverview).catch(() => {});
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [token]);
 
   // Helpers for date filtering identical to OutletsPage
   const getTodayStr = () => {
@@ -582,6 +613,124 @@ export const OwnerDashboardPage: React.FC = () => {
             </span>
           </div>
         </div>
+      </div>
+
+      {/* 1b. Utsav Specials & Live Production Summary Card */}
+      <div className="bg-white border border-stone-200 rounded-2xl overflow-hidden">
+        <div className="px-5 py-4 border-b border-stone-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-stone-50/70">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-amber-800 text-white flex items-center justify-center shrink-0">
+              <Sparkles className="w-4.5 h-4.5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="font-extrabold text-sm text-stone-900 font-heading">
+                  Utsav Specials &amp; Live Production
+                </h2>
+                <span className="text-[11px] font-semibold text-emerald-700">
+                  Realtime
+                </span>
+              </div>
+              <p className="text-xs text-stone-500">
+                Active seasonal pre-booking windows and confirmed kitchen prep across outlets.
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={goToOwnerUtsavSpecials}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-amber-800 hover:bg-amber-900 text-white rounded-xl text-xs font-bold transition-colors cursor-pointer shrink-0 self-start sm:self-auto"
+          >
+            <span>Open Utsav Workspace</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+
+        <div className="grid grid-cols-2 lg:grid-cols-4 divide-y lg:divide-y-0 sm:divide-x divide-stone-200">
+          <div className="px-5 py-3.5">
+            <span className="text-[11px] font-semibold text-stone-500 uppercase tracking-wider block">
+              Active Collections
+            </span>
+            <div className="mt-1 flex items-baseline gap-2">
+              <span className="text-xl font-black text-stone-900 tabular-nums">
+                {utsavOverview?.activeCollectionsCount ?? 0}
+              </span>
+              <span className="text-[11px] text-stone-500 tabular-nums">
+                · {utsavOverview?.activeBookingWindowsCount ?? 0} open now
+              </span>
+            </div>
+          </div>
+
+          <div className="px-5 py-3.5">
+            <span className="text-[11px] font-semibold text-stone-500 uppercase tracking-wider block">
+              Confirmed Pre-Booked
+            </span>
+            <div className="mt-1 flex items-baseline gap-2">
+              <span className="text-xl font-black text-amber-800 tabular-nums">
+                {utsavOverview?.totalBookedUnits ?? 0}
+              </span>
+              <span className="text-[11px] text-stone-500">units paid</span>
+            </div>
+          </div>
+
+          <div className="px-5 py-3.5">
+            <span className="text-[11px] font-semibold text-stone-500 uppercase tracking-wider block">
+              Total Kitchen Prep
+            </span>
+            <div className="mt-1 flex items-baseline gap-2">
+              <span className="text-xl font-black text-stone-900 tabular-nums">
+                {utsavOverview?.totalKitchenPrep ?? 0}
+              </span>
+              <span className="text-[11px] text-emerald-700 font-medium tabular-nums">
+                · +{utsavOverview?.totalExtraBuffer ?? 0} buffer
+              </span>
+            </div>
+          </div>
+
+          <div className="px-5 py-3.5">
+            <span className="text-[11px] font-semibold text-stone-500 uppercase tracking-wider block">
+              Festive Gift Boxes
+            </span>
+            <div className="mt-1 flex items-baseline gap-2">
+              <span className="text-xl font-black text-stone-800 tabular-nums">
+                {utsavOverview?.specialPackagingUnits ?? 0}
+              </span>
+              <span className="text-[11px] text-stone-500">sealed packs</span>
+            </div>
+          </div>
+        </div>
+
+        {utsavOverview && utsavOverview.events.length > 0 && (
+          <div className="border-t border-stone-200 divide-y divide-stone-100">
+            {utsavOverview.events.slice(0, 3).map((ev) => {
+              const outletObj = safeOutlets.find((o) => o.id === ev.outletId);
+              return (
+                <div
+                  key={ev.id}
+                  onClick={goToOwnerUtsavSpecials}
+                  className="px-5 py-2.5 flex items-center justify-between gap-3 text-xs hover:bg-stone-50 transition-colors cursor-pointer"
+                >
+                  <div className="min-w-0">
+                    <span className="font-bold text-stone-900 truncate block">{ev.name}</span>
+                    <span className="text-[11px] text-stone-500">
+                      {outletObj ? `${outletObj.name} · ${outletObj.city}` : ev.outletId} · Delivery{' '}
+                      {ev.festivalDate ? new Date(ev.festivalDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : '—'}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-4 shrink-0 tabular-nums text-[11px]">
+                    <span className="text-stone-600">
+                      <strong className="text-amber-800">{ev.bookedUnits}</strong> booked
+                    </span>
+                    <span className="text-stone-600">
+                      <strong className="text-stone-900">{ev.totalPrep}</strong> prep
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* 2. Quick Action Banners */}

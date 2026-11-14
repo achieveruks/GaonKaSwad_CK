@@ -1,5 +1,5 @@
 import React from 'react';
-import { Product } from '../types';
+import { Product, FestiveEvent } from '../types';
 import { useCart } from '../context/CartContext';
 import { useNavigation } from '../context/NavigationContext';
 import { useLocation } from '../context/LocationContext';
@@ -11,16 +11,17 @@ import {
   isProductChefSpecialAtOutlet,
   getProductPortionsLeftAtOutlet,
 } from '../lib/locationService';
-import { Star, Clock, Flame, Plus, Sparkles, ChefHat } from 'lucide-react';
+import { Star, Clock, Flame, Plus, Sparkles, ChefHat, Calendar, PackageCheck, Lock } from 'lucide-react';
 import { motion } from 'motion/react';
 
 interface ProductCardProps {
   product: Product;
   viewMode?: 'grid' | 'list';
   soldCount?: number;
+  festiveEvent?: FestiveEvent;
 }
 
-export const ProductCard: React.FC<ProductCardProps> = ({ product, viewMode = 'grid', soldCount }) => {
+export const ProductCard: React.FC<ProductCardProps> = ({ product, viewMode = 'grid', soldCount, festiveEvent }) => {
   const { addToCart, cart, updateQuantity } = useCart();
   const { goToProduct } = useNavigation();
   const { selectedLocation, setIsLocationModalOpen } = useLocation();
@@ -37,8 +38,21 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, viewMode = 'g
   const cartItemsForProduct = cart.filter((item) => item.product.id === product.id);
   const totalQuantityInCart = cartItemsForProduct.reduce((sum, i) => sum + i.quantity, 0);
 
+  const isPrebookOnly = product.availabilityMode === 'prebook_only';
   const isSoldOut = !isInStockHere || portionsLeft === 0;
   const isMaxReached = portionsLeft !== null && portionsLeft !== undefined && totalQuantityInCart >= portionsLeft;
+
+  const nowMs = Date.now();
+  const bookingNotOpenYet = Boolean(
+    isPrebookOnly && festiveEvent?.bookingStartAt && new Date(festiveEvent.bookingStartAt).getTime() > nowMs
+  );
+  const bookingClosed = Boolean(
+    isPrebookOnly &&
+      festiveEvent &&
+      (festiveEvent.status !== 'active' ||
+        (festiveEvent.bookingEndAt && new Date(festiveEvent.bookingEndAt).getTime() < nowMs))
+  );
+  const isBookingBlocked = bookingNotOpenYet || bookingClosed;
 
   const handleQuickAdd = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -46,7 +60,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, viewMode = 'g
       setIsLocationModalOpen(true);
       return;
     }
-    if (!isServedHere || isSoldOut || isMaxReached) return;
+    if (!isServedHere || isSoldOut || isMaxReached || isBookingBlocked) return;
 
     // Pick default variant if variants exist
     const defaultVariant =
@@ -211,9 +225,27 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, viewMode = 'g
           </div>
 
           {/* Short Description */}
-          <p className="text-xs text-stone-500 line-clamp-1 leading-relaxed mb-3">
+          <p className="text-xs text-stone-500 line-clamp-1 leading-relaxed mb-2">
             {product.shortDescription}
           </p>
+
+          {/* Festive Meta Strip (Pre-book / Festive Products) */}
+          {(isPrebookOnly || product.festiveProduct) && (
+            <div className="mb-2.5 flex flex-wrap items-center gap-1.5 text-[10px] font-semibold text-amber-900">
+              {product.specialPackaging !== false && (
+                <span className="inline-flex items-center gap-1 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">
+                  <PackageCheck className="w-3 h-3 text-amber-700" />
+                  Festive Packaging
+                </span>
+              )}
+              {festiveEvent?.festivalDate && (
+                <span className="inline-flex items-center gap-1 bg-stone-50 border border-stone-200 text-stone-700 px-1.5 py-0.5 rounded tabular-nums">
+                  <Calendar className="w-3 h-3 text-amber-700" />
+                  {new Date(festiveEvent.festivalDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+                </span>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -243,6 +275,13 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, viewMode = 'g
           ) : isSoldOut ? (
             <span className="text-[10px] font-bold text-amber-900 bg-amber-50 border border-amber-200 px-2 py-1 rounded-md">
               {portionsLeft === 0 ? 'Sold Out' : 'Out of Stock'}
+            </span>
+          ) : isBookingBlocked ? (
+            <span className="text-[10px] font-bold text-stone-600 bg-stone-100 border border-stone-300 px-2 py-1 rounded-md inline-flex items-center gap-1">
+              <Lock className="w-3 h-3" />
+              {bookingNotOpenYet && festiveEvent?.bookingStartAt
+                ? `Opens ${new Date(festiveEvent.bookingStartAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}`
+                : 'Booking Closed'}
             </span>
           ) : totalQuantityInCart > 0 ? (
             <div
@@ -278,16 +317,16 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, viewMode = 'g
               id={`add-to-cart-btn-${product.id}`}
               onClick={handleQuickAdd}
               className={`p-1.5 px-2.5 rounded-lg text-xs font-bold transition-colors shadow-2xs flex items-center gap-1 cursor-pointer ${
-                product.availabilityMode === 'prebook_only'
+                isPrebookOnly
                   ? 'bg-gradient-to-r from-amber-700 to-amber-900 hover:from-amber-800 hover:to-amber-950 text-white border border-amber-600/60 shadow-amber-950/20'
                   : 'bg-amber-800 hover:bg-amber-900 active:bg-stone-950 text-white'
               }`}
-              aria-label={product.availabilityMode === 'prebook_only' ? `Pre-book ${product.name}` : `Add ${product.name} to cart`}
+              aria-label={isPrebookOnly ? `Pre-book ${product.name}` : `Add ${product.name} to cart`}
             >
-              {product.availabilityMode === 'prebook_only' ? (
+              {isPrebookOnly ? (
                 <>
                   <Sparkles className="w-3.5 h-3.5 text-amber-300 fill-amber-300" />
-                  <span className="text-[11px] font-bold">Pre-book</span>
+                  <span className="text-[11px] font-bold">Pre-book Now</span>
                 </>
               ) : (
                 <>

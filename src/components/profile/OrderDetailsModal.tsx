@@ -50,6 +50,24 @@ export const OrderDetailsModal: React.FC<OrderDetailsModalProps> = ({
   const isCancelledStr =
     normCurrentStatus === 'cancelled';
   const isSelfPickup = order.orderType === 'pickup' || order.isSelfPickup;
+  const isPrebook =
+    order.orderType === 'prebook' || (order as any).order_type === 'prebook';
+  const rawOrderId = (order.orderId || order.id || '').toString().trim();
+  const parentRef =
+    order.checkoutReference ||
+    (order.checkoutGroupId && /(-I|-PB|_PB)$/i.test(rawOrderId) ? rawOrderId.replace(/(-I|-PB|_PB)$/i, '') : '');
+  const paidAmount = Number(
+    order.paidAmount ??
+      (order as any).paid_amount ??
+      (isPrebook && order.paymentPlan === 'advance_25'
+        ? order.advanceAmount || 0
+        : order.total || 0)
+  );
+  const balanceAmount = Number(
+    order.balanceAmount ??
+      (order as any).balance_amount ??
+      Math.max(0, Number(order.total || 0) - paidAmount)
+  );
 
   // Format Helper for Indian Date & Time (e.g. 28 Aug 2026 • 4:58 pm)
   const formatDateTime = (dateVal?: string | number | null) => {
@@ -255,13 +273,18 @@ export const OrderDetailsModal: React.FC<OrderDetailsModalProps> = ({
         {/* Modal Header */}
         <div className="bg-gradient-to-r from-amber-900 via-amber-800 to-amber-950 p-5 text-white flex items-center justify-between shrink-0">
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <span className="text-xs font-semibold px-2 py-0.5 rounded bg-amber-500/20 text-amber-200 border border-amber-400/20 uppercase tracking-wider">
-                Order Receipt
+                {isPrebook ? 'Utsav Pre-book Receipt' : 'Order Receipt'}
               </span>
               <span className="text-xs text-amber-200/80 font-medium">
                 {formattedReceiptDate}
               </span>
+              {parentRef && formatDisplayOrderId(parentRef) !== formatDisplayOrderId(rawOrderId) && (
+                <span className="text-xs text-amber-200/90 font-mono">
+                  · Checkout {formatDisplayOrderId(parentRef)}
+                </span>
+              )}
             </div>
             <h3 className="font-serif font-bold text-xl text-amber-50 mt-1">
               Order {formatDisplayOrderId(order.orderId || order.id)}
@@ -348,6 +371,35 @@ export const OrderDetailsModal: React.FC<OrderDetailsModalProps> = ({
               </div>
             </div>
           </div>
+
+          {/* Utsav Pre-book Banner (if Pre-book order) */}
+          {isPrebook && (
+            <div className="p-4 bg-amber-50 rounded-xl border border-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+              <div className="space-y-0.5">
+                <p className="font-bold text-amber-950">
+                  {order.festivalName || 'Utsav Festival Pre-book'}
+                </p>
+                <p className="text-amber-900">
+                  Special Festive Packaging Included ·{' '}
+                  {order.paymentPlan === 'advance_25' ? '25% Advance Plan' : '100% Upfront Plan'}
+                </p>
+              </div>
+              {order.festivalDeliveryAt && (
+                <div className="sm:text-right tabular-nums">
+                  <span className="text-[10px] uppercase tracking-wider text-amber-800 font-semibold block">
+                    Festival Delivery Date
+                  </span>
+                  <span className="font-bold text-stone-900">
+                    {new Date(order.festivalDeliveryAt).toLocaleDateString('en-IN', {
+                      day: 'numeric',
+                      month: 'short',
+                      year: 'numeric',
+                    })}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Delivery Address & Customer details */}
           <div className="bg-stone-50/70 rounded-xl p-4 border border-stone-200 space-y-3">
@@ -527,10 +579,25 @@ export const OrderDetailsModal: React.FC<OrderDetailsModalProps> = ({
               </div>
             )}
 
-            <div className="pt-2 border-t border-stone-200 flex justify-between text-sm font-extrabold text-stone-900">
+            <div className="pt-2 border-t border-stone-200 flex justify-between text-sm font-extrabold text-stone-950 tabular-nums">
               <span>Grand Total</span>
               <span className="text-amber-900 font-serif text-base">₹{Number(order.total).toFixed(0)}</span>
             </div>
+
+            {(isPrebook || balanceAmount > 0) && (
+              <div className="pt-2 border-t border-stone-200/70 space-y-1 tabular-nums">
+                <div className="flex justify-between text-emerald-800 font-semibold">
+                  <span>Paid So Far</span>
+                  <span>₹{paidAmount.toFixed(0)}</span>
+                </div>
+                {balanceAmount > 0 && (
+                  <div className="flex justify-between text-amber-900 font-bold">
+                    <span>Remaining Balance Due</span>
+                    <span>₹{balanceAmount.toFixed(0)}</span>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Payment Details */}
@@ -559,9 +626,12 @@ export const OrderDetailsModal: React.FC<OrderDetailsModalProps> = ({
             let statusLabel = 'PAID';
             let statusBadge = 'bg-emerald-100 text-emerald-800';
 
-            if (rawPayStatus === 'paid') {
+            if (rawPayStatus === 'paid' || (balanceAmount <= 0 && paidAmount > 0 && !isCOD)) {
               statusLabel = 'PAID';
               statusBadge = 'bg-emerald-100 text-emerald-800';
+            } else if (rawPayStatus === 'partial' || rawPayStatus === 'advance_paid' || (paidAmount > 0 && balanceAmount > 0)) {
+              statusLabel = 'ADVANCE PAID';
+              statusBadge = 'bg-amber-100 text-amber-900';
             } else if (rawPayStatus === 'pending') {
               if (isDelivered) {
                 statusLabel = 'PAID ON DELIVERY';

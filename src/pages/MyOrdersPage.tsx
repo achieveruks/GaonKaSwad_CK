@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { isSupabaseConfigured } from '../lib/supabase';
-import { fetchSupabaseOrdersByPhone, fetchRatedOrderIds } from '../lib/supabaseService';
+import { fetchSupabaseOrdersByPhone, fetchRatedOrderIds, formatDisplayOrderId } from '../lib/supabaseService';
 import { Order } from '../types';
 import { useProducts } from '../context/ProductContext';
 import { isProductAvailableAtOutlet, isProductInStockAtOutlet } from '../lib/locationService';
@@ -293,9 +293,63 @@ export const MyOrdersPage: React.FC = () => {
         });
       }
 
-      const totalPgs = Math.ceil(list.length / ordersPerPage) || 1;
+      // Group sibling child orders belonging to the same parent checkout transaction
+      const groupMap = new Map<string, Order[]>();
+      for (const ord of list) {
+        const rawId = (ord.orderId || ord.id || '').toString().trim();
+        const key =
+          ord.checkoutGroupId ||
+          ord.checkoutReference ||
+          (rawId ? rawId.replace(/(-I|-PB|_PB)$/i, '') : String(Math.random()));
+        const existing = groupMap.get(key) || [];
+        existing.push(ord);
+        groupMap.set(key, existing);
+      }
+
+      const groupedList = Array.from(groupMap.entries()).map(([groupKey, children]) => {
+        const sortedChildren = [...children].sort((a, b) => {
+          const aPb = (a.orderType === 'prebook' || (a as any).order_type === 'prebook') ? 1 : 0;
+          const bPb = (b.orderType === 'prebook' || (b as any).order_type === 'prebook') ? 1 : 0;
+          return aPb - bPb;
+        });
+        const first = sortedChildren[0];
+        const parentRef =
+          first?.checkoutReference ||
+          (first?.orderId ? first.orderId.replace(/(-I|-PB|_PB)$/i, '') : groupKey);
+        const totalValue = sortedChildren.reduce((s, o) => s + Number(o.total || 0), 0);
+        const totalPaid = sortedChildren.reduce((s, o) => {
+          const isPb = o.orderType === 'prebook' || (o as any).order_type === 'prebook';
+          const p = Number(
+            o.paidAmount ??
+              (o as any).paid_amount ??
+              (isPb && o.paymentPlan === 'advance_25' ? o.advanceAmount || 0 : o.total || 0)
+          );
+          return s + p;
+        }, 0);
+        const totalBalance = sortedChildren.reduce((s, o) => {
+          const isPb = o.orderType === 'prebook' || (o as any).order_type === 'prebook';
+          const p = Number(
+            o.paidAmount ??
+              (o as any).paid_amount ??
+              (isPb && o.paymentPlan === 'advance_25' ? o.advanceAmount || 0 : o.total || 0)
+          );
+          const b = Number(o.balanceAmount ?? (o as any).balance_amount ?? Math.max(0, Number(o.total || 0) - p));
+          return s + b;
+        }, 0);
+
+        return {
+          groupKey,
+          parentRef,
+          orders: sortedChildren,
+          totalValue,
+          totalPaid,
+          totalBalance,
+        };
+      });
+
+      const totalPgs = Math.ceil(groupedList.length / ordersPerPage) || 1;
       const startIndex = (currentPage - 1) * ordersPerPage;
-      const paginated = list.slice(startIndex, startIndex + ordersPerPage);
+      const paginated = groupedList.slice(startIndex, startIndex + ordersPerPage);
 
       return {
         activeOrders: activeList,
@@ -529,29 +583,69 @@ export const MyOrdersPage: React.FC = () => {
                 </div>
               )}
 
-            {/* Full-Width Order Cards List */}
+            {/* Full-Width Order Cards List (grouped by Parent Checkout Transaction) */}
             {!isLoadingOrders && !ordersError && paginatedOrders.length > 0 && (
               <div className="space-y-4">
-                {paginatedOrders.map((ord) => {
-                  const isAct =
-                    (ord.status || '').toLowerCase() === 'pending' ||
-                    (ord.status || '').toLowerCase() === 'pending payment' ||
-                    (ord.status || '').toLowerCase() === 'confirmed' ||
-                    (ord.status || '').toLowerCase() === 'preparing' ||
-                    (ord.status || '').toLowerCase() === 'ready' ||
-                    (ord.status || '').toLowerCase() === 'out_for_delivery' ||
-                    (ord.status || '').toLowerCase() === 'out for delivery';
+                {paginatedOrders.map((group) => {
+                  const renderChildCard = (ord: Order) => {
+                    const st = (ord.status || '').toLowerCase();
+                    const isAct =
+                      st === 'pending' ||
+                      st === 'pending payment' ||
+                      st === 'received' ||
+                      st === 'confirmed' ||
+                      st === 'preparing' ||
+                      st === 'ready' ||
+                      st === 'out_for_delivery' ||
+                      st === 'out for delivery';
+
+                    return (
+                      <OrderCard
+                        key={ord.orderId || ord.id}
+                        order={ord}
+                        isRated={isOrderRated(ord)}
+                        isActiveOrder={isAct}
+                        onViewDetails={(o) => setSelectedOrderForDetails(o)}
+                        onReorder={handleReorder}
+                        onRate={(o) => setSelectedOrderForReview(o)}
+                      />
+                    );
+                  };
+
+                  if (group.orders.length <= 1) {
+                    return renderChildCard(group.orders[0]);
+                  }
 
                   return (
-                    <OrderCard
-                      key={ord.orderId || ord.id}
-                      order={ord}
-                      isRated={isOrderRated(ord)}
-                      isActiveOrder={isAct}
-                      onViewDetails={(o) => setSelectedOrderForDetails(o)}
-                      onReorder={handleReorder}
-                      onRate={(o) => setSelectedOrderForReview(o)}
-                    />
+                    <div
+                      key={group.groupKey}
+                      className="rounded-2xl border border-amber-200 bg-amber-50/40 p-4 space-y-3"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-amber-200/70 text-xs">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-mono font-bold text-stone-900">
+                            Purchase {formatDisplayOrderId(group.parentRef)}
+                          </span>
+                          <span className="text-stone-500">·</span>
+                          <span className="font-semibold text-amber-900">
+                            {group.orders.length} Orders (Instant + Utsav Pre-book)
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-3 tabular-nums">
+                          <span className="text-stone-700 font-semibold">
+                            Paid: ₹{group.totalPaid.toFixed(0)}
+                          </span>
+                          {group.totalBalance > 0 && (
+                            <span className="font-bold text-amber-900">
+                              Balance Due: ₹{group.totalBalance.toFixed(0)}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="space-y-3">
+                        {group.orders.map(renderChildCard)}
+                      </div>
+                    </div>
                   );
                 })}
 

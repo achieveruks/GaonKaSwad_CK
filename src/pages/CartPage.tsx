@@ -4,8 +4,8 @@ import { useNavigation } from '../context/NavigationContext';
 import { useLocation } from '../context/LocationContext';
 import { useAuth } from '../context/AuthContext';
 import { CartItemRow } from '../components/CartItemRow';
-import { fetchAvailableCouponsForCustomer } from '../lib/supabaseService';
-import { Coupon } from '../types';
+import { fetchAvailableCouponsForCustomer, fetchActiveFestiveEventsForOutlet } from '../lib/supabaseService';
+import { Coupon, FestiveEvent } from '../types';
 import {
   ShoppingBag,
   ArrowRight,
@@ -19,6 +19,9 @@ import {
   Trash2,
   MapPin,
   AlertCircle,
+  Sparkles,
+  Calendar,
+  Clock,
 } from 'lucide-react';
 
 export const CartPage: React.FC = () => {
@@ -46,6 +49,13 @@ export const CartPage: React.FC = () => {
     isFreeDeliveryUnlocked,
     amountNeededForFreeDelivery,
     freeDeliveryProgress,
+    normalItems,
+    prebookItems,
+    hasNormalItems,
+    hasPrebookItems,
+    isMixedCart,
+    normalSubtotal,
+    prebookSubtotal,
   } = useCart();
 
   const { goToShop, goToCheckout } = useNavigation();
@@ -55,6 +65,7 @@ export const CartPage: React.FC = () => {
   const [couponCode, setCouponCode] = useState('');
   const [couponError, setCouponError] = useState('');
   const [availableCoupons, setAvailableCoupons] = useState<Coupon[]>([]);
+  const [festiveEvents, setFestiveEvents] = useState<FestiveEvent[]>([]);
   const [isApplying, setIsApplying] = useState(false);
 
   useEffect(() => {
@@ -67,10 +78,20 @@ export const CartPage: React.FC = () => {
       })
       .catch((e) => console.warn('Failed to load available coupons in CartPage', e));
 
+    fetchActiveFestiveEventsForOutlet(selectedLocation?.outletId)
+      .then((evs) => {
+        if (isMounted) setFestiveEvents(evs || []);
+      })
+      .catch(() => {});
+
     return () => {
       isMounted = false;
     };
   }, [profile?.id, profile?.phone, subtotal, selectedLocation?.outletId]);
+
+  const festiveEventById = new Map<string, FestiveEvent>(
+    festiveEvents.map((e) => [String(e.id), e])
+  );
 
   const handleApplyCoupon = async (e?: React.FormEvent, codeToApply?: string) => {
     if (e) e.preventDefault();
@@ -230,12 +251,79 @@ export const CartPage: React.FC = () => {
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         {/* Left Column: Cart Items List & Instructions (7 cols) */}
         <div className="lg:col-span-7 space-y-4">
-          {/* Items Container */}
-          <div className="bg-white rounded-2xl border border-stone-200 p-4 sm:p-5 shadow-2xs divide-y divide-stone-100">
-            {cart.map((item) => (
-              <CartItemRow key={item.id} item={item} />
-            ))}
-          </div>
+          {hasPrebookItems ? (
+            <div className="space-y-4">
+              {hasNormalItems && (
+                <div className="bg-white rounded-2xl border border-stone-200 p-4 sm:p-5 shadow-2xs space-y-1">
+                  <div className="flex items-center justify-between pb-2.5 border-b border-stone-100">
+                    <div className="flex items-center gap-2">
+                      <Clock className="w-4 h-4 text-orange-600" />
+                      <h3 className="font-bold text-xs sm:text-sm text-stone-900">
+                        Normal Orders ({normalItems.reduce((s, i) => s + i.quantity, 0)})
+                      </h3>
+                      <span className="text-[10px] font-semibold text-stone-500 bg-stone-100 px-2 py-0.5 rounded">
+                        Instant Dispatch
+                      </span>
+                    </div>
+                    <span className="text-xs font-bold text-stone-900 tabular-nums">₹{normalSubtotal}</span>
+                  </div>
+                  <div className="divide-y divide-stone-100">
+                    {normalItems.map((item) => (
+                      <CartItemRow key={item.id} item={item} />
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="bg-white rounded-2xl border border-amber-300/90 p-4 sm:p-5 shadow-2xs space-y-2">
+                {(() => {
+                  const firstEvId = prebookItems.find((i) => i.product.festiveEventId)?.product.festiveEventId;
+                  const ev = firstEvId ? festiveEventById.get(String(firstEvId)) : festiveEvents[0];
+                  return (
+                    <div className="pb-2.5 border-b border-amber-100 space-y-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <Sparkles className="w-4 h-4 text-amber-600 fill-amber-400" />
+                          <h3 className="font-bold text-xs sm:text-sm text-amber-950">
+                            Utsav Pre-book Orders ({prebookItems.reduce((s, i) => s + i.quantity, 0)})
+                          </h3>
+                        </div>
+                        <span className="text-xs font-bold text-amber-900 tabular-nums">₹{prebookSubtotal}</span>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-amber-900/90 tabular-nums">
+                        {ev && (
+                          <span className="inline-flex items-center gap-1 font-semibold">
+                            <Calendar className="w-3 h-3 text-amber-700" />
+                            {ev.name} • Festival Delivery:{' '}
+                            {new Date(ev.festivalDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+                          </span>
+                        )}
+                        <span className="text-stone-600">
+                          Choose <strong>25% Advance</strong> or <strong>100% Upfront</strong> at checkout
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })()}
+                <div className="divide-y divide-stone-100">
+                  {prebookItems.map((item) => (
+                    <CartItemRow
+                      key={item.id}
+                      item={item}
+                      festiveEvent={item.product.festiveEventId ? festiveEventById.get(String(item.product.festiveEventId)) : festiveEvents[0]}
+                    />
+                  ))}
+                </div>
+              </div>
+            </div>
+          ) : (
+            /* Standard Cart Items Container */
+            <div className="bg-white rounded-2xl border border-stone-200 p-4 sm:p-5 shadow-2xs divide-y divide-stone-100">
+              {cart.map((item) => (
+                <CartItemRow key={item.id} item={item} />
+              ))}
+            </div>
+          )}
 
           {/* Cooking Instructions & Cutlery Preferences */}
           <div className="bg-white rounded-2xl border border-stone-200 p-4 shadow-2xs space-y-3">
@@ -373,9 +461,21 @@ export const CartPage: React.FC = () => {
             </h3>
 
             <div className="space-y-2 text-xs text-stone-600">
+              {isMixedCart && (
+                <>
+                  <div className="flex justify-between text-stone-700">
+                    <span>Normal Orders Subtotal</span>
+                    <span className="font-semibold tabular-nums">₹{normalSubtotal}</span>
+                  </div>
+                  <div className="flex justify-between text-amber-900">
+                    <span>Utsav Pre-book Subtotal</span>
+                    <span className="font-semibold tabular-nums">₹{prebookSubtotal}</span>
+                  </div>
+                </>
+              )}
               <div className="flex justify-between">
                 <span>Item Subtotal ({totalItemsCount} items)</span>
-                <span className="font-semibold text-stone-900">₹{subtotal}</span>
+                <span className="font-semibold text-stone-900 tabular-nums">₹{subtotal}</span>
               </div>
 
               {discount > 0 && (

@@ -37,7 +37,8 @@ import {
   Tag,
   CheckCircle2,
   Soup,
-  Quote
+  Quote,
+  Calendar
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -412,6 +413,44 @@ export const HomePage: React.FC = () => {
                   <ChevronRight className="w-4 h-4 text-gray-400" />
                 </button>
               </div>
+
+              {/* Dynamic Utsav Specials Promo Card (Driven by Outlet About Config) */}
+              {outletAbout?.utsavPromoEnabled && (outletAbout?.utsavPromoHeading || outletAbout?.utsavFestivalName) && (
+                <div
+                  onClick={() => goToShop('utsav_specials')}
+                  className="mt-2 p-3 sm:p-3.5 bg-gradient-to-r from-amber-50 via-orange-50/70 to-amber-50/40 border border-amber-300/80 rounded-2xl flex flex-col sm:flex-row items-center gap-3.5 text-left shadow-xs hover:border-amber-500 transition-colors cursor-pointer group max-w-xl mx-auto lg:mx-0"
+                >
+                  {outletAbout.utsavPromoImage && (
+                    <div className="w-full sm:w-20 h-28 sm:h-20 rounded-xl overflow-hidden border border-amber-200 shrink-0 bg-amber-100">
+                      <img
+                        src={outletAbout.utsavPromoImage}
+                        alt={outletAbout.utsavFestivalName || outletAbout.utsavPromoHeading || 'Utsav Specials'}
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                        referrerPolicy="no-referrer"
+                      />
+                    </div>
+                  )}
+                  <div className="flex-1 min-w-0 space-y-1">
+                    <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-amber-800">
+                      <Sparkles className="w-3 h-3 text-amber-600 fill-amber-400 shrink-0" />
+                      <span>{outletAbout.utsavFestivalName || 'Utsav Specials • Pre-book Open'}</span>
+                    </div>
+                    <h3 className="font-bold text-sm text-stone-900 leading-snug line-clamp-1">
+                      {outletAbout.utsavPromoHeading || 'Celebrate With Handcrafted Festive Delicacies'}
+                    </h3>
+                    {outletAbout.utsavPromoDescription && (
+                      <p className="text-[11px] text-stone-600 line-clamp-2 leading-relaxed">
+                        {outletAbout.utsavPromoDescription}
+                      </p>
+                    )}
+                  </div>
+                  <span className="shrink-0 w-full sm:w-auto px-3.5 py-2 bg-amber-800 group-hover:bg-amber-900 text-white font-bold text-xs rounded-xl inline-flex items-center justify-center gap-1.5 transition-colors shadow-2xs">
+                    <Calendar className="w-3.5 h-3.5 text-amber-200" />
+                    <span>{outletAbout.utsavPromoCtaText || 'Explore Utsav Specials'}</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </span>
+                </div>
+              )}
 
               {/* Trust Badges Bar */}
               <div className="pt-4 border-t border-gray-100 grid grid-cols-3 gap-2 sm:gap-4 max-w-md mx-auto lg:mx-0 text-gray-700">
