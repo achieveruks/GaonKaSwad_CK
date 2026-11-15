@@ -1848,14 +1848,69 @@ app.delete('/api/outlets/:id', requireOwnerAuth, (req: AuthenticatedRequest, res
 });
 
 // 15c. Outlets: Update Single Product Config for Outlet (Protected)
-app.patch('/api/outlets/:id/products/:productId', requireOwnerAuth, (req: AuthenticatedRequest, res) => {
+app.patch('/api/outlets/:id/products/:productId', requireOwnerAuth, async (req: AuthenticatedRequest, res) => {
   try {
     const { id: outletId, productId } = req.params;
+    if (req.user?.role === 'manager') {
+      const allowedIds = Array.isArray(req.user.assignedOutletIds) && req.user.assignedOutletIds.length > 0
+        ? req.user.assignedOutletIds
+        : req.user.outletId ? [req.user.outletId] : [];
+      if (!allowedIds.includes(outletId)) {
+        return res.status(403).json({ success: false, error: 'You are not authorized to manage menu for this outlet' });
+      }
+    }
+
     const updated = productStorage.updateOutletProductConfig(outletId, productId, req.body);
-    if (!updated) {
+
+    let supabaseSynced = false;
+    try {
+      const { data: existing, error: fetchErr } = await serverSupabase
+        .from('products')
+        .select('id, outlets')
+        .eq('id', String(productId))
+        .maybeSingle();
+
+      if (!fetchErr && existing) {
+        let outlets = Array.isArray(existing.outlets) ? [...existing.outlets] : [];
+        const isAssigned = req.body?.isAssigned !== undefined ? req.body.isAssigned : req.body?.assigned;
+        if (isAssigned === false) {
+          outlets = outlets.filter((o: any) => o.outletId !== outletId);
+        } else {
+          const idx = outlets.findIndex((o: any) => o.outletId === outletId);
+          if (idx >= 0) {
+            outlets[idx] = {
+              ...outlets[idx],
+              inStock: req.body.inStock !== undefined ? req.body.inStock : outlets[idx].inStock,
+              isFeatured: req.body.isFeatured !== undefined ? req.body.isFeatured : outlets[idx].isFeatured,
+              isBestseller: req.body.isBestseller !== undefined ? req.body.isBestseller : outlets[idx].isBestseller,
+              isChefSpecial: req.body.isChefSpecial !== undefined ? req.body.isChefSpecial : outlets[idx].isChefSpecial,
+              portionsLeft: req.body.portionsLeft !== undefined ? req.body.portionsLeft : outlets[idx].portionsLeft,
+            };
+          } else {
+            outlets.push({
+              outletId,
+              inStock: req.body.inStock !== undefined ? req.body.inStock : true,
+              isFeatured: !!req.body.isFeatured,
+              isBestseller: !!req.body.isBestseller,
+              isChefSpecial: !!req.body.isChefSpecial,
+              portionsLeft: req.body.portionsLeft !== undefined ? req.body.portionsLeft : null,
+            });
+          }
+        }
+        const { error: updateErr } = await serverSupabase
+          .from('products')
+          .update({ outlets, updated_at: new Date().toISOString() })
+          .eq('id', String(productId));
+        if (!updateErr) supabaseSynced = true;
+      }
+    } catch (syncErr) {
+      console.warn('Server Supabase single outlet product sync warning:', syncErr);
+    }
+
+    if (!updated && !supabaseSynced) {
       return res.status(404).json({ success: false, error: 'Product or Outlet not found' });
     }
-    return res.json({ success: true, product: updated });
+    return res.json({ success: true, product: updated, supabaseSynced });
   } catch (err: any) {
     console.error('Update outlet product error:', err);
     return res.status(400).json({ success: false, error: err.message || 'Failed to update product for outlet' });
@@ -1863,15 +1918,91 @@ app.patch('/api/outlets/:id/products/:productId', requireOwnerAuth, (req: Authen
 });
 
 // 15d. Outlets: Batch Update Products for Outlet (Protected)
-app.put('/api/outlets/:id/products', requireOwnerAuth, (req: AuthenticatedRequest, res) => {
+app.put('/api/outlets/:id/products', requireOwnerAuth, async (req: AuthenticatedRequest, res) => {
   try {
     const { id: outletId } = req.params;
+    if (req.user?.role === 'manager') {
+      const allowedIds = Array.isArray(req.user.assignedOutletIds) && req.user.assignedOutletIds.length > 0
+        ? req.user.assignedOutletIds
+        : req.user.outletId ? [req.user.outletId] : [];
+      if (!allowedIds.includes(outletId)) {
+        return res.status(403).json({ success: false, error: 'You are not authorized to manage menu for this outlet' });
+      }
+    }
+
     const { updates } = req.body;
     if (!Array.isArray(updates)) {
       return res.status(400).json({ success: false, error: 'updates array is required' });
     }
     const products = productStorage.batchUpdateOutletProducts(outletId, updates);
-    return res.json({ success: true, products });
+
+    let supabaseSynced = false;
+    try {
+      const { data: dbProducts, error: fetchErr } = await serverSupabase.from('products').select('id, outlets');
+      if (!fetchErr && Array.isArray(dbProducts)) {
+        const now = new Date().toISOString();
+        const assignedProductIds: string[] = [];
+        let allSucceeded = true;
+
+        for (const item of updates) {
+          const prod = dbProducts.find((p: any) => String(p.id) === String(item.productId));
+          if (!prod) continue;
+
+          const prevOutlets = Array.isArray(prod.outlets) ? prod.outlets : [];
+          let outlets = [...prevOutlets];
+          if (item.isAssigned === false) {
+            outlets = outlets.filter((o: any) => o.outletId !== outletId);
+          } else {
+            assignedProductIds.push(String(prod.id));
+            const idx = outlets.findIndex((o: any) => o.outletId === outletId);
+            if (idx >= 0) {
+              outlets[idx] = {
+                ...outlets[idx],
+                inStock: item.inStock !== undefined ? item.inStock : outlets[idx].inStock,
+                isFeatured: item.isFeatured !== undefined ? item.isFeatured : outlets[idx].isFeatured,
+                isBestseller: item.isBestseller !== undefined ? item.isBestseller : outlets[idx].isBestseller,
+                isChefSpecial: item.isChefSpecial !== undefined ? item.isChefSpecial : outlets[idx].isChefSpecial,
+                portionsLeft: item.portionsLeft !== undefined ? item.portionsLeft : outlets[idx].portionsLeft,
+              };
+            } else {
+              outlets.push({
+                outletId,
+                inStock: item.inStock !== undefined ? item.inStock : true,
+                isFeatured: !!item.isFeatured,
+                isBestseller: !!item.isBestseller,
+                isChefSpecial: !!item.isChefSpecial,
+                portionsLeft: item.portionsLeft !== undefined ? item.portionsLeft : null,
+              });
+            }
+          }
+
+          if (JSON.stringify(prevOutlets) === JSON.stringify(outlets)) continue;
+
+          const { error: updateErr } = await serverSupabase
+            .from('products')
+            .update({ outlets, updated_at: now })
+            .eq('id', String(prod.id));
+          if (updateErr) {
+            allSucceeded = false;
+            console.warn('Server Supabase product update error:', updateErr);
+          }
+        }
+
+        const { error: outletUpdateErr } = await serverSupabase
+          .from('outlets')
+          .update({ assigned_product_ids: assignedProductIds, updated_at: now })
+          .eq('id', outletId);
+        if (outletUpdateErr) {
+          console.warn('Server Supabase outlet assigned_product_ids sync error:', outletUpdateErr);
+        }
+
+        supabaseSynced = allSucceeded;
+      }
+    } catch (syncErr) {
+      console.warn('Server Supabase batch outlet product sync warning:', syncErr);
+    }
+
+    return res.json({ success: true, products, supabaseSynced });
   } catch (err: any) {
     console.error('Batch update outlet products error:', err);
     return res.status(400).json({ success: false, error: err.message || 'Failed to batch update outlet products' });

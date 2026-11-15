@@ -463,6 +463,35 @@ class AppStorage {
     return product ? this.attachDynamicReviews(product) : undefined;
   }
 
+  private syncProductAssignmentAcrossOutlets(productId: string | number, assignedOutletIds: string[]) {
+    const prodIdStr = String(productId);
+    const assignedSet = new Set(assignedOutletIds);
+    let outletsChanged = false;
+
+    this.outlets = this.outlets.map((outlet) => {
+      if (!Array.isArray(outlet.assignedProductIds) || outlet.assignedProductIds.length === 0) {
+        return outlet;
+      }
+      const currentIds = outlet.assignedProductIds.map(String);
+      const shouldBeAssigned = assignedSet.has(outlet.id);
+      const isListed = currentIds.includes(prodIdStr);
+
+      if (shouldBeAssigned && !isListed) {
+        outletsChanged = true;
+        return { ...outlet, assignedProductIds: [...currentIds, prodIdStr] };
+      }
+      if (!shouldBeAssigned && isListed) {
+        outletsChanged = true;
+        return { ...outlet, assignedProductIds: currentIds.filter((id) => id !== prodIdStr) };
+      }
+      return outlet;
+    });
+
+    if (outletsChanged) {
+      this.saveOutlets();
+    }
+  }
+
   public createProduct(data: Partial<Product>): Product {
     this.init();
 
@@ -578,6 +607,10 @@ class AppStorage {
 
     this.products.unshift(newProduct);
     this.saveProducts();
+    this.syncProductAssignmentAcrossOutlets(
+      newProduct.id,
+      outletsConfig.map((o) => o.outletId)
+    );
     return this.attachDynamicReviews(newProduct);
   }
 
@@ -657,6 +690,12 @@ class AppStorage {
 
     this.products[index] = updated;
     this.saveProducts();
+    if (data.outlets !== undefined) {
+      this.syncProductAssignmentAcrossOutlets(
+        updated.id,
+        updatedOutlets.map((o) => o.outletId)
+      );
+    }
     return this.attachDynamicReviews(updated);
   }
 
@@ -705,6 +744,23 @@ class AppStorage {
     };
 
     this.saveProducts();
+    if (isAssigned !== undefined) {
+      const targetOutlet = this.outlets.find((o) => o.id === outletId);
+      if (targetOutlet && Array.isArray(targetOutlet.assignedProductIds) && targetOutlet.assignedProductIds.length > 0) {
+        const currentIds = targetOutlet.assignedProductIds.map(String);
+        const isListed = currentIds.includes(idStr);
+        let nextIds: string[] | null = null;
+        if (isAssigned === false && isListed) {
+          nextIds = currentIds.filter((id) => id !== idStr);
+        } else if (isAssigned === true && !isListed) {
+          nextIds = [...currentIds, idStr];
+        }
+        if (nextIds !== null) {
+          targetOutlet.assignedProductIds = nextIds;
+          this.saveOutlets();
+        }
+      }
+    }
     return this.products[index];
   }
 
@@ -744,6 +800,7 @@ class AppStorage {
     const deleted = this.products.length < initialLen;
     if (deleted) {
       this.saveProducts();
+      this.syncProductAssignmentAcrossOutlets(id, []);
     }
     return deleted;
   }

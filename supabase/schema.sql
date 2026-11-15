@@ -551,6 +551,7 @@ ALTER TABLE IF EXISTS public.profiles ADD COLUMN IF NOT EXISTS full_name TEXT;
 ALTER TABLE IF EXISTS public.profiles ADD COLUMN IF NOT EXISTS phone TEXT;
 ALTER TABLE IF EXISTS public.profiles ADD COLUMN IF NOT EXISTS role TEXT DEFAULT 'customer';
 ALTER TABLE IF EXISTS public.profiles ADD COLUMN IF NOT EXISTS outlet_id TEXT;
+ALTER TABLE IF EXISTS public.profiles ADD COLUMN IF NOT EXISTS assigned_outlet_ids TEXT[] DEFAULT '{}'::TEXT[];
 
 -- 10. ABOUTS TABLE (1:1 with Outlets for Dynamic About Page Customization)
 CREATE TABLE IF NOT EXISTS public.abouts (
@@ -645,6 +646,25 @@ AS $$
   SELECT COALESCE(
     (SELECT role = 'owner' FROM public.profiles WHERE id = auth.uid()),
     false
+  );
+$$;
+
+CREATE OR REPLACE FUNCTION public.is_outlet_manager_for(p_outlet_id TEXT)
+RETURNS BOOLEAN
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+SET search_path = public
+AS $$
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.profiles pr
+    WHERE pr.id = auth.uid()
+      AND LOWER(COALESCE(pr.role, '')) IN ('outlet_manager', 'manager')
+      AND (
+        pr.outlet_id = p_outlet_id
+        OR p_outlet_id = ANY(COALESCE(pr.assigned_outlet_ids, ARRAY[]::TEXT[]))
+      )
   );
 $$;
 
@@ -801,12 +821,12 @@ CREATE POLICY "Public Read Outlets" ON public.outlets
 CREATE POLICY "Outlets Modify Policy" ON public.outlets 
   FOR ALL USING (
     public.is_owner() OR 
-    (public.get_auth_role() = 'outlet_manager' AND public.get_auth_outlet_id() = id) OR
+    public.is_outlet_manager_for(id) OR
     auth.uid() IS NULL
   )
   WITH CHECK (
     public.is_owner() OR 
-    (public.get_auth_role() = 'outlet_manager' AND public.get_auth_outlet_id() = id) OR
+    public.is_outlet_manager_for(id) OR
     auth.uid() IS NULL
   );
 

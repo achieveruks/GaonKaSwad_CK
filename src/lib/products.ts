@@ -319,8 +319,18 @@ export async function updateOutletProductConfig(
         }).catch(() => {});
       } catch {}
       return updated;
-    } catch (err) {
-      console.warn('Supabase update outlet config error, falling back to API:', err);
+    } catch (supaErr: any) {
+      console.warn('Supabase update outlet config error, trying backend API sync:', supaErr);
+      const res = await fetch(`${API_BASE}/outlets/${outletId}/products/${productId}`, {
+        method: 'PATCH',
+        headers: getAuthHeaders(token),
+        body: JSON.stringify(config),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success && data.supabaseSynced) {
+        return data.product;
+      }
+      throw new Error(data.error || supaErr?.message || 'Failed to update product for outlet in database');
     }
   }
 
@@ -339,7 +349,7 @@ export async function updateOutletProductConfig(
 }
 
 /**
- * Batch update products configuration for an outlet (Owner action)
+ * Batch update products configuration for an outlet (Owner/Manager action)
  */
 export async function batchUpdateOutletProducts(
   outletId: string,
@@ -366,8 +376,18 @@ export async function batchUpdateOutletProducts(
         }).catch(() => {});
       } catch {}
       return supaUpdated;
-    } catch (err) {
-      console.warn('Supabase batch update failed, falling back to API:', err);
+    } catch (supaErr: any) {
+      console.warn('Supabase batch update failed, trying backend API sync:', supaErr);
+      const res = await fetch(`${API_BASE}/outlets/${outletId}/products`, {
+        method: 'PUT',
+        headers: getAuthHeaders(token),
+        body: JSON.stringify({ updates }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success && data.supabaseSynced) {
+        return fetchSupabaseProducts(true).catch(() => data.products);
+      }
+      throw new Error(data.error || supaErr?.message || 'Failed to save outlet menu changes to database');
     }
   }
 

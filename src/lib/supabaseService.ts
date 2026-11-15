@@ -373,6 +373,51 @@ export async function fetchSupabaseProductBySlug(slug: string): Promise<Product 
   };
 }
 
+async function syncProductAssignmentAcrossSupabaseOutlets(
+  productId: string | number,
+  assignedOutletIds: string[]
+): Promise<void> {
+  try {
+    const prodIdStr = String(productId);
+    const assignedSet = new Set(assignedOutletIds);
+    const { data: outletRows, error } = await supabase
+      .from('outlets')
+      .select('id, assigned_product_ids');
+    if (error || !Array.isArray(outletRows)) return;
+
+    const now = new Date().toISOString();
+    for (const row of outletRows) {
+      if (!Array.isArray(row.assigned_product_ids) || row.assigned_product_ids.length === 0) {
+        // Keep empty [] untouched so it does not turn into an accidental subset filter
+        continue;
+      }
+      const currentIds = row.assigned_product_ids.map(String);
+      const shouldBeAssigned = assignedSet.has(row.id);
+      const isCurrentlyListed = currentIds.includes(prodIdStr);
+
+      if (shouldBeAssigned && !isCurrentlyListed) {
+        await supabase
+          .from('outlets')
+          .update({
+            assigned_product_ids: [...currentIds, prodIdStr],
+            updated_at: now,
+          })
+          .eq('id', row.id);
+      } else if (!shouldBeAssigned && isCurrentlyListed) {
+        await supabase
+          .from('outlets')
+          .update({
+            assigned_product_ids: currentIds.filter((id: string) => id !== prodIdStr),
+            updated_at: now,
+          })
+          .eq('id', row.id);
+      }
+    }
+  } catch (err) {
+    console.warn('Syncing outlet assigned_product_ids error (non-fatal):', err);
+  }
+}
+
 export async function createSupabaseProduct(productData: Partial<Product>): Promise<Product> {
   if (!isSupabaseConfigured()) throw new Error('Supabase not configured');
 
@@ -392,7 +437,14 @@ export async function createSupabaseProduct(productData: Partial<Product>): Prom
 
   const { data, error } = await supabase.from('products').insert(payload).select().single();
   if (error) throw error;
-  return mapDbProductToProduct(data);
+  const created = mapDbProductToProduct(data);
+  const assignedOutletIds = Array.isArray(created.outlets)
+    ? created.outlets.map((o) => o.outletId)
+    : [];
+  if (assignedOutletIds.length > 0) {
+    await syncProductAssignmentAcrossSupabaseOutlets(created.id, assignedOutletIds);
+  }
+  return created;
 }
 
 export async function updateSupabaseProduct(id: string | number, productData: Partial<Product>): Promise<Product> {
@@ -409,7 +461,14 @@ export async function updateSupabaseProduct(id: string | number, productData: Pa
     .single();
 
   if (error) throw error;
-  return mapDbProductToProduct(data);
+  const updated = mapDbProductToProduct(data);
+  if (productData.outlets !== undefined) {
+    const assignedOutletIds = Array.isArray(updated.outlets)
+      ? updated.outlets.map((o) => o.outletId)
+      : [];
+    await syncProductAssignmentAcrossSupabaseOutlets(updated.id, assignedOutletIds);
+  }
+  return updated;
 }
 
 export async function deleteSupabaseProduct(id: string | number): Promise<boolean> {
@@ -417,6 +476,7 @@ export async function deleteSupabaseProduct(id: string | number): Promise<boolea
 
   const { error } = await supabase.from('products').delete().eq('id', String(id));
   if (error) throw error;
+  await syncProductAssignmentAcrossSupabaseOutlets(id, []);
   return true;
 }
 
@@ -460,6 +520,17 @@ export async function toggleSupabaseProductStock(id: string | number): Promise<P
   return mapDbProductToProduct(data);
 }
 
+function isMissingRpcError(err: any): boolean {
+  const code = String(err?.code || '');
+  const msg = String(err?.message || '').toLowerCase();
+  return (
+    code === '42883' ||
+    code === 'PGRST202' ||
+    msg.includes('could not find the function') ||
+    msg.includes('does not exist')
+  );
+}
+
 export async function updateSupabaseOutletProductConfig(
   outletId: string,
   productId: string | number,
@@ -472,6 +543,27 @@ export async function updateSupabaseOutletProductConfig(
     portionsLeft?: number | null;
   }
 ): Promise<Product> {
+  // 1. Prefer scoped SECURITY DEFINER RPC (works atomically for both owners and outlet managers)
+  const { data: rpcData, error: rpcErr } = await supabase.rpc('update_outlet_product_config', {
+    p_outlet_id: outletId,
+    p_product_id: String(productId),
+    p_config: {
+      ...(config.inStock !== undefined ? { inStock: config.inStock } : {}),
+      ...(config.isFeatured !== undefined ? { isFeatured: config.isFeatured } : {}),
+      ...(config.isBestseller !== undefined ? { isBestseller: config.isBestseller } : {}),
+      ...(config.isChefSpecial !== undefined ? { isChefSpecial: config.isChefSpecial } : {}),
+      ...(config.isAssigned !== undefined ? { isAssigned: config.isAssigned } : {}),
+      ...(config.portionsLeft !== undefined ? { portionsLeft: config.portionsLeft } : {}),
+    },
+  });
+  if (!rpcErr && rpcData) {
+    return mapDbProductToProduct(rpcData);
+  }
+  if (rpcErr && !isMissingRpcError(rpcErr)) {
+    throw rpcErr;
+  }
+
+  // 2. Fallback to direct table update if RPC migration has not been applied yet
   const { data: existing, error: fetchErr } = await supabase
     .from('products')
     .select('*')
@@ -518,6 +610,39 @@ export async function updateSupabaseOutletProductConfig(
     .single();
 
   if (error) throw error;
+
+  if (config.isAssigned !== undefined) {
+    try {
+      const { data: outletRow } = await supabase
+        .from('outlets')
+        .select('id, assigned_product_ids')
+        .eq('id', outletId)
+        .maybeSingle();
+      if (outletRow && Array.isArray(outletRow.assigned_product_ids) && outletRow.assigned_product_ids.length > 0) {
+        const prodIdStr = String(productId);
+        const currentIds = outletRow.assigned_product_ids.map(String);
+        const isListed = currentIds.includes(prodIdStr);
+        let nextIds: string[] | null = null;
+        if (config.isAssigned === false && isListed) {
+          nextIds = currentIds.filter((id: string) => id !== prodIdStr);
+        } else if (config.isAssigned === true && !isListed) {
+          nextIds = [...currentIds, prodIdStr];
+        }
+        if (nextIds !== null) {
+          await supabase
+            .from('outlets')
+            .update({
+              assigned_product_ids: nextIds,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', outletId);
+        }
+      }
+    } catch (syncErr) {
+      console.warn('Syncing single outlet assigned_product_ids error (non-fatal):', syncErr);
+    }
+  }
+
   return mapDbProductToProduct(data);
 }
 
@@ -535,17 +660,41 @@ export async function batchUpdateSupabaseOutletProducts(
 ): Promise<Product[]> {
   if (!isSupabaseConfigured()) throw new Error('Supabase not configured');
 
+  // 1. Prefer atomic SECURITY DEFINER RPC (handles manager permissions & skips unchanged rows server-side)
+  const rpcUpdates = updates.map((u) => ({
+    productId: String(u.productId),
+    ...(u.isAssigned !== undefined ? { isAssigned: u.isAssigned } : {}),
+    ...(u.inStock !== undefined ? { inStock: u.inStock } : {}),
+    ...(u.isFeatured !== undefined ? { isFeatured: u.isFeatured } : {}),
+    ...(u.isBestseller !== undefined ? { isBestseller: u.isBestseller } : {}),
+    ...(u.isChefSpecial !== undefined ? { isChefSpecial: u.isChefSpecial } : {}),
+    ...(u.portionsLeft !== undefined ? { portionsLeft: u.portionsLeft } : {}),
+  }));
+  const { error: rpcErr } = await supabase.rpc('batch_update_outlet_products', {
+    p_outlet_id: outletId,
+    p_updates: rpcUpdates,
+  });
+  if (!rpcErr) {
+    return fetchSupabaseProducts(true);
+  }
+  if (!isMissingRpcError(rpcErr)) {
+    throw rpcErr;
+  }
+
+  // 2. Fallback to direct table updates (only writing rows that actually changed)
   const { data: dbProducts, error: fetchErr } = await supabase.from('products').select('*');
   if (fetchErr) throw fetchErr;
 
   const currentProducts = (dbProducts || []).map(mapDbProductToProduct);
   const assignedProductIds: (string | number)[] = [];
+  const now = new Date().toISOString();
 
   for (const item of updates) {
     const prod = currentProducts.find((p) => String(p.id) === String(item.productId));
     if (!prod) continue;
 
-    let outlets = Array.isArray(prod.outlets) ? [...prod.outlets] : [];
+    const prevOutlets = Array.isArray(prod.outlets) ? prod.outlets : [];
+    let outlets = [...prevOutlets];
     if (item.isAssigned === false) {
       outlets = outlets.filter((o) => o.outletId !== outletId);
     } else {
@@ -572,26 +721,33 @@ export async function batchUpdateSupabaseOutletProducts(
       }
     }
 
-    await supabase
+    if (JSON.stringify(prevOutlets) === JSON.stringify(outlets)) {
+      continue;
+    }
+
+    const { error: updateErr } = await supabase
       .from('products')
       .update({
         outlets,
-        updated_at: new Date().toISOString(),
+        updated_at: now,
       })
       .eq('id', String(prod.id));
+
+    if (updateErr) {
+      throw updateErr;
+    }
   }
 
   // Also sync assigned_product_ids on the outlet row itself
-  try {
-    await supabase
-      .from('outlets')
-      .update({
-        assigned_product_ids: assignedProductIds,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', outletId);
-  } catch (err) {
-    console.warn('Syncing outlet assigned_product_ids error (non-fatal):', err);
+  const { error: outletSyncErr } = await supabase
+    .from('outlets')
+    .update({
+      assigned_product_ids: assignedProductIds,
+      updated_at: now,
+    })
+    .eq('id', outletId);
+  if (outletSyncErr) {
+    console.warn('Syncing outlet assigned_product_ids error (non-fatal):', outletSyncErr);
   }
 
   return fetchSupabaseProducts(true);

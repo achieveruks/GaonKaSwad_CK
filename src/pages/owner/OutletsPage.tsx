@@ -370,9 +370,12 @@ export const OutletsPage: React.FC = () => {
 
     allProducts.forEach((p) => {
       if (outletId) {
-        const isAssigned = hasAssignedIds
-          ? assignedIds.includes(String(p.id))
-          : isProductServedAtOutlet(p, outletId);
+        const hasProductOutlets = Array.isArray(p.outlets) && p.outlets.length > 0;
+        const isAssigned = hasProductOutlets
+          ? p.outlets!.some((o) => o.outletId === outletId)
+          : hasAssignedIds
+            ? assignedIds.includes(String(p.id))
+            : isProductServedAtOutlet(p, outletId);
 
         states[p.id] = {
           productId: p.id,
@@ -742,7 +745,11 @@ export const OutletsPage: React.FC = () => {
       const next = { ...prev };
       Object.keys(next).forEach((key) => {
         if (next[key].isAssigned) {
-          next[key] = { ...next[key], inStock };
+          next[key] = {
+            ...next[key],
+            inStock,
+            portionsLeft: inStock && next[key].portionsLeft === 0 ? null : next[key].portionsLeft,
+          };
         }
       });
       return next;
@@ -2594,7 +2601,7 @@ export const OutletsPage: React.FC = () => {
                                         [product.id]: {
                                           ...itemState,
                                           portionsLeft: count,
-                                          inStock: count === 0 ? false : itemState.inStock,
+                                          inStock: count === 0 ? false : count !== null && count > 0 ? true : itemState.inStock,
                                         },
                                       }));
                                     }}
@@ -2618,11 +2625,13 @@ export const OutletsPage: React.FC = () => {
                                 <button
                                   type="button"
                                   onClick={() => {
+                                    const nextInStock = !itemState.inStock;
                                     setOutletItemStates((prev) => ({
                                       ...prev,
                                       [product.id]: {
                                         ...itemState,
-                                        inStock: !itemState.inStock,
+                                        inStock: nextInStock,
+                                        portionsLeft: nextInStock && itemState.portionsLeft === 0 ? null : itemState.portionsLeft,
                                       },
                                     }));
                                   }}

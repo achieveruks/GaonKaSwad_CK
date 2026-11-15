@@ -349,26 +349,20 @@ export function isProductServedAtOutlet(product: Product, outletId?: string): bo
   if (!outletId) return true;
   if (!product) return false;
 
-  // 1. Check explicit outlet config on product
+  // 1. Explicit outlet config on product is authoritative when present
   if (product.outlets && Array.isArray(product.outlets) && product.outlets.length > 0) {
-    if (product.outlets.some((o) => o.outletId === outletId)) {
-      return true;
-    }
+    return product.outlets.some((o) => o.outletId === outletId);
   }
 
-  // 2. Check outlet's assignedProductIds list
+  // 2. Fallback: Check outlet's assignedProductIds list when product has no explicit outlets array
   const outlet = cachedOutlets.find((o) => o.id === outletId);
   if (outlet && Array.isArray(outlet.assignedProductIds) && outlet.assignedProductIds.length > 0) {
     const prodIdStr = String(product.id);
     return outlet.assignedProductIds.some((id) => String(id) === prodIdStr);
   }
 
-  // 3. If product has empty outlet restrictions
-  if (!product.outlets || product.outlets.length === 0) {
-    return true;
-  }
-
-  return false;
+  // 3. Product has no outlet restrictions
+  return true;
 }
 
 /**

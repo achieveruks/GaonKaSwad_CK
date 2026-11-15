@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useNavigation } from '../../context/NavigationContext';
 import { useProducts } from '../../context/ProductContext';
@@ -94,6 +94,7 @@ export const ManagerDashboardPage: React.FC = () => {
   const [modalMenuCategory, setModalMenuCategory] = useState<string>('all');
   const [modalMenuTab, setModalMenuTab] = useState<'menu' | 'specials' | 'availability'>('menu');
   const [isSavingMenu, setIsSavingMenu] = useState(false);
+  const dirtyProductIdsRef = useRef<Set<string>>(new Set());
 
   // Delivery Zones Modal State
   const [isZoneModalOpen, setIsZoneModalOpen] = useState(false);
@@ -181,12 +182,14 @@ export const ManagerDashboardPage: React.FC = () => {
   useEffect(() => {
     // 1. Periodic poll every 5 seconds so portion updates and outlet changes appear live without manual refresh
     const interval = setInterval(() => {
-      fetchData(true);
+      if (!isSavingMenu) {
+        fetchData(true);
+      }
     }, 5000);
 
     // 2. Refresh immediately when manager switches back to tab or focuses window
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
+      if (document.visibilityState === 'visible' && !isSavingMenu) {
         fetchData(true);
       }
     };
@@ -198,7 +201,7 @@ export const ManagerDashboardPage: React.FC = () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('focus', handleVisibilityChange);
     };
-  }, [fetchData]);
+  }, [fetchData, isSavingMenu]);
 
   // Dynamic scoping for the logged-in manager (Single vs. Multiple outlets)
   const managedOutlets = useMemo(() => {
@@ -345,6 +348,7 @@ export const ManagerDashboardPage: React.FC = () => {
   // Open Manage Menu Modal
   const handleOpenMenuModal = () => {
     if (!currentOutlet) return;
+    dirtyProductIdsRef.current.clear();
     refreshProducts().catch(() => {});
     const states: Record<string | number, OutletProductItemState> = {};
     const outletId = currentOutlet.id;
@@ -354,9 +358,13 @@ export const ManagerDashboardPage: React.FC = () => {
     const hasAssignedIds = assignedIds.length > 0;
 
     allProducts.forEach((p) => {
-      const isAssigned = hasAssignedIds
-        ? assignedIds.includes(String(p.id))
-        : isProductServedAtOutlet(p, outletId);
+      const hasProductOutlets = Array.isArray(p.outlets) && p.outlets.length > 0;
+      const isAssigned = hasProductOutlets
+        ? p.outlets!.some((o) => o.outletId === outletId)
+        : hasAssignedIds
+          ? assignedIds.includes(String(p.id))
+          : isProductServedAtOutlet(p, outletId);
+      const rawPortions = getProductPortionsLeftAtOutlet(p, outletId);
 
       states[p.id] = {
         productId: p.id,
@@ -365,7 +373,7 @@ export const ManagerDashboardPage: React.FC = () => {
         isFeatured: isProductFeaturedAtOutlet(p, outletId),
         isBestseller: isProductBestsellerAtOutlet(p, outletId),
         isChefSpecial: isProductChefSpecialAtOutlet(p, outletId),
-        portionsLeft: getProductPortionsLeftAtOutlet(p, outletId),
+        portionsLeft: rawPortions === undefined ? null : rawPortions,
       };
     });
 
@@ -376,9 +384,9 @@ export const ManagerDashboardPage: React.FC = () => {
     setIsMenuModalOpen(true);
   };
 
-  // Keep open Manage Menu modal synchronized with realtime product and portion updates
+  // Keep open Manage Menu modal synchronized with realtime updates for untouched items only
   useEffect(() => {
-    if (!isMenuModalOpen || !currentOutlet) return;
+    if (!isMenuModalOpen || !currentOutlet || isSavingMenu) return;
     const outletId = currentOutlet.id;
     const assignedIds = Array.isArray(currentOutlet.assignedProductIds)
       ? currentOutlet.assignedProductIds.map(String)
@@ -390,11 +398,18 @@ export const ManagerDashboardPage: React.FC = () => {
       const next = { ...prev };
 
       allProducts.forEach((p) => {
+        if (dirtyProductIdsRef.current.has(String(p.id))) {
+          return;
+        }
         const cur = next[p.id];
-        const isAssigned = hasAssignedIds
-          ? assignedIds.includes(String(p.id))
-          : isProductServedAtOutlet(p, outletId);
-        const livePortions = getProductPortionsLeftAtOutlet(p, outletId);
+        const hasProductOutlets = Array.isArray(p.outlets) && p.outlets.length > 0;
+        const isAssigned = hasProductOutlets
+          ? p.outlets!.some((o) => o.outletId === outletId)
+          : hasAssignedIds
+            ? assignedIds.includes(String(p.id))
+            : isProductServedAtOutlet(p, outletId);
+        const rawLivePortions = getProductPortionsLeftAtOutlet(p, outletId);
+        const livePortions = rawLivePortions === undefined ? null : rawLivePortions;
         const liveInStock = isProductInStockAtOutlet(p, outletId);
         const liveFeatured = isProductFeaturedAtOutlet(p, outletId);
         const liveBestseller = isProductBestsellerAtOutlet(p, outletId);
@@ -412,6 +427,7 @@ export const ManagerDashboardPage: React.FC = () => {
           };
           hasChanges = true;
         } else if (
+          cur.isAssigned !== isAssigned ||
           cur.portionsLeft !== livePortions ||
           cur.inStock !== liveInStock ||
           cur.isFeatured !== liveFeatured ||
@@ -420,6 +436,7 @@ export const ManagerDashboardPage: React.FC = () => {
         ) {
           next[p.id] = {
             ...cur,
+            isAssigned,
             portionsLeft: livePortions,
             inStock: liveInStock,
             isFeatured: liveFeatured,
@@ -432,9 +449,10 @@ export const ManagerDashboardPage: React.FC = () => {
 
       return hasChanges ? next : prev;
     });
-  }, [allProducts, isMenuModalOpen, currentOutlet]);
+  }, [allProducts, isMenuModalOpen, currentOutlet, isSavingMenu]);
 
   const handleToggleItemAssigned = (productId: string | number) => {
+    dirtyProductIdsRef.current.add(String(productId));
     setOutletItemStates((prev) => {
       const cur = prev[productId];
       if (!cur) return prev;
@@ -449,16 +467,18 @@ export const ManagerDashboardPage: React.FC = () => {
   };
 
   const handleSetItemPortions = (productId: string | number, portions: number | null) => {
+    dirtyProductIdsRef.current.add(String(productId));
     setOutletItemStates((prev) => {
       const cur = prev[productId];
       if (!cur) return prev;
+      const nextInStock =
+        portions === 0 ? false : portions !== null && portions > 0 ? true : cur.inStock;
       return {
         ...prev,
         [productId]: {
           ...cur,
           portionsLeft: portions,
-          // If manager sets portions to 0, mark inStock according to convention or keep inStock
-          inStock: portions === 0 ? false : cur.inStock,
+          inStock: nextInStock,
         },
       };
     });
@@ -468,9 +488,21 @@ export const ManagerDashboardPage: React.FC = () => {
     productId: string | number,
     field: 'inStock' | 'isFeatured' | 'isBestseller' | 'isChefSpecial'
   ) => {
+    dirtyProductIdsRef.current.add(String(productId));
     setOutletItemStates((prev) => {
       const cur = prev[productId];
       if (!cur) return prev;
+      if (field === 'inStock') {
+        const nextInStock = !cur.inStock;
+        return {
+          ...prev,
+          [productId]: {
+            ...cur,
+            inStock: nextInStock,
+            portionsLeft: nextInStock && cur.portionsLeft === 0 ? null : cur.portionsLeft,
+          },
+        };
+      }
       return {
         ...prev,
         [productId]: {
@@ -485,6 +517,7 @@ export const ManagerDashboardPage: React.FC = () => {
     setOutletItemStates((prev) => {
       const updated: Record<string | number, OutletProductItemState> = {};
       Object.keys(prev).forEach((key) => {
+        dirtyProductIdsRef.current.add(String(key));
         updated[key] = {
           ...prev[key],
           isAssigned: select,
@@ -498,9 +531,12 @@ export const ManagerDashboardPage: React.FC = () => {
     setOutletItemStates((prev) => {
       const updated: Record<string | number, OutletProductItemState> = {};
       Object.keys(prev).forEach((key) => {
+        dirtyProductIdsRef.current.add(String(key));
+        const cur = prev[key];
         updated[key] = {
-          ...prev[key],
+          ...cur,
           inStock,
+          portionsLeft: inStock && cur.portionsLeft === 0 ? null : cur.portionsLeft,
         };
       });
       return updated;
@@ -516,14 +552,7 @@ export const ManagerDashboardPage: React.FC = () => {
         .filter((s) => s.isAssigned)
         .map((s) => String(s.productId));
 
-      // 1. Update outlet assignedProductIds
-      await updateOutletApi(
-        currentOutlet.id,
-        { assignedProductIds: assignedIds },
-        token || undefined
-      );
-
-      // 2. Batch update product configs
+      // 1. Batch update product configs (includes syncing outlet assignedProductIds in DB/RPC)
       const updates = itemStateList.map((s) => ({
         productId: s.productId,
         isAssigned: s.isAssigned,
@@ -535,9 +564,22 @@ export const ManagerDashboardPage: React.FC = () => {
       }));
 
       await batchUpdateOutletProducts(currentOutlet.id, updates);
-      await refreshProducts();
-      await fetchData();
 
+      // 2. Also ensure outlet assignedProductIds API stays consistent
+      try {
+        await updateOutletApi(
+          currentOutlet.id,
+          { assignedProductIds: assignedIds },
+          token || undefined
+        );
+      } catch (outletErr) {
+        console.warn('Non-fatal assignedProductIds outlet update notice:', outletErr);
+      }
+
+      await refreshProducts();
+      await fetchData(true);
+
+      dirtyProductIdsRef.current.clear();
       setIsMenuModalOpen(false);
       showFeedback('success', `Menu and stock updated for ${currentOutlet.name}!`);
     } catch (err: any) {
