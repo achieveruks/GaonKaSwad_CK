@@ -987,12 +987,6 @@ class AppStorage {
       expCard3Title: '❤️ Your Experience',
       expCard3Header: 'We Listen & Improve',
       expCard3Description: 'Your feedback helps us get better. Every rating, review, and suggestion helps shape the Swad Click experience.',
-      utsavPromoEnabled: false,
-      utsavPromoHeading: 'A Festival of Flavours!',
-      utsavPromoDescription: 'Celebrate every occasion with our exclusive Utsav Specials, freshly prepared with heritage recipes and pure desi ghee.',
-      utsavPromoCtaText: 'Explore Utsav Specials',
-      utsavPromoImage: 'https://images.unsplash.com/photo-1576871337632-b9aef4c17ab9?q=80&w=1200&auto=format&fit=crop',
-      utsavFestivalName: 'Utsav Specials',
     };
     return fallback;
   }
@@ -1347,7 +1341,7 @@ class AppStorage {
     let nextSeq = 16;
     for (const o of this.orders) {
       if (o.orderId) {
-        const match = o.orderId.match(/(?:SWADCLK|GKSWAD|GKS)-#?(\d+)/i);
+        const match = o.orderId.match(/SWADCLK-#?(\d+)/i);
         if (match && match[1]) {
           const num = parseInt(match[1], 10);
           if (!isNaN(num) && num >= nextSeq) {
@@ -1362,7 +1356,6 @@ class AppStorage {
           .trim()
           .replace(/^#+/, '')
           .replace(/SWADCLK-#/i, 'SWADCLK-')
-          .replace(/GKSWAD-#?/i, 'SWADCLK-')
           .replace(/_PB$/i, '-PB')
       : '';
     const baseFromInput =
@@ -3060,7 +3053,10 @@ class AppStorage {
     this.init();
     let list = [...this.festiveEvents];
     if (outletId) {
-      list = list.filter((e) => e.outletId === outletId);
+      list = list.filter((e: any) => {
+        const ids = Array.isArray(e.outletIds) ? e.outletIds : [];
+        return ids.includes(outletId) || e.outletId === outletId;
+      });
     }
     if (onlyActive) {
       list = list.filter((e) => e.status === 'active');
@@ -3077,9 +3073,16 @@ class AppStorage {
     this.init();
     const id = data.id || `fest-${Date.now().toString(36)}`;
     const now = new Date().toISOString();
+    const legacyOutletId = (data as any).outletId ? [String((data as any).outletId)] : [];
+    const outletIds = Array.from(
+      new Set([
+        ...(Array.isArray(data.outletIds) ? data.outletIds.map(String).filter(Boolean) : []),
+        ...legacyOutletId,
+      ])
+    );
     const newEvent: FestiveEvent = {
       id,
-      outletId: data.outletId || '',
+      outletIds,
       name: (data.name || '').trim(),
       slug: (data.slug || data.name || '').toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, ''),
       description: data.description || '',
@@ -3102,9 +3105,27 @@ class AppStorage {
     if (idx < 0) {
       throw new Error(`Festival collection ${id} not found`);
     }
+    const existing = this.festiveEvents[idx] as any;
+    const legacyIncoming = (data as any).outletId ? [String((data as any).outletId)] : [];
+    const hasOutletUpdate = data.outletIds !== undefined || legacyIncoming.length > 0;
+    const outletIds = hasOutletUpdate
+      ? Array.from(
+          new Set([
+            ...(Array.isArray(data.outletIds) ? data.outletIds.map(String).filter(Boolean) : []),
+            ...legacyIncoming,
+          ])
+        )
+      : Array.from(
+          new Set([
+            ...(Array.isArray(existing.outletIds) ? existing.outletIds : []),
+            ...(existing.outletId ? [String(existing.outletId)] : []),
+          ])
+        );
+    const { outletId: _removed, ...cleanExisting } = existing;
     const updated: FestiveEvent = {
-      ...this.festiveEvents[idx],
+      ...cleanExisting,
       ...data,
+      outletIds,
       id,
       updatedAt: new Date().toISOString(),
     };

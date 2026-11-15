@@ -183,7 +183,7 @@ The Owner Dashboard provides consolidated visibility across all operating cloud 
 14. `public.profiles` — Role-based authorization profiles (`owner`, `outlet_manager`, `customer`) linked to auth.
 
 ### 5.2 Key PostgreSQL Triggers
-- `trg_generate_order_id`: Before INSERT on `public.orders`. Formats sequential human-readable IDs (`GKSWAD-00001`, `GKSWAD-00002`).
+- `trg_generate_order_id`: Before INSERT on `public.orders`. Formats sequential human-readable IDs (`SWADCLK-00001`, `SWADCLK-00002`).
 - `trg_decrement_portions_on_order`: After INSERT on `public.orders`. Atomically decrements `portionsLeft` in `public.products.outlets` JSONB.
 - `handle_new_user`: After INSERT on `auth.users`. Automatically provisions a `public.profiles` record with role assignment.
 

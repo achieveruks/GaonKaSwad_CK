@@ -3653,7 +3653,7 @@ async function getNextServerOrderId(): Promise<string> {
     let maxNum = 15;
     const scanRef = (ref?: string | null) => {
       if (!ref) return;
-      const match = String(ref).match(/(?:SWADCLK|GKSWAD|GKS)-#?0*(\d+)/i);
+      const match = String(ref).match(/SWADCLK-#?0*(\d+)/i);
       if (match && match[1]) {
         const num = parseInt(match[1], 10);
         if (!isNaN(num) && num > maxNum) {
@@ -4206,7 +4206,6 @@ app.post('/api/orders', async (req, res) => {
             .trim()
             .replace(/^#+/, '')
             .replace(/SWADCLK-#/i, 'SWADCLK-')
-            .replace(/GKSWAD-#?/i, 'SWADCLK-')
             .replace(/(-I|-PB|_PB)$/i, '')
         : '';
       if (!baseRef || !/^SWADCLK-\d+$/i.test(baseRef)) {
@@ -4890,10 +4889,11 @@ app.post('/api/orders/checkout', async (req, res) => {
       for (const evId of festiveEventIds) {
         const ev = festiveEventMap.get(evId);
         if (!ev) continue;
-        if (ev.outlet_id && String(ev.outlet_id) !== outletId) {
+        const evOutletIds = extractEventOutletIds(ev);
+        if (evOutletIds.length > 0 && !evOutletIds.includes(String(outletId))) {
           return res.status(400).json({
             success: false,
-            error: `Festive collection "${ev.name}" belongs to another kitchen outlet.`,
+            error: `Festive collection "${ev.name}" is not active for this kitchen outlet.`,
           });
         }
         if (ev.status && ev.status !== 'active') {
@@ -5288,7 +5288,7 @@ app.post('/api/orders/checkout', async (req, res) => {
         throw new Error(insErr?.message || `Failed to create order ${supaOrderPayload.order_number}`);
       }
 
-      // Guard: if a stale DB BEFORE INSERT trigger overwrote order_id/order_number (e.g. GKSWAD-*), restore it immediately
+      // Guard: if a stale DB BEFORE INSERT trigger overwrote order_id/order_number, restore it immediately
       if (
         row.order_id !== supaOrderPayload.order_id ||
         row.order_number !== supaOrderPayload.order_number
@@ -5915,11 +5915,29 @@ app.post('/api/orders/:id/collect-balance', requireOwnerAuth, async (req: Authen
   }
 });
 
+function extractEventOutletIds(row: any): string[] {
+  if (!row) return [];
+  const set = new Set<string>();
+  const rawArr = Array.isArray(row.outletIds)
+    ? row.outletIds
+    : Array.isArray(row.outlet_ids)
+      ? row.outlet_ids
+      : [];
+  rawArr.forEach((id: any) => {
+    const clean = String(id || '').trim();
+    if (clean) set.add(clean);
+  });
+  const primary = String(row.outletId ?? row.outlet_id ?? '').trim();
+  if (primary) set.add(primary);
+  return Array.from(set);
+}
+
 function formatFestiveEventResponse(row: any) {
   if (!row) return row;
+  const outletIds = extractEventOutletIds(row);
   return {
     id: row.id,
-    outletId: row.outletId ?? row.outlet_id ?? '',
+    outletIds,
     name: row.name || '',
     slug: row.slug || '',
     description: row.description || '',
@@ -5940,9 +5958,6 @@ app.get('/api/festive-events', async (req, res) => {
     const active = req.query.active === 'true' || req.query.status === 'active';
 
     let query = serverSupabase.from('festive_events').select('*').order('festival_date', { ascending: true });
-    if (outletId) {
-      query = query.eq('outlet_id', outletId);
-    }
     if (active) {
       query = query.eq('status', 'active');
     }
@@ -5954,7 +5969,15 @@ app.get('/api/festive-events', async (req, res) => {
       return res.json({ success: true, festiveEvents: stored });
     }
 
-    return res.json({ success: true, festiveEvents: (data || []).map(formatFestiveEventResponse) });
+    let formatted = (data || []).map(formatFestiveEventResponse);
+    if (outletId) {
+      const target = String(outletId).trim();
+      formatted = formatted.filter(
+        (ev: any) => Array.isArray(ev.outletIds) && ev.outletIds.includes(target)
+      );
+    }
+
+    return res.json({ success: true, festiveEvents: formatted });
   } catch (err: any) {
     console.error('Fetch festive events error:', err);
     return res.status(500).json({ success: false, error: 'Failed to fetch festive events' });
@@ -5975,21 +5998,24 @@ app.get('/api/festive-events/overview', requireOwnerAuth, async (req: Authentica
 
     // 1. Fetch festive events
     let eventsList: any[] = [];
-    let eventsQuery = serverSupabase.from('festive_events').select('*').order('festival_date', { ascending: true });
-    if (requestedOutletId) {
-      eventsQuery = eventsQuery.eq('outlet_id', requestedOutletId);
-    } else if (allowedOutletIds && allowedOutletIds.length > 0) {
-      eventsQuery = eventsQuery.in('outlet_id', allowedOutletIds);
-    }
+    const { data: supaEvents, error: evErr } = await serverSupabase
+      .from('festive_events')
+      .select('*')
+      .order('festival_date', { ascending: true });
 
-    const { data: supaEvents, error: evErr } = await eventsQuery;
     if (evErr) {
       eventsList = productStorage.getFestiveEvents(requestedOutletId);
-      if (allowedOutletIds) {
-        eventsList = eventsList.filter((ev) => allowedOutletIds.includes(ev.outletId));
-      }
     } else {
       eventsList = (supaEvents || []).map(formatFestiveEventResponse);
+    }
+
+    if (requestedOutletId) {
+      const target = String(requestedOutletId).trim();
+      eventsList = eventsList.filter((ev) => extractEventOutletIds(ev).includes(target));
+    } else if (allowedOutletIds) {
+      eventsList = eventsList.filter((ev) =>
+        extractEventOutletIds(ev).some((id) => allowedOutletIds.includes(id))
+      );
     }
 
     const activeEvents = eventsList.filter((ev) => ev.status === 'active');
@@ -6039,22 +6065,27 @@ app.get('/api/festive-events/overview', requireOwnerAuth, async (req: Authentica
     let specialPackagingUnits = 0;
 
     const eventSummaries = activeEvents.map((ev) => {
+      const evOutlets = extractEventOutletIds(ev);
+      const summaryOutletId = requestedOutletId || evOutlets[0] || '';
       const evProducts = allFestiveProducts.filter(
         (p: any) => String(p.festive_event_id ?? p.festiveEventId ?? '') === String(ev.id)
       );
-      const evOrders = allFestiveOrders.filter(
-        (o: any) =>
-          String(o.festive_event_id ?? o.festiveEventId ?? '') === String(ev.id) &&
-          String(o.outlet_id ?? o.outletId ?? '') === String(ev.outletId)
-      );
-      const summary = computeProductionSummaryForEvent(ev.outletId, ev.id, evProducts, evOrders);
+      const evOrders = allFestiveOrders.filter((o: any) => {
+        const orderEvId = String(o.festive_event_id ?? o.festiveEventId ?? '');
+        const orderOutId = String(o.outlet_id ?? o.outletId ?? '');
+        if (orderEvId !== String(ev.id)) return false;
+        if (requestedOutletId) return orderOutId === String(requestedOutletId);
+        if (allowedOutletIds) return allowedOutletIds.includes(orderOutId);
+        return evOutlets.length === 0 || evOutlets.includes(orderOutId);
+      });
+      const summary = computeProductionSummaryForEvent(summaryOutletId, ev.id, evProducts, evOrders);
       totalBookedUnits += summary.totalBookedUnits;
       totalExtraBuffer += summary.totalExtraBuffer;
       specialPackagingUnits += summary.specialPackagingUnits;
 
       return {
         id: ev.id,
-        outletId: ev.outletId,
+        outletIds: evOutlets,
         name: ev.name,
         festivalDate: ev.festivalDate,
         bookingStartAt: ev.bookingStartAt,
@@ -6114,13 +6145,16 @@ app.get('/api/festive-events/:id', async (req, res) => {
 app.post('/api/festive-events', requireOwnerAuth, async (req: AuthenticatedRequest, res) => {
   try {
     const body = req.body;
-    if (!body?.name || !String(body.name).trim() || !body?.outletId) {
-      return res.status(400).json({ success: false, error: 'Festival name and outletId are required' });
+    const targetOutletIds = extractEventOutletIds(body || {});
+    if (!body?.name || !String(body.name).trim() || targetOutletIds.length === 0) {
+      return res.status(400).json({ success: false, error: 'Festival name and at least one outlet are required' });
     }
 
-    const access = await resolveStaffOutletAccess(req, body.outletId);
-    if (!access.allowed) {
-      return res.status(access.status || 403).json({ success: false, error: access.error });
+    for (const outId of targetOutletIds) {
+      const access = await resolveStaffOutletAccess(req, outId);
+      if (!access.allowed) {
+        return res.status(access.status || 403).json({ success: false, error: access.error });
+      }
     }
 
     const now = new Date().toISOString();
@@ -6131,7 +6165,7 @@ app.post('/api/festive-events', requireOwnerAuth, async (req: AuthenticatedReque
       .replace(/(^-|-$)/g, '');
 
     const payload: any = {
-      outlet_id: body.outletId,
+      outlet_ids: targetOutletIds,
       name: String(body.name).trim(),
       slug,
       description: body.description || '',
@@ -6150,7 +6184,7 @@ app.post('/api/festive-events', requireOwnerAuth, async (req: AuthenticatedReque
     const { data, error } = await serverSupabase.from('festive_events').insert(payload).select().single();
     if (error) {
       console.warn('Supabase festive event insert error, fallback to storage:', error.message);
-      const stored = productStorage.createFestiveEvent(body);
+      const stored = productStorage.createFestiveEvent({ ...body, outletIds: targetOutletIds });
       return res.json({ success: true, festiveEvent: stored });
     }
 
@@ -6174,26 +6208,43 @@ app.put('/api/festive-events/:id', requireOwnerAuth, async (req: AuthenticatedRe
     // Verify existing outlet ownership for managers
     const { data: existingEv } = await serverSupabase
       .from('festive_events')
-      .select('outlet_id')
+      .select('*')
       .eq('id', id)
       .maybeSingle();
-    const existingOutletId = existingEv?.outlet_id || productStorage.getFestiveEventById(id)?.outletId;
+    const existingRecord = existingEv || productStorage.getFestiveEventById(id);
+    const existingOutletIds = extractEventOutletIds(existingRecord || {});
 
-    const existingAccess = await resolveStaffOutletAccess(req, existingOutletId || null);
-    if (!existingAccess.allowed) {
-      return res.status(existingAccess.status || 403).json({ success: false, error: existingAccess.error });
+    const baseAccess = await resolveStaffOutletAccess(req, null);
+    if (!baseAccess.allowed) {
+      return res.status(baseAccess.status || 403).json({ success: false, error: baseAccess.error });
     }
-    if (body.outletId !== undefined) {
-      const targetAccess = await resolveStaffOutletAccess(req, body.outletId);
-      if (!targetAccess.allowed) {
-        return res.status(targetAccess.status || 403).json({ success: false, error: targetAccess.error });
+    if (!baseAccess.isOwner && existingOutletIds.length > 0) {
+      const assigned = baseAccess.assignedOutletIds || [];
+      if (!existingOutletIds.some((oid) => assigned.includes(oid))) {
+        return res.status(403).json({ success: false, error: 'Forbidden. Outlet managers can only edit events for their assigned outlet.' });
+      }
+    }
+
+    const hasOutletUpdate = body.outletIds !== undefined || body.outlet_ids !== undefined || body.outletId !== undefined;
+    const nextOutletIds = hasOutletUpdate ? extractEventOutletIds(body) : [];
+    if (hasOutletUpdate) {
+      if (nextOutletIds.length === 0) {
+        return res.status(400).json({ success: false, error: 'At least one kitchen outlet must remain selected.' });
+      }
+      if (!baseAccess.isOwner) {
+        const assigned = baseAccess.assignedOutletIds || [];
+        if (!nextOutletIds.every((oid) => assigned.includes(oid))) {
+          return res.status(403).json({ success: false, error: 'Forbidden. Managers can only tag outlets assigned to them.' });
+        }
       }
     }
 
     const now = new Date().toISOString();
 
     const payload: any = { updated_at: now };
-    if (body.outletId !== undefined) payload.outlet_id = body.outletId;
+    if (hasOutletUpdate) {
+      payload.outlet_ids = nextOutletIds;
+    }
     if (body.name !== undefined) payload.name = String(body.name).trim();
     if (body.slug !== undefined) payload.slug = String(body.slug).toLowerCase().trim();
     if (body.description !== undefined) payload.description = body.description;
@@ -6239,13 +6290,21 @@ app.delete('/api/festive-events/:id', requireOwnerAuth, async (req: Authenticate
     // Verify outlet ownership for managers
     const { data: existingEv } = await serverSupabase
       .from('festive_events')
-      .select('outlet_id')
+      .select('*')
       .eq('id', id)
       .maybeSingle();
-    const existingOutletId = existingEv?.outlet_id || productStorage.getFestiveEventById(id)?.outletId;
-    const access = await resolveStaffOutletAccess(req, existingOutletId || null);
+    const existingRecord = existingEv || productStorage.getFestiveEventById(id);
+    const existingOutletIds = extractEventOutletIds(existingRecord || {});
+
+    const access = await resolveStaffOutletAccess(req, null);
     if (!access.allowed) {
       return res.status(access.status || 403).json({ success: false, error: access.error });
+    }
+    if (!access.isOwner && existingOutletIds.length > 0) {
+      const assigned = access.assignedOutletIds || [];
+      if (!existingOutletIds.some((oid) => assigned.includes(oid))) {
+        return res.status(403).json({ success: false, error: 'Forbidden. Outlet managers can only delete events for their assigned outlet.' });
+      }
     }
 
     // Check if any confirmed orders exist
@@ -6266,6 +6325,12 @@ app.delete('/api/festive-events/:id', requireOwnerAuth, async (req: Authenticate
     const { error } = await serverSupabase.from('festive_events').delete().eq('id', id);
     if (error) {
       console.warn('Supabase festive event delete error:', error.message);
+      if (existingEv) {
+        return res.status(400).json({
+          success: false,
+          error: error.message || 'Failed to delete festival collection from database.',
+        });
+      }
     }
 
     productStorage.deleteFestiveEvent(id);

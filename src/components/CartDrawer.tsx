@@ -458,8 +458,15 @@ export const CartDrawer: React.FC = () => {
                       </div>
                     )}
 
-                    <div className="flex justify-between">
-                      <span>Packaging</span>
+                    <div className="flex justify-between items-start gap-2">
+                      <div>
+                        <span>Packaging</span>
+                        {isMixedCart && (
+                          <span className="block text-[10px] text-emerald-700 font-medium">
+                            Instant only · ₹0 on Pre-book
+                          </span>
+                        )}
+                      </div>
                       <span className="font-medium text-stone-900">₹{packagingFee}</span>
                     </div>
 

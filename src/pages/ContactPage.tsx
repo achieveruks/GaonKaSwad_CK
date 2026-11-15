@@ -42,7 +42,7 @@ export const ContactPage: React.FC = () => {
 
   // Fallback default outlet to prevent null reference errors while outlets load
   const fallbackOutlet: Outlet = useMemo(() => ({
-    id: 'gks-bbsr-jv',
+    id: 'swadclk-bbsr-jv',
     name: 'Jayadev Vihar Kitchen',
     city: 'Bhubaneswar',
     state: 'Odisha',

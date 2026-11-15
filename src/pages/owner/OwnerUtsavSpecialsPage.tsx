@@ -45,8 +45,8 @@ import {
 
 const FESTIVE_IMAGE_PRESETS = [
   {
-    label: 'Diwali Lights & Sweets',
-    url: 'https://images.unsplash.com/photo-1576871337632-b9aef4c17ab9?q=80&w=1200&auto=format&fit=crop',
+    label: 'Utsav Festival Feast',
+    url: '/images/categories/utsav_specials.jpg',
   },
   {
     label: 'Royal Dum Feast',
@@ -86,7 +86,7 @@ export const OwnerUtsavSpecialsPage: React.FC = () => {
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // Form State
-  const [formOutletId, setFormOutletId] = useState('');
+  const [formOutletIds, setFormOutletIds] = useState<string[]>([]);
   const [formName, setFormName] = useState('');
   const [formSlug, setFormSlug] = useState('');
   const [formDescription, setFormDescription] = useState('');
@@ -106,6 +106,11 @@ export const OwnerUtsavSpecialsPage: React.FC = () => {
   const [isLoadingSummary, setIsLoadingSummary] = useState(false);
   const [summaryError, setSummaryError] = useState<string | null>(null);
 
+  // Delete Confirmation Modal
+  const [eventToDelete, setEventToDelete] = useState<FestiveEvent | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
   // Load Outlets & Festive Events
   const loadData = useCallback(async () => {
     setIsLoading(true);
@@ -117,7 +122,7 @@ export const OwnerUtsavSpecialsPage: React.FC = () => {
       setOutlets(allOutlets || []);
       setEvents(allEvents || []);
       if (allOutlets && allOutlets.length > 0) {
-        setFormOutletId((prev) => prev || allOutlets[0].id);
+        setFormOutletIds((prev) => (prev.length > 0 ? prev : [allOutlets[0].id]));
       }
     } catch (err) {
       console.error('Failed to load festive events:', err);
@@ -131,10 +136,21 @@ export const OwnerUtsavSpecialsPage: React.FC = () => {
     loadData();
   }, [loadData]);
 
+  const getEventOutletIds = useCallback((ev: FestiveEvent): string[] => {
+    const set = new Set<string>();
+    if (Array.isArray(ev.outletIds)) {
+      ev.outletIds.forEach((id) => {
+        const clean = String(id || '').trim();
+        if (clean) set.add(clean);
+      });
+    }
+    return Array.from(set);
+  }, []);
+
   // Filtered Events
   const filteredEvents = useMemo(() => {
     return events.filter((ev) => {
-      if (selectedOutletId !== 'all' && ev.outletId !== selectedOutletId) {
+      if (selectedOutletId !== 'all' && !getEventOutletIds(ev).includes(selectedOutletId)) {
         return false;
       }
       if (statusFilter !== 'all' && ev.status !== statusFilter) {
@@ -149,7 +165,7 @@ export const OwnerUtsavSpecialsPage: React.FC = () => {
       }
       return true;
     });
-  }, [events, selectedOutletId, statusFilter, searchQuery]);
+  }, [events, selectedOutletId, statusFilter, searchQuery, getEventOutletIds]);
 
   // Statistics
   const stats = useMemo(() => {
@@ -175,7 +191,13 @@ export const OwnerUtsavSpecialsPage: React.FC = () => {
   // Open Create Modal
   const handleOpenCreateModal = () => {
     setEditingEvent(null);
-    setFormOutletId(outlets[0]?.id || '');
+    const defaultOutletIds =
+      selectedOutletId !== 'all'
+        ? [selectedOutletId]
+        : outlets[0]?.id
+          ? [outlets[0].id]
+          : [];
+    setFormOutletIds(defaultOutletIds);
     setFormName('');
     setFormSlug('');
     setFormDescription('Celebrate this festival with our artisanal specials, slow-cooked with heirloom heritage recipes and pure desi ghee.');
@@ -200,7 +222,7 @@ export const OwnerUtsavSpecialsPage: React.FC = () => {
   // Open Edit Modal
   const handleOpenEditModal = (event: FestiveEvent) => {
     setEditingEvent(event);
-    setFormOutletId(event.outletId);
+    setFormOutletIds(getEventOutletIds(event));
     setFormName(event.name);
     setFormSlug(event.slug);
     setFormDescription(event.description || '');
@@ -234,8 +256,8 @@ export const OwnerUtsavSpecialsPage: React.FC = () => {
       setFormError('Please provide a festival name (e.g. Diwali Utsav 2026).');
       return;
     }
-    if (!formOutletId) {
-      setFormError('Please select a kitchen outlet.');
+    if (formOutletIds.length === 0) {
+      setFormError('Please select at least one kitchen outlet.');
       return;
     }
     if (!formFestivalDate) {
@@ -257,7 +279,7 @@ export const OwnerUtsavSpecialsPage: React.FC = () => {
     setIsSubmitting(true);
     try {
       const payload: Partial<FestiveEvent> = {
-        outletId: formOutletId,
+        outletIds: formOutletIds,
         name: formName.trim(),
         slug: formSlug.trim() || formName.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
         description: formDescription.trim(),
@@ -304,18 +326,33 @@ export const OwnerUtsavSpecialsPage: React.FC = () => {
     }
   };
 
-  // Delete Event with safe guard
-  const handleDeleteEvent = async (event: FestiveEvent) => {
-    const confirmMessage = `Are you sure you want to delete "${event.name}"?\n\nThis collection will be removed permanently. Note: If any confirmed customer bookings exist, deletion will be safely rejected.`;
-    if (!window.confirm(confirmMessage)) return;
+  // Open in-app Delete Confirmation Modal (avoids iframe-blocked window.confirm/alert)
+  const handleDeleteEvent = (event: FestiveEvent) => {
+    setDeleteError(null);
+    setEventToDelete(event);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!eventToDelete) return;
+    const target = eventToDelete;
+    setIsDeleting(true);
+    setDeleteError(null);
 
     try {
-      await deleteFestiveEvent(event.id, token || undefined);
-      setEvents((prev) => prev.filter((ev) => ev.id !== event.id));
-      setNotification({ type: 'success', text: `"${event.name}" has been removed.` });
+      await deleteFestiveEvent(target.id, token || undefined);
+      setEvents((prev) => prev.filter((ev) => ev.id !== target.id));
+      setEventToDelete(null);
+      setNotification({ type: 'success', text: `"${target.name}" has been removed.` });
+      refreshProducts();
     } catch (err: any) {
       console.error('Delete festive event error:', err);
-      alert(err.message || 'Cannot delete festival collection. Please ensure all bookings are resolved first.');
+      const msg =
+        err?.message ||
+        'Cannot delete festival collection. Please ensure all confirmed bookings are resolved first.';
+      setDeleteError(msg);
+      setNotification({ type: 'error', text: msg });
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -327,7 +364,9 @@ export const OwnerUtsavSpecialsPage: React.FC = () => {
         setSummaryError(null);
       }
       try {
-        const data = await getFestiveProductionSummary(event.outletId, event.id, token || undefined);
+        const evOutlets = getEventOutletIds(event);
+        const targetOutletId = selectedOutletId !== 'all' ? selectedOutletId : evOutlets[0] || '';
+        const data = await getFestiveProductionSummary(targetOutletId, event.id, token || undefined);
         setSummaryData({
           totalBookedUnits: data.totalBookedUnits || 0,
           items: data.items || [],
@@ -595,6 +634,7 @@ export const OwnerUtsavSpecialsPage: React.FC = () => {
             events={filteredEvents}
             outlets={outlets}
             token={token}
+            lockedOutletId={selectedOutletId !== 'all' ? selectedOutletId : undefined}
             onPrintSheet={handleOpenSummary}
             onProductsChanged={() => {
               refreshProducts();
@@ -666,11 +706,26 @@ export const OwnerUtsavSpecialsPage: React.FC = () => {
                     </div>
 
                     {/* Outlet Tag */}
-                    <div className="absolute top-3 right-3">
-                      <span className="text-[10px] font-semibold bg-stone-900/80 text-stone-200 px-2 py-0.5 rounded-md backdrop-blur-md flex items-center gap-1 border border-stone-700/60">
-                        <Store className="w-3 h-3 text-amber-400" />
-                        <span>{getOutletName(ev.outletId)}</span>
-                      </span>
+                    <div className="absolute top-3 right-3 max-w-[55%]">
+                      {(() => {
+                        const evOutlets = getEventOutletIds(ev);
+                        const label =
+                          evOutlets.length === 0
+                            ? 'No Outlets'
+                            : evOutlets.length === 1
+                              ? getOutletName(evOutlets[0])
+                              : `${getOutletName(evOutlets[0])} +${evOutlets.length - 1}`;
+                        const tooltip = evOutlets.map((id) => getOutletName(id)).join(', ');
+                        return (
+                          <span
+                            title={tooltip}
+                            className="text-[10px] font-semibold bg-stone-900/80 text-stone-200 px-2 py-0.5 rounded-md backdrop-blur-md flex items-center gap-1 border border-stone-700/60"
+                          >
+                            <Store className="w-3 h-3 text-amber-400 shrink-0" />
+                            <span className="truncate">{label}</span>
+                          </span>
+                        );
+                      })()}
                     </div>
 
                     {/* Festival Name & Date at Bottom of Banner */}
@@ -850,23 +905,66 @@ export const OwnerUtsavSpecialsPage: React.FC = () => {
                 </div>
               )}
 
-              {/* Outlet Selector */}
+              {/* Multi-Outlet Selector */}
               <div>
-                <label className="block text-xs font-semibold text-stone-700 mb-1">
-                  Kitchen Outlet *
-                </label>
-                <select
-                  value={formOutletId}
-                  onChange={(e) => setFormOutletId(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-800 cursor-pointer"
-                  required
-                >
-                  {outlets.map((o) => (
-                    <option key={o.id} value={o.id}>
-                      {o.name} — {o.city} ({o.address})
-                    </option>
-                  ))}
-                </select>
+                <div className="flex items-center justify-between gap-2 mb-1.5">
+                  <label className="text-xs font-semibold text-stone-700">
+                    Kitchen Outlets *{' '}
+                    <span className="text-[11px] font-medium text-amber-800">
+                      ({formOutletIds.length} of {outlets.length} selected)
+                    </span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (formOutletIds.length === outlets.length) {
+                        setFormOutletIds([]);
+                      } else {
+                        setFormOutletIds(outlets.map((o) => o.id));
+                      }
+                    }}
+                    className="text-[11px] font-semibold text-amber-800 hover:text-amber-950 underline underline-offset-2 cursor-pointer"
+                  >
+                    {formOutletIds.length === outlets.length ? 'Clear All' : 'Select All Outlets'}
+                  </button>
+                </div>
+                <div className="max-h-40 overflow-y-auto border border-stone-200 rounded-xl divide-y divide-stone-100 bg-stone-50/40">
+                  {outlets.map((o) => {
+                    const checked = formOutletIds.includes(o.id);
+                    return (
+                      <label
+                        key={o.id}
+                        className={`flex items-start gap-2.5 px-3 py-2 cursor-pointer transition-colors ${
+                          checked ? 'bg-amber-50/80' : 'hover:bg-stone-50'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setFormOutletIds((prev) => Array.from(new Set([...prev, o.id])));
+                            } else {
+                              setFormOutletIds((prev) => prev.filter((id) => id !== o.id));
+                            }
+                          }}
+                          className="mt-0.5 w-3.5 h-3.5 rounded border-stone-300 text-amber-800 focus:ring-amber-700 cursor-pointer shrink-0"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="text-xs font-semibold text-stone-900 truncate">
+                            {o.name} <span className="text-stone-500 font-normal">· {o.city}</span>
+                          </div>
+                          {o.address && (
+                            <p className="text-[10px] text-stone-500 truncate">{o.address}</p>
+                          )}
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+                <p className="text-[10px] text-stone-400 mt-1">
+                  The festival banner appears on the homepage Hero whenever a customer selects any tagged kitchen outlet.
+                </p>
               </div>
 
               {/* Festival Name & Slug */}
@@ -1059,8 +1157,13 @@ export const OwnerUtsavSpecialsPage: React.FC = () => {
                     {selectedEventForSummary.name} — Production Planning Sheet
                   </h3>
                   <p className="text-[11px] text-stone-500">
-                    Outlet: {getOutletName(selectedEventForSummary.outletId)} • Fulfillment Date:{' '}
-                    {formatDate(selectedEventForSummary.festivalDate)}
+                    Outlet:{' '}
+                    {selectedOutletId !== 'all'
+                      ? getOutletName(selectedOutletId)
+                      : getEventOutletIds(selectedEventForSummary)
+                          .map((id) => getOutletName(id))
+                          .join(', ')}{' '}
+                    • Fulfillment Date: {formatDate(selectedEventForSummary.festivalDate)}
                   </p>
                 </div>
               </div>
@@ -1226,6 +1329,78 @@ export const OwnerUtsavSpecialsPage: React.FC = () => {
                 className="px-4 py-2 bg-stone-200 hover:bg-stone-300 text-stone-800 rounded-xl text-xs font-semibold transition-colors cursor-pointer"
               >
                 Close Sheet
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DELETE CONFIRMATION MODAL */}
+      {eventToDelete && (
+        <div
+          className="fixed inset-0 z-50 bg-stone-950/60 backdrop-blur-xs flex items-center justify-center p-4"
+          onClick={() => {
+            if (!isDeleting) setEventToDelete(null);
+          }}
+        >
+          <div
+            className="bg-white rounded-2xl border border-stone-200 shadow-2xl max-w-md w-full overflow-hidden animate-in fade-in zoom-in-95"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-5 border-b border-stone-100 flex items-start justify-between gap-3">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-xl bg-rose-50 border border-rose-200 flex items-center justify-center text-rose-600 shrink-0">
+                  <Trash2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm text-stone-900">Delete Festival Collection</h3>
+                  <p className="text-xs text-stone-500 mt-0.5">
+                    Are you sure you want to delete{' '}
+                    <span className="font-bold text-stone-800">"{eventToDelete.name}"</span>?
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={() => setEventToDelete(null)}
+                className="p-1 text-stone-400 hover:text-stone-600 rounded-lg cursor-pointer disabled:opacity-50"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-3">
+              <p className="text-xs text-stone-600 leading-relaxed">
+                This collection will be removed permanently from the Utsav Specials storefront banner and owner catalog.
+                If any confirmed customer bookings exist, deletion will be safely blocked.
+              </p>
+
+              {deleteError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                  <span>{deleteError}</span>
+                </div>
+              )}
+            </div>
+
+            <div className="px-5 py-3.5 border-t border-stone-100 bg-stone-50 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={() => setEventToDelete(null)}
+                className="px-4 py-2 bg-white hover:bg-stone-100 text-stone-700 border border-stone-200 rounded-xl text-xs font-semibold transition-colors cursor-pointer disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={handleConfirmDelete}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white rounded-xl text-xs font-bold transition-colors cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>{isDeleting ? 'Deleting...' : 'Delete Collection'}</span>
               </button>
             </div>
           </div>

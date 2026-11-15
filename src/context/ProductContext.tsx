@@ -23,6 +23,7 @@ import {
   isProductBestsellerAtOutlet,
   isProductChefSpecialAtOutlet,
 } from '../lib/locationService';
+import utsavFestivalFeastImg from '../assets/images/utsav_festival_feast_1794732697548.jpg';
 
 interface ProductContextType {
   products: Product[];
@@ -246,8 +247,14 @@ export const ProductProvider: React.FC<{ children: React.ReactNode }> = ({ child
             ? isUtsavProduct(p)
             : p.category === cat.id || p.category === cat.slug
         ).length;
+        const shouldUseGeneratedUtsavImg =
+          isUtsavCat &&
+          (!cat.image ||
+            cat.image.includes('photo-1576871337632') ||
+            cat.image.includes('photo-1546833999'));
         return {
           ...cat,
+          image: shouldUseGeneratedUtsavImg ? utsavFestivalFeastImg : cat.image,
           itemCount: count,
         };
       });
@@ -262,7 +269,7 @@ export const ProductProvider: React.FC<{ children: React.ReactNode }> = ({ child
           name: 'Utsav Specials',
           slug: 'utsav_specials',
           tagline: 'Handcrafted festival delicacies & limited pre-booking specials',
-          image: 'https://images.unsplash.com/photo-1576871337632-b9aef4c17ab9?q=80&w=800&auto=format&fit=crop',
+          image: utsavFestivalFeastImg,
           iconName: 'Sparkles',
           itemCount: utsavItemsCount,
         });
@@ -289,7 +296,7 @@ export const ProductProvider: React.FC<{ children: React.ReactNode }> = ({ child
           ? 'Handcrafted festival delicacies & limited pre-booking specials'
           : `Authentic traditional ${name.toLowerCase()}`,
         image: isUtsavCat
-          ? 'https://images.unsplash.com/photo-1576871337632-b9aef4c17ab9?q=80&w=800&auto=format&fit=crop'
+          ? utsavFestivalFeastImg
           : 'https://images.unsplash.com/photo-1589301760014-d929f3979dbc?q=80&w=800&auto=format&fit=crop',
         iconName: isUtsavCat ? 'Sparkles' : 'Utensils',
         itemCount: count,
@@ -304,7 +311,7 @@ export const ProductProvider: React.FC<{ children: React.ReactNode }> = ({ child
         name: 'Utsav Specials',
         slug: 'utsav_specials',
         tagline: 'Handcrafted festival delicacies & limited pre-booking specials',
-        image: 'https://images.unsplash.com/photo-1576871337632-b9aef4c17ab9?q=80&w=800&auto=format&fit=crop',
+        image: utsavFestivalFeastImg,
         iconName: 'Sparkles',
         itemCount: utsavItemsCount,
       });

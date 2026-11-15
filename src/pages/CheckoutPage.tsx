@@ -4052,8 +4052,15 @@ export const CheckoutPage: React.FC = () => {
                   </div>
                 )}
 
-                <div className="flex justify-between">
-                  <span>Eco Packaging</span>
+                <div className="flex justify-between items-start gap-2">
+                  <div>
+                    <span>Eco Packaging</span>
+                    {isMixedCart && (
+                      <span className="block text-[10px] text-emerald-700 font-medium">
+                        Instant only · ₹0 on Pre-book
+                      </span>
+                    )}
+                  </div>
                   <span>₹{packagingFee}</span>
                 </div>
 

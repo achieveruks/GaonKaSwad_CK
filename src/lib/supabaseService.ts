@@ -221,12 +221,6 @@ export function mapDbAboutToAbout(row: any): OutletAbout {
     expCard3Title: row.exp_card3_title || undefined,
     expCard3Header: row.exp_card3_header || undefined,
     expCard3Description: row.exp_card3_description || undefined,
-    utsavPromoEnabled: row.utsav_promo_enabled !== undefined ? !!row.utsav_promo_enabled : false,
-    utsavPromoHeading: row.utsav_promo_heading || undefined,
-    utsavPromoDescription: row.utsav_promo_description || undefined,
-    utsavPromoCtaText: row.utsav_promo_cta_text || 'Explore Utsav Specials',
-    utsavPromoImage: row.utsav_promo_image || undefined,
-    utsavFestivalName: row.utsav_festival_name || undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -259,12 +253,6 @@ export function mapAboutToDbAbout(a: Partial<OutletAbout>): any {
   if (a.expCard3Title !== undefined) dbObj.exp_card3_title = a.expCard3Title;
   if (a.expCard3Header !== undefined) dbObj.exp_card3_header = a.expCard3Header;
   if (a.expCard3Description !== undefined) dbObj.exp_card3_description = a.expCard3Description;
-  if (a.utsavPromoEnabled !== undefined) dbObj.utsav_promo_enabled = !!a.utsavPromoEnabled;
-  if (a.utsavPromoHeading !== undefined) dbObj.utsav_promo_heading = a.utsavPromoHeading || null;
-  if (a.utsavPromoDescription !== undefined) dbObj.utsav_promo_description = a.utsavPromoDescription || null;
-  if (a.utsavPromoCtaText !== undefined) dbObj.utsav_promo_cta_text = a.utsavPromoCtaText || 'Explore Utsav Specials';
-  if (a.utsavPromoImage !== undefined) dbObj.utsav_promo_image = a.utsavPromoImage || null;
-  if (a.utsavFestivalName !== undefined) dbObj.utsav_festival_name = a.utsavFestivalName || null;
   dbObj.updated_at = new Date().toISOString();
   return dbObj;
 }
@@ -1242,7 +1230,7 @@ export async function deleteSupabaseCustomerAddress(addressId: string): Promise<
  */
 export function formatDisplayOrderId(orderId?: string | null): string {
   if (!orderId) return '';
-  const clean = String(orderId).trim().replace(/^#+/, '').replace(/SWADCLK-#/i, 'SWADCLK-').replace(/GKSWAD-#?/i, 'SWADCLK-');
+  const clean = String(orderId).trim().replace(/^#+/, '').replace(/SWADCLK-#/i, 'SWADCLK-');
   return clean ? `#${clean}` : '';
 }
 
@@ -1251,7 +1239,7 @@ export function formatDisplayOrderId(orderId?: string | null): string {
  */
 export function normalizeOrderId(orderId?: string | null): string {
   if (!orderId) return '';
-  return String(orderId).trim().replace(/^#+/, '').replace(/SWADCLK-#/i, 'SWADCLK-').replace(/GKSWAD-#?/i, 'SWADCLK-');
+  return String(orderId).trim().replace(/^#+/, '').replace(/SWADCLK-#/i, 'SWADCLK-');
 }
 
 export async function getNextSequentialOrderId(): Promise<string> {
@@ -1273,7 +1261,7 @@ export async function getNextSequentialOrderId(): Promise<string> {
     for (const row of data) {
       const idToCheck = row.order_number || row.order_id;
       if (idToCheck) {
-        const match = idToCheck.match(/(?:SWADCLK|GKSWAD|GKS)-#?0*(\d+)/i);
+        const match = idToCheck.match(/SWADCLK-#?0*(\d+)/i);
         if (match && match[1]) {
           const num = parseInt(match[1], 10);
           if (!isNaN(num) && num > maxNum) {
@@ -1580,9 +1568,9 @@ export function mapDbOrderToOrder(row: any): Order {
   const resolvedOutlet = resolveDbOrderOutlet(row);
 
   const rawDbOrderId = String(row.order_id || row.order_number || row.id || '');
-  const cleanDbOrderId = rawDbOrderId.replace(/SWADCLK-#/g, 'SWADCLK-').replace(/GKSWAD-#?/g, 'SWADCLK-');
+  const cleanDbOrderId = rawDbOrderId.replace(/SWADCLK-#/g, 'SWADCLK-');
   const rawDbOrderNum = String(row.order_number || row.order_id || cleanDbOrderId);
-  const cleanDbOrderNum = rawDbOrderNum.replace(/SWADCLK-#/g, 'SWADCLK-').replace(/GKSWAD-#?/g, 'SWADCLK-');
+  const cleanDbOrderNum = rawDbOrderNum.replace(/SWADCLK-#/g, 'SWADCLK-');
 
   return {
     id: row.id || cleanDbOrderId,
@@ -3212,10 +3200,32 @@ export async function verifySupabaseOtp(
 // SUPABASE FESTIVE EVENTS API (Utsav Specials)
 // ============================================================================
 
+export function normalizeFestiveEventOutletIds(ev: {
+  outletId?: string | null;
+  outlet_id?: string | null;
+  outletIds?: string[] | null;
+  outlet_ids?: string[] | null;
+}): string[] {
+  const set = new Set<string>();
+  const rawArr = Array.isArray(ev?.outletIds)
+    ? ev.outletIds
+    : Array.isArray(ev?.outlet_ids)
+      ? ev.outlet_ids
+      : [];
+  rawArr.forEach((id) => {
+    const clean = String(id || '').trim();
+    if (clean) set.add(clean);
+  });
+  const legacyPrimary = String(ev?.outletId ?? ev?.outlet_id ?? '').trim();
+  if (legacyPrimary) set.add(legacyPrimary);
+  return Array.from(set);
+}
+
 export function mapDbFestiveEventToFestiveEvent(row: any): FestiveEvent {
+  const outletIds = normalizeFestiveEventOutletIds(row || {});
   return {
     id: row.id,
-    outletId: row.outletId ?? row.outlet_id ?? '',
+    outletIds,
     name: row.name || '',
     slug: row.slug || '',
     description: row.description || '',
@@ -3232,7 +3242,9 @@ export function mapDbFestiveEventToFestiveEvent(row: any): FestiveEvent {
 export function mapFestiveEventToDbFestiveEvent(ev: Partial<FestiveEvent>): any {
   const dbObj: any = {};
   if (ev.id !== undefined) dbObj.id = ev.id;
-  if (ev.outletId !== undefined) dbObj.outlet_id = ev.outletId;
+  if (ev.outletIds !== undefined) {
+    dbObj.outlet_ids = normalizeFestiveEventOutletIds(ev);
+  }
   if (ev.name !== undefined) dbObj.name = ev.name.trim();
   if (ev.slug !== undefined) dbObj.slug = ev.slug.toLowerCase().trim();
   if (ev.description !== undefined) dbObj.description = ev.description;
@@ -3250,9 +3262,6 @@ export async function fetchSupabaseFestiveEvents(outletId?: string, onlyActive =
 
   try {
     let query = supabase.from('festive_events').select('*').order('festival_date', { ascending: true });
-    if (outletId) {
-      query = query.eq('outlet_id', outletId);
-    }
     if (onlyActive) {
       query = query.eq('status', 'active');
     }
@@ -3262,7 +3271,12 @@ export async function fetchSupabaseFestiveEvents(outletId?: string, onlyActive =
       console.warn('fetchSupabaseFestiveEvents notice:', error.message);
       return [];
     }
-    return (data || []).map(mapDbFestiveEventToFestiveEvent);
+    const mapped = (data || []).map(mapDbFestiveEventToFestiveEvent);
+    if (outletId) {
+      const target = String(outletId).trim();
+      return mapped.filter((ev) => Array.isArray(ev.outletIds) && ev.outletIds.includes(target));
+    }
+    return mapped;
   } catch (err) {
     console.warn('fetchSupabaseFestiveEvents error:', err);
     return [];
@@ -3413,6 +3427,14 @@ export async function recordSupabasePaymentTransaction(data: Partial<OrderPaymen
  * Fetch active festive collections for an outlet via API with Supabase fallback.
  */
 export async function fetchActiveFestiveEventsForOutlet(outletId?: string): Promise<FestiveEvent[]> {
+  if (isSupabaseConfigured()) {
+    try {
+      const supaList = await fetchSupabaseFestiveEvents(outletId, true);
+      if (supaList && supaList.length > 0) {
+        return supaList;
+      }
+    } catch {}
+  }
   try {
     const params = new URLSearchParams();
     if (outletId) params.set('outletId', outletId);
@@ -3420,8 +3442,13 @@ export async function fetchActiveFestiveEventsForOutlet(outletId?: string): Prom
     const res = await fetch(`/api/festive-events?${params.toString()}`);
     if (res.ok) {
       const data = await res.json();
-      if (data.success && Array.isArray(data.events)) {
-        return data.events;
+      const rawEvents = Array.isArray(data.festiveEvents)
+        ? data.festiveEvents
+        : Array.isArray(data.events)
+          ? data.events
+          : null;
+      if (data.success && rawEvents) {
+        return rawEvents.map(mapDbFestiveEventToFestiveEvent);
       }
     }
   } catch {}

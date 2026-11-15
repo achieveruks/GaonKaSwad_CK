@@ -218,7 +218,7 @@ WHERE a.customer_id = b.customer_id
 -- 7. ORDERS TABLE (Production Normalized Order Master)
 CREATE TABLE IF NOT EXISTS public.orders (
   id TEXT PRIMARY KEY,                                                   -- Unique Order ID (e.g. order-abc1234)
-  order_number TEXT NOT NULL UNIQUE,                                     -- Human-readable Order ID (e.g. GKSWAD-#10001)
+  order_number TEXT NOT NULL UNIQUE,                                     -- Human-readable Order ID (e.g. SWADCLK-00001)
   order_id TEXT UNIQUE,                                                  -- Compatible alias for order_number
   customer_id UUID REFERENCES public.customers(id) ON DELETE SET NULL,   -- Registered Customer Reference (nullable for guest)
   customer_address_id UUID REFERENCES public.customer_addresses(id) ON DELETE SET NULL, -- Saved Address Reference

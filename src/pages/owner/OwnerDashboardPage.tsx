@@ -704,7 +704,16 @@ export const OwnerDashboardPage: React.FC = () => {
         {utsavOverview && utsavOverview.events.length > 0 && (
           <div className="border-t border-stone-200 divide-y divide-stone-100">
             {utsavOverview.events.slice(0, 3).map((ev) => {
-              const outletObj = safeOutlets.find((o) => o.id === ev.outletId);
+              const evOutletIds = Array.isArray(ev.outletIds) ? ev.outletIds : [];
+              const firstOutletObj = safeOutlets.find((o) => o.id === evOutletIds[0]);
+              const outletLabel =
+                evOutletIds.length === 0
+                  ? 'All Outlets'
+                  : evOutletIds.length === 1
+                    ? firstOutletObj
+                      ? `${firstOutletObj.name} · ${firstOutletObj.city}`
+                      : evOutletIds[0]
+                    : `${firstOutletObj ? firstOutletObj.name : evOutletIds[0]} +${evOutletIds.length - 1} outlets`;
               return (
                 <div
                   key={ev.id}
@@ -714,7 +723,7 @@ export const OwnerDashboardPage: React.FC = () => {
                   <div className="min-w-0">
                     <span className="font-bold text-stone-900 truncate block">{ev.name}</span>
                     <span className="text-[11px] text-stone-500">
-                      {outletObj ? `${outletObj.name} · ${outletObj.city}` : ev.outletId} · Delivery{' '}
+                      {outletLabel} · Delivery{' '}
                       {ev.festivalDate ? new Date(ev.festivalDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : '—'}
                     </span>
                   </div>

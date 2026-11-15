@@ -34,7 +34,9 @@ export const FestiveProductionWidget: React.FC<FestiveProductionWidgetProps> = (
 }) => {
   const scopedEvents = useMemo(() => {
     if (lockedOutletId) {
-      return events.filter((ev) => ev.outletId === lockedOutletId);
+      return events.filter(
+        (ev) => Array.isArray(ev.outletIds) && ev.outletIds.includes(lockedOutletId)
+      );
     }
     return events;
   }, [events, lockedOutletId]);
@@ -75,14 +77,16 @@ export const FestiveProductionWidget: React.FC<FestiveProductionWidgetProps> = (
     [scopedEvents, selectedEventId]
   );
 
+  const activeOutletId = lockedOutletId || selectedEvent?.outletIds?.[0] || '';
+
   const loadSummary = useCallback(
     async (silent = false) => {
-      if (!selectedEvent) return;
+      if (!selectedEvent || !activeOutletId) return;
       if (!silent) setIsLoading(true);
       setError(null);
       try {
         const res = await getFestiveProductionSummary(
-          selectedEvent.outletId,
+          activeOutletId,
           selectedEvent.id,
           token || undefined
         );
@@ -125,17 +129,17 @@ export const FestiveProductionWidget: React.FC<FestiveProductionWidgetProps> = (
   );
 
   useEffect(() => {
-    if (selectedEvent) {
+    if (selectedEvent && activeOutletId) {
       loadSummary(false);
     }
-  }, [selectedEvent?.id, selectedEvent?.outletId]);
+  }, [selectedEvent?.id, activeOutletId]);
 
   // Supabase Realtime updates for orders & products
   useEffect(() => {
-    if (!selectedEvent || !isSupabaseConfigured()) return;
+    if (!selectedEvent || !activeOutletId || !isSupabaseConfigured()) return;
 
     const channel = supabase
-      .channel(`utsav-live-prod:${selectedEvent.outletId}:${selectedEvent.id}`)
+      .channel(`utsav-live-prod:${activeOutletId}:${selectedEvent.id}`)
       .on(
         'postgres_changes',
         { event: '*', schema: 'public', table: 'orders' },
@@ -155,7 +159,7 @@ export const FestiveProductionWidget: React.FC<FestiveProductionWidgetProps> = (
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [selectedEvent?.id, selectedEvent?.outletId, loadSummary]);
+  }, [selectedEvent?.id, activeOutletId, loadSummary]);
 
   const showToast = (type: 'success' | 'error', text: string) => {
     setFeedback({ type, text });
@@ -174,7 +178,7 @@ export const FestiveProductionWidget: React.FC<FestiveProductionWidgetProps> = (
     setSavingProductId(item.productId);
     try {
       await updateFestiveProductStock(
-        selectedEvent.outletId,
+        activeOutletId,
         selectedEvent.id,
         item.productId,
         { action: 'update_buffer', extraPlanned: parsed },
@@ -201,7 +205,7 @@ export const FestiveProductionWidget: React.FC<FestiveProductionWidgetProps> = (
     setSavingProductId(item.productId);
     try {
       await updateFestiveProductStock(
-        selectedEvent.outletId,
+        activeOutletId,
         selectedEvent.id,
         item.productId,
         { action: 'convert_to_normal', extraPlanned: extraPortions },
@@ -226,7 +230,7 @@ export const FestiveProductionWidget: React.FC<FestiveProductionWidgetProps> = (
     setSavingProductId(item.productId);
     try {
       await updateFestiveProductStock(
-        selectedEvent.outletId,
+        activeOutletId,
         selectedEvent.id,
         item.productId,
         { action: nextAction },
@@ -293,7 +297,7 @@ export const FestiveProductionWidget: React.FC<FestiveProductionWidgetProps> = (
             </div>
             {selectedEvent && (
               <p className="text-xs text-stone-500 mt-0.5">
-                {getOutletLabel(selectedEvent.outletId)} · Delivery {formatFestDate(selectedEvent.festivalDate)}
+                {getOutletLabel(activeOutletId)} · Delivery {formatFestDate(selectedEvent.festivalDate)}
               </p>
             )}
           </div>

@@ -148,20 +148,10 @@ export function calculateMixedCheckoutBreakdown(params: {
     }
   }
 
-  // Packaging fee: allocate proportionally if both exist, or directly to single active order
+  // Packaging fee: charged once on Instant child when Normal items exist; Pre-book carries ₹0 in mixed orders
   const totalPkgP = Math.max(0, toPaise(params.packagingFeeTotal || 0));
-  let normalPkgP = 0;
-  let prebookPkgP = 0;
-  if (totalPkgP > 0) {
-    if (isMixed && combinedSubP > 0) {
-      normalPkgP = Math.round((totalPkgP * normalSubP) / combinedSubP);
-      prebookPkgP = totalPkgP - normalPkgP;
-    } else if (hasNormal) {
-      normalPkgP = totalPkgP;
-    } else if (hasPrebook) {
-      prebookPkgP = totalPkgP;
-    }
-  }
+  const normalPkgP = hasNormal ? totalPkgP : 0;
+  const prebookPkgP = !hasNormal && hasPrebook ? totalPkgP : 0;
 
   // Delivery charge: charged once per checkout (Normal carries the delivery charge when present; Prebook carries it when Prebook-only)
   const totalDeliveryP = Math.max(0, toPaise(params.deliveryFeeTotal || 0));

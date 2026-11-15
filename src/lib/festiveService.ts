@@ -183,8 +183,8 @@ export async function deleteFestiveEvent(id: string, token?: string): Promise<bo
       return !!json.success;
     }
     const errorData = await res.json().catch(() => ({}));
-    if (errorData.error) {
-      throw new Error(errorData.error);
+    if (!deletedFromSupabase) {
+      throw new Error(errorData.error || 'Failed to delete festival collection.');
     }
   } catch (apiErr: any) {
     if (deletedFromSupabase) return true;

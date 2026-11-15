@@ -5,7 +5,7 @@
 -- 1. Create festive_events table
 CREATE TABLE IF NOT EXISTS public.festive_events (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  outlet_id TEXT NOT NULL REFERENCES public.outlets(id) ON DELETE CASCADE,
+  outlet_ids TEXT[] NOT NULL DEFAULT '{}'::text[],
   name TEXT NOT NULL,
   slug TEXT NOT NULL,
   description TEXT,
@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS public.festive_events (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_festive_events_outlet ON public.festive_events(outlet_id);
+CREATE INDEX IF NOT EXISTS idx_festive_events_outlet_ids ON public.festive_events USING GIN (outlet_ids);
 CREATE INDEX IF NOT EXISTS idx_festive_events_festival_date ON public.festive_events(festival_date);
 CREATE INDEX IF NOT EXISTS idx_festive_events_status ON public.festive_events(status);
 
@@ -69,15 +69,6 @@ ALTER TABLE IF EXISTS public.order_items
   ADD COLUMN IF NOT EXISTS festival_delivery_date DATE,
   ADD COLUMN IF NOT EXISTS special_packaging BOOLEAN DEFAULT false;
 
--- 6. Extend abouts table for dynamic outlet-level Utsav homepage promotional banner
-ALTER TABLE IF EXISTS public.abouts
-  ADD COLUMN IF NOT EXISTS utsav_promo_enabled BOOLEAN DEFAULT false,
-  ADD COLUMN IF NOT EXISTS utsav_promo_heading TEXT,
-  ADD COLUMN IF NOT EXISTS utsav_promo_description TEXT,
-  ADD COLUMN IF NOT EXISTS utsav_promo_cta_text TEXT DEFAULT 'Explore Utsav Specials',
-  ADD COLUMN IF NOT EXISTS utsav_promo_image TEXT,
-  ADD COLUMN IF NOT EXISTS utsav_festival_name TEXT;
-
 -- 7. Row Level Security Policies
 ALTER TABLE IF EXISTS public.festive_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS public.order_payment_transactions ENABLE ROW LEVEL SECURITY;
@@ -101,7 +92,7 @@ VALUES (
   'Utsav Specials',
   'utsav_specials',
   'Celebrate Every Occasion with Something Special! Bring the home experience with homely special food and don’t feel left behind due to food cravings.',
-  'https://images.unsplash.com/photo-1546833999-b9f581a1996d?q=80&w=800&auto=format&fit=crop',
+  '/images/categories/utsav_specials.jpg',
   'Sparkles',
   99
 )

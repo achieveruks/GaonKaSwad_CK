@@ -19,9 +19,10 @@ import {
   fetchAvailableCouponsForCustomer,
   fetchFeaturedReviews,
   FeaturedReview,
+  fetchActiveFestiveEventsForOutlet,
 } from '../lib/supabaseService';
 import { getAboutByOutletId } from '../lib/aboutService';
-import { OutletAbout, Coupon } from '../types';
+import { OutletAbout, Coupon, FestiveEvent } from '../types';
 import {
   Flame,
   ChefHat,
@@ -38,7 +39,8 @@ import {
   CheckCircle2,
   Soup,
   Quote,
-  Calendar
+  Calendar,
+  PackageCheck
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -92,6 +94,9 @@ export const HomePage: React.FC = () => {
   // Outlet About information (story_title, story_description, etc.)
   const [outletAbout, setOutletAbout] = useState<OutletAbout | null>(null);
 
+  // Active festive collections enabled for this outlet (from festive_events table)
+  const [festiveEvents, setFestiveEvents] = useState<FestiveEvent[]>([]);
+
   // Available coupon code for this outlet
   const [availableCoupon, setAvailableCoupon] = useState<Coupon | null>(null);
 
@@ -108,6 +113,7 @@ export const HomePage: React.FC = () => {
     if (!outletId) {
       setOutletSalesMap({});
       setOutletAbout(null);
+      setFestiveEvents([]);
       setAvailableCoupon(null);
       setFeaturedReviews([]);
       setIsReviewsLoading(false);
@@ -134,6 +140,18 @@ export const HomePage: React.FC = () => {
       })
       .catch((err) => {
         console.warn('Failed to load outlet about data:', err);
+      });
+
+    // 2b. Fetch active festive events enabled for this outlet
+    fetchActiveFestiveEventsForOutlet(outletId)
+      .then((events) => {
+        if (isMounted) {
+          setFestiveEvents(Array.isArray(events) ? events : []);
+        }
+      })
+      .catch((err) => {
+        console.warn('Failed to load festive events for outlet:', err);
+        if (isMounted) setFestiveEvents([]);
       });
 
     // 3. Fetch available coupons for this outlet
@@ -414,44 +432,6 @@ export const HomePage: React.FC = () => {
                 </button>
               </div>
 
-              {/* Dynamic Utsav Specials Promo Card (Driven by Outlet About Config) */}
-              {outletAbout?.utsavPromoEnabled && (outletAbout?.utsavPromoHeading || outletAbout?.utsavFestivalName) && (
-                <div
-                  onClick={() => goToShop('utsav_specials')}
-                  className="mt-2 p-3 sm:p-3.5 bg-gradient-to-r from-amber-50 via-orange-50/70 to-amber-50/40 border border-amber-300/80 rounded-2xl flex flex-col sm:flex-row items-center gap-3.5 text-left shadow-xs hover:border-amber-500 transition-colors cursor-pointer group max-w-xl mx-auto lg:mx-0"
-                >
-                  {outletAbout.utsavPromoImage && (
-                    <div className="w-full sm:w-20 h-28 sm:h-20 rounded-xl overflow-hidden border border-amber-200 shrink-0 bg-amber-100">
-                      <img
-                        src={outletAbout.utsavPromoImage}
-                        alt={outletAbout.utsavFestivalName || outletAbout.utsavPromoHeading || 'Utsav Specials'}
-                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                        referrerPolicy="no-referrer"
-                      />
-                    </div>
-                  )}
-                  <div className="flex-1 min-w-0 space-y-1">
-                    <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-amber-800">
-                      <Sparkles className="w-3 h-3 text-amber-600 fill-amber-400 shrink-0" />
-                      <span>{outletAbout.utsavFestivalName || 'Utsav Specials • Pre-book Open'}</span>
-                    </div>
-                    <h3 className="font-bold text-sm text-stone-900 leading-snug line-clamp-1">
-                      {outletAbout.utsavPromoHeading || 'Celebrate With Handcrafted Festive Delicacies'}
-                    </h3>
-                    {outletAbout.utsavPromoDescription && (
-                      <p className="text-[11px] text-stone-600 line-clamp-2 leading-relaxed">
-                        {outletAbout.utsavPromoDescription}
-                      </p>
-                    )}
-                  </div>
-                  <span className="shrink-0 w-full sm:w-auto px-3.5 py-2 bg-amber-800 group-hover:bg-amber-900 text-white font-bold text-xs rounded-xl inline-flex items-center justify-center gap-1.5 transition-colors shadow-2xs">
-                    <Calendar className="w-3.5 h-3.5 text-amber-200" />
-                    <span>{outletAbout.utsavPromoCtaText || 'Explore Utsav Specials'}</span>
-                    <ArrowRight className="w-3.5 h-3.5" />
-                  </span>
-                </div>
-              )}
-
               {/* Trust Badges Bar */}
               <div className="pt-4 border-t border-gray-100 grid grid-cols-3 gap-2 sm:gap-4 max-w-md mx-auto lg:mx-0 text-gray-700">
                 <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
@@ -478,6 +458,97 @@ export const HomePage: React.FC = () => {
                   </div>
                 </div>
               </div>
+
+              {/* Active Festival Collections Banner (Driven by festive_events for active Outlet) */}
+              {festiveEvents.length > 0 && (
+                <div className="pt-2 space-y-2.5 max-w-xl mx-auto lg:mx-0">
+                  {festiveEvents.slice(0, 2).map((ev) => {
+                    const nowMs = Date.now();
+                    const startMs = ev.bookingStartAt ? new Date(ev.bookingStartAt).getTime() : 0;
+                    const endMs = ev.bookingEndAt ? new Date(ev.bookingEndAt).getTime() : Infinity;
+                    const isOpen = ev.status === 'active' && nowMs >= startMs && nowMs <= endMs;
+                    const notStarted = nowMs < startMs;
+                    const festDateFormatted = ev.festivalDate
+                      ? new Date(ev.festivalDate).toLocaleDateString('en-IN', {
+                          day: 'numeric',
+                          month: 'short',
+                          year: 'numeric',
+                        })
+                      : '';
+                    const endFormatted = ev.bookingEndAt
+                      ? new Date(ev.bookingEndAt).toLocaleDateString('en-IN', {
+                          day: 'numeric',
+                          month: 'short',
+                        })
+                      : '';
+
+                    return (
+                      <div
+                        key={ev.id}
+                        onClick={() => goToShop('utsav_specials')}
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            goToShop('utsav_specials');
+                          }
+                        }}
+                        className="p-3 sm:p-3.5 bg-gradient-to-r from-amber-50 via-stone-50 to-orange-50/40 border border-amber-300/80 rounded-2xl flex items-center gap-3.5 text-left cursor-pointer hover:border-amber-500 transition-colors shadow-2xs group"
+                      >
+                        <img
+                          src={ev.bannerImage || '/images/categories/utsav_specials.jpg'}
+                          alt={ev.name}
+                          className="w-14 h-14 sm:w-16 sm:h-16 rounded-xl object-cover border border-amber-200 shrink-0 bg-amber-100"
+                          referrerPolicy="no-referrer"
+                          onError={(e) => {
+                            (e.currentTarget as HTMLImageElement).src = '/images/categories/utsav_specials.jpg';
+                          }}
+                        />
+                        <div className="flex-1 min-w-0 space-y-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider text-amber-900">
+                              <Sparkles className="w-3 h-3 text-amber-600 fill-amber-400 shrink-0" />
+                              {ev.name}
+                            </span>
+                            <span
+                              className={`text-[10px] font-bold px-2 py-0.5 rounded-md border tabular-nums ${
+                                isOpen
+                                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                  : notStarted
+                                    ? 'bg-amber-100 text-amber-900 border-amber-300'
+                                    : 'bg-stone-100 text-stone-600 border-stone-200'
+                              }`}
+                            >
+                              {isOpen
+                                ? `Booking Open • Till ${endFormatted}`
+                                : notStarted
+                                  ? 'Opening Soon'
+                                  : 'Booking Closed'}
+                            </span>
+                          </div>
+                          {ev.description && (
+                            <p className="text-[11px] text-stone-600 line-clamp-1">{ev.description}</p>
+                          )}
+                          <div className="flex items-center flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-stone-700 font-medium tabular-nums">
+                            {festDateFormatted && (
+                              <span className="inline-flex items-center gap-1">
+                                <Calendar className="w-3 h-3 text-amber-700" />
+                                Festival: {festDateFormatted}
+                              </span>
+                            )}
+                            <span className="inline-flex items-center gap-1 text-amber-900">
+                              <PackageCheck className="w-3 h-3 text-amber-700" />
+                              25% Advance Available
+                            </span>
+                          </div>
+                        </div>
+                        <ArrowRight className="w-4 h-4 text-amber-800 shrink-0 group-hover:translate-x-0.5 transition-transform" />
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </motion.div>
 
             {/* Right Visual (5 cols) - Interactive Carousel */}

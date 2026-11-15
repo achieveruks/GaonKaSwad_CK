@@ -57,20 +57,13 @@ export interface OutletAbout {
   expCard3Title?: string;
   expCard3Header?: string;
   expCard3Description?: string;
-  // Utsav Specials Promotional Fields (Saved to DB 'abouts' table)
-  utsavPromoEnabled?: boolean;
-  utsavPromoHeading?: string;
-  utsavPromoDescription?: string;
-  utsavPromoCtaText?: string;
-  utsavPromoImage?: string;
-  utsavFestivalName?: string;
   createdAt?: string;
   updatedAt?: string;
 }
 
 export interface FestiveEvent {
   id: string;
-  outletId: string;
+  outletIds: string[];
   name: string;
   slug: string;
   description?: string;
@@ -163,7 +156,7 @@ export interface FestiveOverviewSummary {
   specialPackagingUnits: number;
   events: Array<{
     id: string;
-    outletId: string;
+    outletIds: string[];
     name: string;
     festivalDate: string;
     bookingStartAt: string;

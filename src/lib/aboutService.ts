@@ -89,5 +89,5 @@ export async function saveAboutByOutletId(
 
   if (savedRecord) return savedRecord;
 
-  throw new Error(lastError || 'Failed to save outlet About & Utsav promo configuration');
+  throw new Error(lastError || 'Failed to save outlet About configuration');
 }
