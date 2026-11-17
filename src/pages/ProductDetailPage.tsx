@@ -683,39 +683,51 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
           )}
 
           {/* 2. Spice Level Selector */}
-          <div className="space-y-2">
-            <label className="block text-xs font-bold text-gray-800 uppercase tracking-wider">
-              Customize Spice Intensity
-            </label>
-            <div className="grid grid-cols-4 gap-1.5">
-              {(['Mild', 'Medium', 'Spicy', 'Extra Spicy'] as const).map((spice) => {
-                const isSelected = selectedSpiceLevel === spice;
-                return (
-                  <button
-                    key={spice}
-                    type="button"
-                    onClick={() => setSelectedSpiceLevel(spice)}
-                    className={`py-1.5 px-2 rounded-xl text-xs font-semibold border transition-all text-center flex flex-col items-center gap-0.5 ${
-                      isSelected
-                        ? 'border-gray-900 bg-gray-900 text-white shadow-xs'
-                        : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50'
-                    }`}
-                  >
-                    <Flame
-                      className={`w-3.5 h-3.5 ${
-                        spice === 'Extra Spicy'
-                          ? 'text-rose-400'
-                          : spice === 'Spicy'
-                          ? 'text-orange-400'
-                          : 'text-amber-400'
-                      }`}
-                    />
-                    <span className="truncate text-[11px]">{spice}</span>
-                  </button>
-                );
-              })}
+          {product.spiceLevel === 'Sweet' ? (
+            <div className="space-y-1.5">
+              <label className="block text-xs font-bold text-gray-800 uppercase tracking-wider">
+                Flavor Profile
+              </label>
+              <div className="p-2.5 rounded-xl border border-amber-200 bg-amber-50/70 text-xs font-semibold text-amber-950 flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-amber-700 shrink-0" />
+                <span>Sweet (Traditional Authentic Preparation)</span>
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="space-y-2">
+              <label className="block text-xs font-bold text-gray-800 uppercase tracking-wider">
+                Customize Spice Intensity
+              </label>
+              <div className="grid grid-cols-4 gap-1.5">
+                {(['Mild', 'Medium', 'Spicy', 'Extra Spicy'] as const).map((spice) => {
+                  const isSelected = selectedSpiceLevel === spice;
+                  return (
+                    <button
+                      key={spice}
+                      type="button"
+                      onClick={() => setSelectedSpiceLevel(spice)}
+                      className={`py-1.5 px-2 rounded-xl text-xs font-semibold border transition-all text-center flex flex-col items-center gap-0.5 ${
+                        isSelected
+                          ? 'border-gray-900 bg-gray-900 text-white shadow-xs'
+                          : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50'
+                      }`}
+                    >
+                      <Flame
+                        className={`w-3.5 h-3.5 ${
+                          spice === 'Extra Spicy'
+                            ? 'text-rose-400'
+                            : spice === 'Spicy'
+                            ? 'text-orange-400'
+                            : 'text-amber-400'
+                        }`}
+                      />
+                      <span className="truncate text-[11px]">{spice}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {/* 3. Add-on Accompaniments */}
           {product.addons && product.addons.length > 0 && (

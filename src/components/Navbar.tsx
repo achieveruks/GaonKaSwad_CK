@@ -19,7 +19,7 @@ import {
   LogOut,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import gksSquareLogo from '../assets/images/gks_contrast_logo.jpg';
+const gksSquareLogo = '/images/brand/gks_contrast_logo.jpg';
 
 export const Navbar: React.FC = () => {
   const { currentRoute, goToHome, goToShop, goToCategories, goToAbout, goToContact, goToProfile, goToOrders } =

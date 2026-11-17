@@ -102,8 +102,20 @@ export const OrderDetailsModal: React.FC<OrderDetailsModalProps> = ({
   const formattedReceiptDate = formatDateTime(rawReceivedAt);
 
   // 2. Scheduled date formatting
+  const isPbScheduled =
+    isPrebook ||
+    order.deliveryType === 'pb-scheduled' ||
+    order.delivery_type === 'pb-scheduled' ||
+    order.customerDetails?.deliveryType === 'pb-scheduled';
+  const festivalDateDisplay = order.festivalDeliveryAt
+    ? new Date(order.festivalDeliveryAt).toLocaleDateString('en-IN', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+      })
+    : '';
   let scheduledDisplay = '';
-  if (order.deliveryType === 'scheduled' || order.delivery_type === 'scheduled') {
+  if (!isPbScheduled && !isSelfPickup && (order.deliveryType === 'scheduled' || order.delivery_type === 'scheduled')) {
     const rawScheduled = order.scheduledAt || order.scheduled_at;
     if (rawScheduled) {
       try {
@@ -318,12 +330,31 @@ export const OrderDetailsModal: React.FC<OrderDetailsModalProps> = ({
 
             {/* 2. Delivery Mode */}
             <div className="flex items-start gap-2 sm:border-l sm:border-stone-200 sm:pl-4">
-              {isSelfPickup ? (
+              {isPbScheduled ? (
+                <>
+                  {isSelfPickup ? (
+                    <Store className="w-4 h-4 text-amber-800 shrink-0 mt-0.5" />
+                  ) : (
+                    <Calendar className="w-4 h-4 text-amber-800 shrink-0 mt-0.5" />
+                  )}
+                  <div>
+                    <p className="text-xs text-stone-500 uppercase tracking-wider font-medium">Delivery Mode</p>
+                    <p className="text-xs font-bold text-amber-950 leading-tight">
+                      {isSelfPickup ? 'Pre-book Self-Pickup' : 'Utsav Pre-book Scheduled'}
+                    </p>
+                    <p className="text-[11px] text-amber-800 font-medium mt-0.5 tabular-nums">
+                      {isSelfPickup
+                        ? `Counter pickup on ${festivalDateDisplay || 'festival date'}`
+                        : `Delivery by ${festivalDateDisplay || 'festival date'}`}
+                    </p>
+                  </div>
+                </>
+              ) : isSelfPickup ? (
                 <>
                   <Store className="w-4 h-4 text-teal-700 shrink-0 mt-0.5" />
                   <div>
                     <p className="text-xs text-stone-500 uppercase tracking-wider font-medium">Delivery Mode</p>
-                    <p className="text-xs font-bold text-teal-900 leading-tight">Self-Pickup</p>
+                    <p className="text-xs font-bold text-teal-900 leading-tight">Self-Pickup (Instant Prep)</p>
                     <p className="text-[11px] text-stone-500 font-medium mt-0.5">Collect from kitchen outlet</p>
                   </div>
                 </>

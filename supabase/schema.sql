@@ -224,7 +224,7 @@ CREATE TABLE IF NOT EXISTS public.orders (
   customer_address_id UUID REFERENCES public.customer_addresses(id) ON DELETE SET NULL, -- Saved Address Reference
   address_id UUID REFERENCES public.customer_addresses(id) ON DELETE SET NULL, -- Compatible alias for customer_address_id
   outlet_id TEXT NOT NULL REFERENCES public.outlets(id),                 -- Mandatory Outlet Reference
-  order_type TEXT DEFAULT 'delivery',                                    -- delivery | pickup
+  order_type TEXT DEFAULT 'delivery',                                    -- delivery | pickup | prebook
   is_self_pickup BOOLEAN DEFAULT false,                                  -- True if customer self-pickup
 
   -- Order & Payment Statuses (order_status is the canonical status field)
@@ -260,7 +260,7 @@ CREATE TABLE IF NOT EXISTS public.orders (
   delivery_address_snapshot JSONB DEFAULT '{}'::jsonb,                   -- Address object snapshot at checkout
   delivery_pincode TEXT,                                                 -- Delivery PIN code
   delivery_instructions TEXT,                                            -- Gate/cooking delivery notes
-  delivery_type VARCHAR(50) DEFAULT 'immediate',                         -- immediate | scheduled
+  delivery_type VARCHAR(50) DEFAULT 'immediate',                         -- immediate | scheduled | pb-scheduled
   scheduled_at TIMESTAMPTZ,                                              -- Scheduled delivery timestamp (TIMESTAMPTZ)
   estimated_delivery_minutes INTEGER DEFAULT 35,
 

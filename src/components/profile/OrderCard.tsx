@@ -57,9 +57,13 @@ export const OrderCard: React.FC<OrderCardProps> = ({
     hour12: true,
   });
 
-  // Scheduled check
+  // Timing check
+  const isOrderPickup = order.orderType === 'pickup' || !!order.isSelfPickup;
   const isScheduled =
-    order.deliveryType === 'scheduled' || order.delivery_type === 'scheduled';
+    !isOrderPickup &&
+    order.orderType !== 'prebook' &&
+    order.deliveryType !== 'pb-scheduled' &&
+    (order.deliveryType === 'scheduled' || order.delivery_type === 'scheduled');
   let scheduledTimeDisplay = '';
   if (isScheduled && (order.scheduledAt || order.scheduled_at)) {
     try {
@@ -267,10 +271,16 @@ export const OrderCard: React.FC<OrderCardProps> = ({
           </div>
 
           <div className="ml-auto">
-            {isPrebook && festivalDeliveryDisplay ? (
+            {isPrebook || order.deliveryType === 'pb-scheduled' || order.delivery_type === 'pb-scheduled' ? (
               <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-900 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-lg tabular-nums">
                 <Calendar className="w-3 h-3 text-amber-700" />
-                Festival Delivery: {festivalDeliveryDisplay}
+                {isOrderPickup ? 'Festival Pickup: ' : 'Festival Delivery: '}
+                {festivalDeliveryDisplay || 'Scheduled'}
+              </span>
+            ) : isOrderPickup ? (
+              <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-teal-900 bg-teal-50 border border-teal-200 px-2.5 py-1 rounded-lg">
+                <Zap className="w-3 h-3 text-teal-700" />
+                Self-Pickup (Instant Prep)
               </span>
             ) : isScheduled ? (
               <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-800 bg-indigo-50 border border-indigo-200 px-2.5 py-1 rounded-lg">

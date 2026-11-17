@@ -182,7 +182,7 @@ export const ManagerOrderDetailsModal: React.FC<ManagerOrderDetailsModalProps> =
               {order.festivalDeliveryAt && (
                 <div className="sm:text-right tabular-nums shrink-0">
                   <span className="text-[10px] font-bold uppercase tracking-wider text-amber-800 block">
-                    Festival Delivery Date
+                    {isPickup ? 'Festival Pickup Date' : 'Festival Delivery Date'}
                   </span>
                   <span className="font-mono font-bold text-stone-950 text-sm">
                     {new Date(order.festivalDeliveryAt).toLocaleDateString('en-IN', {
@@ -196,8 +196,11 @@ export const ManagerOrderDetailsModal: React.FC<ManagerOrderDetailsModalProps> =
             </div>
           )}
 
-          {/* Scheduled Order Attention Banner */}
-          {(order.deliveryType === 'scheduled' || order.customerDetails?.deliveryType === 'scheduled') && (
+          {/* Scheduled Order Attention Banner (normal scheduled delivery only) */}
+          {!isPrebook &&
+            !isPickup &&
+            order.deliveryType !== 'pb-scheduled' &&
+            (order.deliveryType === 'scheduled' || order.customerDetails?.deliveryType === 'scheduled') && (
             <div className="bg-gradient-to-r from-amber-100 via-amber-50 to-orange-50 rounded-xl border-2 border-amber-400 p-4 flex items-center justify-between gap-3 text-amber-950 shadow-2xs">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-xl bg-amber-900 text-amber-100 flex items-center justify-center shrink-0 shadow-xs">
@@ -263,15 +266,31 @@ export const ManagerOrderDetailsModal: React.FC<ManagerOrderDetailsModalProps> =
               </div>
               <div>
                 <span className="text-[10px] text-stone-500 font-semibold block">DELIVERY TYPE</span>
-                <span className="font-bold text-stone-800 capitalize">
-                  {order.deliveryType === 'scheduled' || order.customerDetails?.deliveryType === 'scheduled'
-                    ? 'Scheduled'
-                    : 'Immediate'}
-                </span>
-                {(order.deliveryType === 'scheduled' || order.customerDetails?.deliveryType === 'scheduled') && (
-                  <span className="text-[10px] text-amber-900 font-semibold block mt-0.5 leading-tight">
-                    {order.customerDetails?.scheduledSlotLabel ||
-                      formatScheduledAt(order.scheduledAt || order.customerDetails?.scheduledAt)}
+                {isPrebook || order.deliveryType === 'pb-scheduled' || order.customerDetails?.deliveryType === 'pb-scheduled' ? (
+                  <>
+                    <span className="font-bold text-amber-950">Pre-book Scheduled</span>
+                    <span className="text-[10px] text-amber-900 font-semibold block mt-0.5 leading-tight tabular-nums">
+                      {isPickup ? 'Pickup: ' : 'Delivery: '}
+                      {order.festivalDeliveryAt
+                        ? new Date(order.festivalDeliveryAt).toLocaleDateString('en-IN', {
+                            day: 'numeric',
+                            month: 'short',
+                            year: 'numeric',
+                          })
+                        : 'Festival Date'}
+                    </span>
+                  </>
+                ) : !isPickup && (order.deliveryType === 'scheduled' || order.customerDetails?.deliveryType === 'scheduled') ? (
+                  <>
+                    <span className="font-bold text-stone-800 capitalize">Scheduled</span>
+                    <span className="text-[10px] text-amber-900 font-semibold block mt-0.5 leading-tight">
+                      {order.customerDetails?.scheduledSlotLabel ||
+                        formatScheduledAt(order.scheduledAt || order.customerDetails?.scheduledAt)}
+                    </span>
+                  </>
+                ) : (
+                  <span className="font-bold text-stone-800">
+                    {isPickup ? 'Immediate (Self-Pickup)' : 'Immediate (Express)'}
                   </span>
                 )}
               </div>

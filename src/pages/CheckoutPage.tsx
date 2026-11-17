@@ -345,6 +345,9 @@ export const CheckoutPage: React.FC = () => {
       ...prev,
       orderType: checked ? 'pickup' : 'delivery',
       isSelfPickup: checked,
+      ...(checked && hasNormalItems
+        ? { deliveryType: 'immediate', scheduledAt: undefined }
+        : {}),
     }));
   };
 
@@ -896,6 +899,35 @@ export const CheckoutPage: React.FC = () => {
     }
     return map;
   }, [activeFestiveEvents]);
+
+  const isPrebookOnlyCart = hasPrebookItems && !hasNormalItems;
+
+  const prebookScheduleSummary = useMemo(() => {
+    if (!hasPrebookItems) return null;
+    const festivalNames: string[] = [];
+    const dateLabels: string[] = [];
+    for (const item of prebookItems) {
+      const ev = item.product.festiveEventId ? festiveEventById[item.product.festiveEventId] : undefined;
+      const fName = ev?.name || (item as any).festivalName || (item.product as any).festivalName;
+      if (fName && !festivalNames.includes(fName)) {
+        festivalNames.push(fName);
+      }
+      const rawDate = ev?.festivalDate || (item as any).festivalDeliveryDate || (item.product as any).festivalDeliveryDate;
+      if (rawDate) {
+        const parsed = new Date(rawDate);
+        const formatted = !isNaN(parsed.getTime())
+          ? parsed.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
+          : String(rawDate);
+        if (!dateLabels.includes(formatted)) {
+          dateLabels.push(formatted);
+        }
+      }
+    }
+    return {
+      festivalName: festivalNames.join(' and ') || 'Utsav Pre-book',
+      deliveryDateText: dateLabels.join(' / ') || 'scheduled festival date',
+    };
+  }, [hasPrebookItems, prebookItems, festiveEventById]);
 
   // Disable COD automatically when pre-book items exist in the cart
   useEffect(() => {
@@ -1634,6 +1666,15 @@ export const CheckoutPage: React.FC = () => {
     let checkoutApiError: string | null = null;
     let allowLegacyNormalFallback = false;
 
+    const effectiveSubmissionDeliveryType: 'immediate' | 'scheduled' | 'pb-scheduled' =
+      isPrebookOnlyCart
+        ? 'pb-scheduled'
+        : isSelfPickup
+          ? 'immediate'
+          : formData.deliveryType === 'scheduled'
+            ? 'scheduled'
+            : 'immediate';
+
     try {
       const checkoutRes = await fetch('/api/orders/checkout', {
         method: 'POST',
@@ -1646,15 +1687,16 @@ export const CheckoutPage: React.FC = () => {
           customerId: resolvedCustId || undefined,
           addressId: isSelfPickup ? null : (resolvedAddrId || null),
           isGuestCheckout: !isCustomerLoggedIn && !formData.createAccount,
-          orderType: isSelfPickup ? 'pickup' : 'delivery',
+          orderType: isPrebookOnlyCart ? 'prebook' : (isSelfPickup ? 'pickup' : 'delivery'),
           isSelfPickup,
-          deliveryType: formData.deliveryType,
-          scheduledAt: formData.scheduledAt,
+          deliveryType: effectiveSubmissionDeliveryType,
+          scheduledAt: effectiveSubmissionDeliveryType === 'scheduled' ? formData.scheduledAt : undefined,
           kitchenAddress:
             currentOutlet?.address ||
             `${selectedLocation?.outletName || 'Swad Click Kitchen Facility'}, Main Commercial Hub`,
           customerDetails: {
             ...formData,
+            deliveryType: effectiveSubmissionDeliveryType,
             orderType: isSelfPickup ? 'pickup' : 'delivery',
             isSelfPickup,
           },
@@ -1737,9 +1779,11 @@ export const CheckoutPage: React.FC = () => {
         swadCoinDiscountAmount: swadCoinDiscount,
         customerDetails: {
           ...formData,
+          deliveryType: effectiveSubmissionDeliveryType,
           orderType: isSelfPickup ? 'pickup' : 'delivery',
           isSelfPickup,
         },
+        deliveryType: effectiveSubmissionDeliveryType,
         orderType: isSelfPickup ? 'pickup' : 'delivery',
         isSelfPickup,
         kitchenAddress:
@@ -2087,9 +2131,22 @@ export const CheckoutPage: React.FC = () => {
             <div className="text-left mb-3">
               <h3 className="font-bold text-sm text-gray-900">Live Kitchen Tracker</h3>
               <p className="text-xs text-gray-500">
-                {isOrderPickup
-                  ? `Estimated Ready Time: ~${liveEstDeliveryMinutes} mins`
-                  : `Estimated Delivery: ~${liveEstDeliveryMinutes} mins`}
+                {placedOrders.length <= 1 && (placedOrder.orderType === 'prebook' || placedOrder.deliveryType === 'pb-scheduled')
+                  ? (() => {
+                      const festDateStr = placedOrder.festivalDeliveryAt
+                        ? new Date(placedOrder.festivalDeliveryAt).toLocaleDateString('en-IN', {
+                            day: 'numeric',
+                            month: 'short',
+                            year: 'numeric',
+                          })
+                        : 'Scheduled Festival Date';
+                      return isOrderPickup
+                        ? `Festival Counter Pickup: ${festDateStr}`
+                        : `Festival Delivery By: ${festDateStr}`;
+                    })()
+                  : isOrderPickup
+                    ? `Estimated Ready Time: ~${liveEstDeliveryMinutes} mins`
+                    : `Estimated Delivery: ~${liveEstDeliveryMinutes} mins`}
               </p>
             </div>
 
@@ -2250,17 +2307,79 @@ export const CheckoutPage: React.FC = () => {
               <p className="capitalize mt-1">
                 Method: <strong>{placedOrder.customerDetails.paymentMethod.toUpperCase()}</strong> (Demo Test)
               </p>
+              {(() => {
+                const placedList = placedOrders.length > 0 ? placedOrders : [placedOrder];
+                const formatChildModeLabel = (child: Order) => {
+                  const childIsPickup = child.isSelfPickup || child.orderType === 'pickup';
+                  const childIsPrebook =
+                    child.orderType === 'prebook' ||
+                    child.deliveryType === 'pb-scheduled' ||
+                    (child as any).delivery_type === 'pb-scheduled' ||
+                    child.customerDetails?.deliveryType === 'pb-scheduled';
+
+                  if (childIsPrebook) {
+                    const festDate = child.festivalDeliveryAt
+                      ? new Date(child.festivalDeliveryAt).toLocaleDateString('en-IN', {
+                          day: 'numeric',
+                          month: 'short',
+                          year: 'numeric',
+                        })
+                      : 'Scheduled Festival Date';
+                    return childIsPickup
+                      ? `Utsav Pre-book Pickup on ${festDate}`
+                      : `Utsav Pre-book Delivery by ${festDate}`;
+                  }
+                  if (childIsPickup) {
+                    return 'Instant Self-Pickup (~25–30 Mins Prep)';
+                  }
+                  if (
+                    child.deliveryType === 'scheduled' ||
+                    (child as any).delivery_type === 'scheduled' ||
+                    child.customerDetails?.deliveryType === 'scheduled'
+                  ) {
+                    return (
+                      child.customerDetails?.scheduledSlotLabel ||
+                      formatScheduledAt(child.scheduledAt || child.customerDetails?.scheduledAt)
+                    );
+                  }
+                  return 'Express Delivery (30–40 Mins)';
+                };
+
+                if (placedList.length > 1) {
+                  return (
+                    <div className="mt-1.5 space-y-1">
+                      <p className="font-semibold text-stone-800">Delivery Type (Split Fulfillment):</p>
+                      {placedList.map((child) => {
+                        const isChildPb =
+                          child.orderType === 'prebook' ||
+                          child.deliveryType === 'pb-scheduled' ||
+                          (child as any).delivery_type === 'pb-scheduled';
+                        return (
+                          <div
+                            key={child.orderId}
+                            className="flex flex-wrap items-baseline gap-1.5 text-[11px] bg-white border border-stone-200 rounded-lg px-2 py-1"
+                          >
+                            <span className="font-mono font-bold text-stone-900">
+                              {isChildPb ? 'Utsav Pre-book' : 'Instant Order'} ({formatDisplayOrderId(child.orderId)}):
+                            </span>
+                            <span className="font-semibold text-amber-900 tabular-nums">
+                              {formatChildModeLabel(child)}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                }
+
+                return (
+                  <p className="mt-1">
+                    Delivery Type:{' '}
+                    <strong className="tabular-nums">{formatChildModeLabel(placedOrder)}</strong>
+                  </p>
+                );
+              })()}
               <p className="mt-1">
-                Delivery Type:{' '}
-                <strong>
-                  {placedOrder.deliveryType === 'scheduled' ||
-                  placedOrder.customerDetails.deliveryType === 'scheduled'
-                    ? placedOrder.customerDetails.scheduledSlotLabel ||
-                      formatScheduledAt(placedOrder.scheduledAt || placedOrder.customerDetails.scheduledAt)
-                    : 'Express Delivery (30–40 Mins)'}
-                </strong>
-              </p>
-              <p>
                 Customer Type:{' '}
                 <strong>{placedOrder.isGuestCheckout ? 'Guest Checkout' : 'Registered Member'}</strong>
               </p>
@@ -3350,7 +3469,7 @@ export const CheckoutPage: React.FC = () => {
 
             {/* 3. Dedicated Delivery Speed & Slot Banner */}
             <div className="bg-white rounded-2xl border border-gray-200 p-5 shadow-xs space-y-3.5">
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-2">
                 <h3 className="font-bold text-sm text-gray-900 flex items-center gap-1.5">
                   <span className="w-5 h-5 rounded-full bg-orange-600 text-white text-[10px] flex items-center justify-center font-bold">
                     3
@@ -3358,25 +3477,102 @@ export const CheckoutPage: React.FC = () => {
                   <span>Delivery Speed & Slot</span>
                 </h3>
                 <span className="text-[11px] text-stone-500 flex items-center gap-1 font-medium">
-                  <Clock className="w-3.5 h-3.5 text-orange-600" />
-                  <span>Fresh Handi Dispatch</span>
+                  {isPrebookOnlyCart ? (
+                    <>
+                      <Calendar className="w-3.5 h-3.5 text-amber-700" />
+                      <span>Utsav Pre-book Schedule</span>
+                    </>
+                  ) : (
+                    <>
+                      <Clock className="w-3.5 h-3.5 text-orange-600" />
+                      <span>{isSelfPickup ? 'Instant Kitchen Prep' : 'Fresh Handi Dispatch'}</span>
+                    </>
+                  )}
                 </span>
               </div>
 
-              {isSelfPickup ? (
-                <div className="p-3.5 bg-amber-50/70 border border-amber-200 rounded-xl flex items-center justify-between gap-3 text-xs text-stone-800">
-                  <div className="flex items-center gap-2.5">
-                    <Store className="w-4 h-4 text-amber-800 shrink-0" />
-                    <div>
-                      <p className="font-bold text-stone-900">Takeaway / Self-Pickup Readiness</p>
-                      <p className="text-[11px] text-stone-600 mt-0.5">
-                        Estimated kitchen preparation time is <strong>~25–30 mins</strong>.
-                      </p>
+              {isPrebookOnlyCart ? (
+                <div className="space-y-3">
+                  <div className="p-4 bg-amber-50/80 border border-amber-200 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-stone-800">
+                    <div className="flex items-start gap-3">
+                      <div className="w-9 h-9 rounded-lg bg-amber-100 border border-amber-200 text-amber-900 flex items-center justify-center shrink-0">
+                        {isSelfPickup ? <Store className="w-4 h-4" /> : <Calendar className="w-4 h-4" />}
+                      </div>
+                      <div>
+                        <p className="font-bold text-stone-900">
+                          {isSelfPickup ? 'Festival Scheduled Self-Pickup' : 'Festival Scheduled Delivery'}
+                        </p>
+                        <p className="text-[11px] text-stone-700 mt-0.5 leading-relaxed">
+                          {isSelfPickup
+                            ? `Your ${prebookScheduleSummary?.festivalName || 'Utsav Pre-book'} order will be freshly prepared for counter pickup on `
+                            : `Delivery will happen by `}
+                          <strong className="text-amber-950 tabular-nums">
+                            {prebookScheduleSummary?.deliveryDateText || 'the scheduled festival date'}
+                          </strong>
+                          {!isSelfPickup && prebookScheduleSummary?.festivalName
+                            ? ` · Freshly dum-cooked for ${prebookScheduleSummary.festivalName}.`
+                            : '.'}
+                        </p>
+                      </div>
                     </div>
+                    <span className="text-[11px] font-bold text-amber-900 bg-white border border-amber-300 px-2.5 py-1 rounded-lg shrink-0 self-start sm:self-center">
+                      Pre-book Scheduled
+                    </span>
                   </div>
-                  <span className="text-[11px] font-bold bg-amber-100 text-amber-900 px-2.5 py-1 rounded-lg shrink-0">
-                    Instant Preparation
-                  </span>
+
+                  {/* Cooking / Delivery Instructions */}
+                  <div className="pt-2 border-t border-gray-100">
+                    <label className="block text-[11px] font-semibold text-gray-700 mb-1">
+                      Cooking or Delivery Instructions <span className="text-stone-400 font-normal">(Optional)</span>
+                    </label>
+                    <input
+                      type="text"
+                      name="deliveryNotes"
+                      value={formData.deliveryNotes}
+                      onChange={handleChange}
+                      placeholder="e.g. Ring doorbell, leave at security gate, make gravies mild spicy"
+                      className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs focus:outline-none focus:border-orange-500 focus:bg-white text-gray-900 transition-colors"
+                    />
+                  </div>
+                </div>
+              ) : isSelfPickup ? (
+                <div className="space-y-3">
+                  <div className="p-3.5 bg-amber-50/70 border border-amber-200 rounded-xl flex items-center justify-between gap-3 text-xs text-stone-800">
+                    <div className="flex items-center gap-2.5">
+                      <Store className="w-4 h-4 text-amber-800 shrink-0" />
+                      <div>
+                        <p className="font-bold text-stone-900">Takeaway / Self-Pickup Readiness</p>
+                        <p className="text-[11px] text-stone-600 mt-0.5">
+                          Estimated kitchen preparation time for your instant order is <strong>~25–30 mins</strong>.
+                        </p>
+                      </div>
+                    </div>
+                    <span className="text-[11px] font-bold bg-amber-100 text-amber-900 px-2.5 py-1 rounded-lg shrink-0">
+                      Instant Preparation
+                    </span>
+                  </div>
+
+                  {isMixedCart && prebookScheduleSummary && (
+                    <p className="text-[11px] text-amber-900 bg-amber-50/60 border border-amber-200/80 rounded-lg px-3 py-2 font-medium tabular-nums">
+                      Utsav Pre-book Pickup: Your <strong>{prebookScheduleSummary.festivalName}</strong> dishes will be prepared separately for counter pickup on{' '}
+                      <strong>{prebookScheduleSummary.deliveryDateText}</strong>.
+                    </p>
+                  )}
+
+                  {/* Cooking / Pickup Instructions */}
+                  <div className="pt-2 border-t border-gray-100">
+                    <label className="block text-[11px] font-semibold text-gray-700 mb-1">
+                      Cooking or Pickup Instructions <span className="text-stone-400 font-normal">(Optional)</span>
+                    </label>
+                    <input
+                      type="text"
+                      name="deliveryNotes"
+                      value={formData.deliveryNotes}
+                      onChange={handleChange}
+                      placeholder="e.g. Make gravies mild spicy, pack cutlery separately"
+                      className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs focus:outline-none focus:border-orange-500 focus:bg-white text-gray-900 transition-colors"
+                    />
+                  </div>
                 </div>
               ) : (
                 <div className="space-y-3">
@@ -3413,7 +3609,7 @@ export const CheckoutPage: React.FC = () => {
                           </span>
                         </div>
                         <p className="text-[11px] text-gray-600 mt-1 leading-relaxed">
-                          Piping hot dum-cooked clay pot dispatched right away from the live kitchen.
+                          Piping dispatched right away from the live kitchen.
                         </p>
                       </div>
                     </label>
@@ -3464,6 +3660,14 @@ export const CheckoutPage: React.FC = () => {
                       </div>
                     </div>
                   </div>
+
+                  {isMixedCart && prebookScheduleSummary && (
+                    <p className="text-[11px] text-amber-900 bg-amber-50/70 border border-amber-200 rounded-lg px-3 py-2 font-medium tabular-nums">
+                      Mixed Order Split: Delivery speed above applies to your non-festive dishes. Your{' '}
+                      <strong>{prebookScheduleSummary.festivalName}</strong> pre-book items will be delivered separately by{' '}
+                      <strong>{prebookScheduleSummary.deliveryDateText}</strong>.
+                    </p>
+                  )}
 
                   {/* Cooking / Delivery Instructions */}
                   <div className="pt-2 border-t border-gray-100">

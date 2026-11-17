@@ -3825,6 +3825,18 @@ async function getNextServerOrderId(): Promise<string> {
 function mapDbOrderRow(data: any): any {
   if (!data) return null;
   const isPickup = data.order_type === 'pickup' || !!data.is_self_pickup;
+  const isPrebook = data.order_type === 'prebook' || Boolean(data.festive_event_id);
+  const deliveryType: 'immediate' | 'scheduled' | 'pb-scheduled' =
+    isPrebook ||
+    data.delivery_type === 'pb-scheduled' ||
+    data.customer_details?.deliveryType === 'pb-scheduled'
+      ? 'pb-scheduled'
+      : isPickup
+        ? 'immediate'
+        : data.delivery_type === 'scheduled' ||
+            data.customer_details?.deliveryType === 'scheduled'
+          ? 'scheduled'
+          : 'immediate';
   const rawStatus = String(data.order_status || data.status || 'received').toLowerCase().trim();
   const displayStatus =
     rawStatus === 'received'
@@ -3911,7 +3923,10 @@ function mapDbOrderRow(data: any): any {
     deliveredAt: data.delivered_at || undefined,
     cancelledAt: data.cancelled_at || undefined,
     cancellationReason: data.cancellation_reason || undefined,
+    deliveryType,
+    delivery_type: deliveryType,
     scheduledAt: data.scheduled_at || undefined,
+    scheduled_at: data.scheduled_at || undefined,
   };
 }
 
@@ -4264,16 +4279,33 @@ app.post('/api/orders', async (req, res) => {
         payload.customerDetails?.deliveryNotes ||
         null;
 
-      const isScheduled =
-        order.deliveryType === 'scheduled' ||
-        order.customerDetails?.deliveryType === 'scheduled' ||
-        payload.deliveryType === 'scheduled' ||
-        payload.customerDetails?.deliveryType === 'scheduled';
+      const isPbScheduled =
+        isPrebook ||
+        orderData.orderType === 'prebook' ||
+        Boolean(payload.festiveEventId) ||
+        order.deliveryType === 'pb-scheduled' ||
+        payload.deliveryType === 'pb-scheduled';
 
-      const deliveryType = isScheduled ? 'scheduled' : 'immediate';
+      const isScheduled =
+        !isPbScheduled &&
+        !isSelfPickup &&
+        (order.deliveryType === 'scheduled' ||
+          order.customerDetails?.deliveryType === 'scheduled' ||
+          payload.deliveryType === 'scheduled' ||
+          payload.customerDetails?.deliveryType === 'scheduled');
+
+      const deliveryType: 'immediate' | 'scheduled' | 'pb-scheduled' = isPbScheduled
+        ? 'pb-scheduled'
+        : isScheduled
+          ? 'scheduled'
+          : 'immediate';
 
       let scheduledAt: string | null = null;
-      if (isScheduled) {
+      if (isPbScheduled && (payload.festivalDeliveryAt || order.festivalDeliveryAt)) {
+        const festDt = String(payload.festivalDeliveryAt || order.festivalDeliveryAt).slice(0, 10);
+        const parsedFest = new Date(`${festDt}T11:00:00`);
+        scheduledAt = isNaN(parsedFest.getTime()) ? null : parsedFest.toISOString();
+      } else if (isScheduled) {
         const rawDate =
           order.scheduledAt ||
           order.customerDetails?.scheduledAt ||
@@ -4475,7 +4507,7 @@ app.post('/api/orders', async (req, res) => {
         swad_coin_discount_amount: Number(order.swadCoinDiscountAmount || 0),
         payment_method: order.customerDetails?.paymentMethod || 'cod',
         payment_status: orderData.paymentStatus || fallbackPaymentStatus,
-        order_type: orderData.orderType || (isSelfPickup ? 'pickup' : 'delivery'),
+        order_type: isPbScheduled ? 'prebook' : (isSelfPickup ? 'pickup' : 'delivery'),
         payment_plan: paymentPlan,
         advance_amount: Number(advanceAmount || 0),
         paid_amount: fallbackPaidNow,
@@ -4495,7 +4527,12 @@ app.post('/api/orders', async (req, res) => {
         delivered_at: null,
         cancelled_at: null,
         cancellation_reason: null,
-        customer_details: order.customerDetails || {},
+        customer_details: {
+          ...(order.customerDetails || {}),
+          orderType: isPbScheduled ? 'prebook' : (isSelfPickup ? 'pickup' : 'delivery'),
+          isSelfPickup,
+          deliveryType,
+        },
         delivery_address_snapshot: isSelfPickup ? null : (order.deliveryAddressSnapshot || null),
         delivery_pincode: order.deliveryPinCode || order.customerDetails?.pincode || '',
         estimated_delivery_minutes: Number(order.estimatedDeliveryMinutes || (isSelfPickup ? 25 : 35)),
@@ -4864,25 +4901,34 @@ app.post('/api/orders/checkout', async (req, res) => {
     }
 
     const deliveryPinCode = String(payload.deliveryPinCode || payload.customerDetails?.pincode || '').trim();
+    let matchedDeliveryZone: { id?: string; delivery_fee?: number | string | null } | null = null;
     if (!isSelfPickup) {
       if (!/^\d{6}$/.test(deliveryPinCode)) {
         return res.status(400).json({ success: false, error: 'Please provide a valid 6-digit delivery PIN code.' });
       }
-      const { data: outletZones } = await serverSupabase
+      const { data: outletZones, error: zonesErr } = await serverSupabase
         .from('delivery_zones')
-        .select('id, pin_codes, is_active, delivery_fee, free_delivery_above')
+        .select('id, pin_codes, is_active, delivery_fee')
         .eq('outlet_id', outletId);
 
-      const activeZones = (outletZones || []).filter((z: any) => z.is_active !== false);
+      const activeZones = !zonesErr && Array.isArray(outletZones)
+        ? outletZones.filter((z: any) => z.is_active !== false)
+        : [];
       if (activeZones.length > 0) {
-        const matchedZone = activeZones.find(
+        const foundZone = activeZones.find(
           (z: any) => Array.isArray(z.pin_codes) && z.pin_codes.includes(deliveryPinCode)
         );
-        if (!matchedZone) {
+        if (!foundZone) {
           return res.status(400).json({
             success: false,
             error: `PIN code ${deliveryPinCode} is outside the serviceable delivery area for ${outletRow.name}.`,
           });
+        }
+        matchedDeliveryZone = foundZone;
+      } else {
+        const localZone = productStorage.getDeliveryZoneByPinCode(deliveryPinCode);
+        if (localZone && localZone.outletId === outletId) {
+          matchedDeliveryZone = { id: localZone.id, delivery_fee: localZone.deliveryFee };
         }
       }
     }
@@ -5222,17 +5268,20 @@ app.post('/api/orders/checkout', async (req, res) => {
       authoritativeCoinsUsed = Math.min(requestedCoins, currentCoinBalance, maxCoins);
     }
 
-    // Fees
-    const packagingFeeTotal = Math.max(0, Number(payload.packagingFee ?? outletRow.packaging_fee ?? 0));
-    const freeThreshold = Number(outletRow.free_delivery_threshold ?? 999);
-    const defaultDeliveryFee = Number(outletRow.delivery_fee ?? 40);
+    // Fees (matching CartContext: delivery zone fee takes precedence over outlet default; free threshold defaults to 499)
+    const packagingFeeTotal = Math.max(0, Number(payload.packagingFee ?? outletRow.packaging_fee ?? 25));
+    const freeThreshold = Number(outletRow.free_delivery_threshold ?? 499);
+    const resolvedDeliveryFee =
+      matchedDeliveryZone?.delivery_fee !== undefined && matchedDeliveryZone?.delivery_fee !== null
+        ? Math.max(0, Number(matchedDeliveryZone.delivery_fee))
+        : Math.max(0, Number(outletRow.delivery_fee ?? 40));
     const deliveryFeeTotal = isSelfPickup
       ? 0
       : payload.deliveryFee !== undefined
         ? Math.max(0, Number(payload.deliveryFee))
-        : combinedSubtotal >= freeThreshold
+        : combinedSubtotal > 0 && freeThreshold > 0 && combinedSubtotal >= freeThreshold
           ? 0
-          : defaultDeliveryFee;
+          : resolvedDeliveryFee;
 
     // Run deterministic split calculation
     const breakdown = calculateMixedCheckoutBreakdown({
@@ -5362,6 +5411,25 @@ app.post('/api/orders/checkout', async (req, res) => {
         ? (primaryFestiveEvent?.festival_date || childItems.find((i) => i.festivalDeliveryDate)?.festivalDeliveryDate || null)
         : null;
 
+      const childOrderType =
+        childKind === 'prebook' ? 'prebook' : (isSelfPickup ? 'pickup' : 'delivery');
+      const childDeliveryType: 'immediate' | 'scheduled' | 'pb-scheduled' =
+        childKind === 'prebook'
+          ? 'pb-scheduled'
+          : isSelfPickup
+            ? 'immediate'
+            : isScheduled
+              ? 'scheduled'
+              : 'immediate';
+      const childScheduledAt =
+        childKind === 'prebook'
+          ? (childFestiveDate
+              ? new Date(`${String(childFestiveDate).slice(0, 10)}T11:00:00`).toISOString()
+              : null)
+          : childDeliveryType === 'scheduled'
+            ? scheduledAt
+            : null;
+
       return {
         id: childOrderIdUuid,
         order_id: childOrderNumber,
@@ -5373,7 +5441,7 @@ app.post('/api/orders/checkout', async (req, res) => {
         customer_name: payload.customerDetails?.fullName || null,
         customer_phone: payload.customerDetails?.phone || null,
         is_self_pickup: isSelfPickup,
-        order_type: childKind === 'prebook' ? 'prebook' : (isSelfPickup ? 'pickup' : 'delivery'),
+        order_type: childOrderType,
         payment_plan: totals.paymentPlan,
         advance_amount: totals.advanceAmount,
         paid_amount: childPaid,
@@ -5394,12 +5462,25 @@ app.post('/api/orders/checkout', async (req, res) => {
         swad_coin_discount_amount: totals.swadCoinDiscount,
         payment_method: paymentMethod,
         payment_status: childPaymentStatus,
-        delivery_type: childKind === 'prebook' ? 'scheduled' : (isScheduled ? 'scheduled' : 'immediate'),
-        scheduled_at: childKind === 'prebook' ? (childFestiveDate ? new Date(`${childFestiveDate}T11:00:00`).toISOString() : scheduledAt) : scheduledAt,
+        delivery_type: childDeliveryType,
+        scheduled_at: childScheduledAt,
         delivery_instructions: payload.customerDetails?.deliveryNotes || null,
         order_status: 'received',
         placed_at: nowIso,
-        customer_details: payload.customerDetails || {},
+        customer_details: {
+          ...(payload.customerDetails || {}),
+          orderType: childOrderType,
+          isSelfPickup,
+          deliveryType: childDeliveryType,
+          ...(childKind === 'prebook' || childDeliveryType !== 'scheduled'
+            ? {
+                scheduledAt: childScheduledAt || undefined,
+                ...(childDeliveryType !== 'scheduled'
+                  ? { scheduledDate: undefined, scheduledTimeSlot: undefined, scheduledSlotLabel: undefined }
+                  : {}),
+              }
+            : {}),
+        },
         delivery_address_snapshot: isSelfPickup ? null : (payload.deliveryAddressSnapshot || null),
         delivery_pincode: deliveryPinCode,
         estimated_delivery_minutes: isSelfPickup ? 25 : 35,

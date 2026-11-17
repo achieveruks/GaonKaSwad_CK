@@ -1685,11 +1685,18 @@ export function resolveDbOrderOutlet(row: any, allOutlets: Outlet[] = []): { out
 
 export function mapDbOrderToOrder(row: any): Order {
   const isPickup = row.order_type === 'pickup' || !!row.is_self_pickup;
-  const deliveryType: 'immediate' | 'scheduled' =
-    row.delivery_type === 'scheduled' ||
-    row.customer_details?.deliveryType === 'scheduled'
-      ? 'scheduled'
-      : 'immediate';
+  const isPrebook = row.order_type === 'prebook' || Boolean(row.festive_event_id);
+  const deliveryType: 'immediate' | 'scheduled' | 'pb-scheduled' =
+    isPrebook ||
+    row.delivery_type === 'pb-scheduled' ||
+    row.customer_details?.deliveryType === 'pb-scheduled'
+      ? 'pb-scheduled'
+      : isPickup
+        ? 'immediate'
+        : row.delivery_type === 'scheduled' ||
+            row.customer_details?.deliveryType === 'scheduled'
+          ? 'scheduled'
+          : 'immediate';
 
   const scheduledAt =
     row.scheduled_at ||
@@ -1759,6 +1766,7 @@ export function mapDbOrderToOrder(row: any): Order {
     festivalName: row.festival_name || undefined,
     festival_name: row.festival_name || undefined,
     deliveryType,
+    delivery_type: deliveryType,
     scheduledAt,
     deliveryPinCode: row.delivery_pincode || row.customer_details?.pincode || '',
     createdAt: row.created_at,
@@ -2027,18 +2035,36 @@ export async function createSupabaseOrder(
     (orderData.deliveryAddressSnapshot as any)?.deliveryNotes ||
     null;
 
+  const isPbScheduled =
+    isPrebookDirect ||
+    Boolean(orderData.festiveEventId) ||
+    orderData.deliveryType === 'pb-scheduled' ||
+    orderData.customerDetails?.deliveryType === 'pb-scheduled';
+
   const isScheduled =
-    orderData.deliveryType === 'scheduled' ||
-    orderData.customerDetails?.deliveryType === 'scheduled';
+    !isPbScheduled &&
+    !isSelfPickup &&
+    (orderData.deliveryType === 'scheduled' ||
+      orderData.customerDetails?.deliveryType === 'scheduled');
 
-  const deliveryType: 'immediate' | 'scheduled' = isScheduled ? 'scheduled' : 'immediate';
+  const deliveryType: 'immediate' | 'scheduled' | 'pb-scheduled' = isPbScheduled
+    ? 'pb-scheduled'
+    : isScheduled
+      ? 'scheduled'
+      : 'immediate';
 
-  const scheduledAt = isScheduled
-    ? (computeScheduledIsoTimestamp(
-        orderData.scheduledAt || orderData.customerDetails?.scheduledAt || orderData.customerDetails?.scheduledDate,
-        orderData.customerDetails?.scheduledTimeSlot
-      ) || orderData.scheduledAt || null)
-    : null;
+  const scheduledAt = isPbScheduled
+    ? (orderData.festivalDeliveryAt
+        ? new Date(`${String(orderData.festivalDeliveryAt).slice(0, 10)}T11:00:00`).toISOString()
+        : orderData.scheduledAt || null)
+    : isScheduled
+      ? (computeScheduledIsoTimestamp(
+          orderData.scheduledAt || orderData.customerDetails?.scheduledAt || orderData.customerDetails?.scheduledDate,
+          orderData.customerDetails?.scheduledTimeSlot
+        ) || orderData.scheduledAt || null)
+      : null;
+
+  const normalizedOrderType = isPrebookDirect ? 'prebook' : (isSelfPickup ? 'pickup' : 'delivery');
 
   const payload: any = {
     id,
@@ -2050,7 +2076,7 @@ export async function createSupabaseOrder(
     address_id: isSelfPickup ? null : (isUUID(orderData.addressId) ? orderData.addressId : null),
     customer_name: supaCustomerName,
     customer_phone: supaCustomerPhone,
-    order_type: orderData.orderType || (isSelfPickup ? 'pickup' : 'delivery'),
+    order_type: normalizedOrderType,
     is_self_pickup: isSelfPickup,
     payment_plan: orderData.paymentPlan || 'full',
     advance_amount: Number(orderData.advanceAmount || 0),

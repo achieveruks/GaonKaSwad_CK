@@ -319,7 +319,7 @@ export interface Product {
   galleryImages?: string[];
   isVeg: boolean;
   isJainFriendly?: boolean;
-  spiceLevel?: 'Mild' | 'Medium' | 'Spicy' | 'Extra Spicy';
+  spiceLevel?: 'Sweet' | 'Mild' | 'Medium' | 'Spicy' | 'Extra Spicy';
   prepTimeMinutes?: number;
   serves?: string;
   calories?: number;
@@ -490,7 +490,7 @@ export interface CheckoutFormData {
   city: string;
   state: string;
   pincode: string;
-  deliveryType: 'immediate' | 'scheduled';
+  deliveryType: 'immediate' | 'scheduled' | 'pb-scheduled';
   scheduledAt?: string; // ISO 8601 Timestamp e.g. "2026-08-29T20:00:00.000Z"
   scheduledDate?: string;
   scheduledTimeSlot?: string;
@@ -576,8 +576,8 @@ export interface Order {
   festival_delivery_at?: string;
   festivalName?: string;
   festival_name?: string;
-  deliveryType?: 'immediate' | 'scheduled';
-  delivery_type?: 'immediate' | 'scheduled';
+  deliveryType?: 'immediate' | 'scheduled' | 'pb-scheduled';
+  delivery_type?: 'immediate' | 'scheduled' | 'pb-scheduled';
   deliveryNotes?: string;
   paymentMethod?: string;
   payment_method?: string;

@@ -193,15 +193,19 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, viewMode = 'g
               {product.prepTimeMinutes}m
             </span>
             <span className="px-1.5 py-0.5 bg-stone-950/70 backdrop-blur-2xs rounded flex items-center gap-1 text-[10px]">
-              <Flame
-                className={`w-3 h-3 ${
-                  product.spiceLevel === 'Extra Spicy'
-                    ? 'text-rose-500'
-                    : product.spiceLevel === 'Spicy'
-                    ? 'text-amber-500'
-                    : 'text-amber-400'
-                }`}
-              />
+              {product.spiceLevel === 'Sweet' ? (
+                <Sparkles className="w-3 h-3 text-amber-300" />
+              ) : (
+                <Flame
+                  className={`w-3 h-3 ${
+                    product.spiceLevel === 'Extra Spicy'
+                      ? 'text-rose-500'
+                      : product.spiceLevel === 'Spicy'
+                      ? 'text-amber-500'
+                      : 'text-amber-400'
+                  }`}
+                />
+              )}
               {product.spiceLevel}
             </span>
           </div>

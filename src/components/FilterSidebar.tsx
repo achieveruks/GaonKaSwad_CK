@@ -17,7 +17,7 @@ export const FilterSidebar: React.FC<FilterSidebarProps> = ({
   totalResultsCount
 }) => {
   const { outletProducts, categories } = useProducts();
-  const spiceOptions = ['All', 'Mild', 'Medium', 'Spicy', 'Extra Spicy'];
+  const spiceOptions = ['All', 'Sweet', 'Mild', 'Medium', 'Spicy', 'Extra Spicy'];
 
   const categoryCounts = useMemo(() => {
     const counts: Record<string, number> = {};

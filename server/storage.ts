@@ -1449,8 +1449,9 @@ class AppStorage {
       gst: orderData.gst || 0,
       total: orderData.total || 0,
       couponCode: orderData.couponCode,
-      orderType: orderData.orderType || (isPickup ? 'pickup' : 'delivery'),
-      order_type: orderData.order_type || orderData.orderType || (isPickup ? 'pickup' : 'delivery'),
+      orderType: isPrebookOrder ? 'prebook' : (isPickup ? 'pickup' : 'delivery'),
+      order_type: isPrebookOrder ? 'prebook' : (isPickup ? 'pickup' : 'delivery'),
+      isSelfPickup: isPickup,
       paymentPlan: orderData.paymentPlan || 'full',
       payment_plan: orderData.payment_plan || orderData.paymentPlan || 'full',
       advanceAmount: Number(orderData.advanceAmount || 0),
@@ -1469,21 +1470,45 @@ class AppStorage {
       payment_method: orderData.payment_method || orderData.paymentMethod || orderData.customerDetails?.paymentMethod || 'cod',
       paymentStatus: orderData.paymentStatus || (orderData.paymentPlan === 'advance_25' ? 'partially_paid' : 'pending'),
       payment_status: orderData.payment_status || orderData.paymentStatus || (orderData.paymentPlan === 'advance_25' ? 'partially_paid' : 'pending'),
-      deliveryType: orderData.deliveryType || 'immediate',
+      deliveryType: isPrebookOrder
+        ? 'pb-scheduled'
+        : isPickup
+          ? 'immediate'
+          : orderData.deliveryType === 'scheduled'
+            ? 'scheduled'
+            : 'immediate',
+      delivery_type: isPrebookOrder
+        ? 'pb-scheduled'
+        : isPickup
+          ? 'immediate'
+          : orderData.deliveryType === 'scheduled'
+            ? 'scheduled'
+            : 'immediate',
       scheduledAt: orderData.scheduledAt,
-      customerDetails: orderData.customerDetails || {
-        fullName: 'Customer',
-        email: '',
-        phone: normPhone,
-        address: isPickup ? '' : (addressSnapshot?.fullAddress || ''),
-        city: isPickup ? '' : (addressSnapshot?.city || 'Bhubaneswar'),
-        state: isPickup ? '' : (addressSnapshot?.state || 'Odisha'),
-        pincode: isPickup ? '' : (addressSnapshot?.pincode || ''),
-        deliveryType: orderData.deliveryType || 'immediate',
-        scheduledAt: orderData.scheduledAt,
-        paymentMethod: 'cod',
-        includeCutlery: true,
-      },
+      customerDetails: orderData.customerDetails
+        ? {
+            ...orderData.customerDetails,
+            deliveryType: isPrebookOrder
+              ? 'pb-scheduled'
+              : isPickup
+                ? 'immediate'
+                : orderData.customerDetails.deliveryType === 'scheduled'
+                  ? 'scheduled'
+                  : 'immediate',
+          }
+        : {
+            fullName: 'Customer',
+            email: '',
+            phone: normPhone,
+            address: isPickup ? '' : (addressSnapshot?.fullAddress || ''),
+            city: isPickup ? '' : (addressSnapshot?.city || 'Bhubaneswar'),
+            state: isPickup ? '' : (addressSnapshot?.state || 'Odisha'),
+            pincode: isPickup ? '' : (addressSnapshot?.pincode || ''),
+            deliveryType: isPrebookOrder ? 'pb-scheduled' : 'immediate',
+            scheduledAt: orderData.scheduledAt,
+            paymentMethod: 'cod',
+            includeCutlery: true,
+          },
       deliveryAddressSnapshot: isPickup ? undefined : addressSnapshot,
       status: orderData.status || 'Received',
       orderStatus: 'received',

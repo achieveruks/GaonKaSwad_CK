@@ -23,7 +23,7 @@ import {
   isProductBestsellerAtOutlet,
   isProductChefSpecialAtOutlet,
 } from '../lib/locationService';
-import utsavFestivalFeastImg from '../assets/images/utsav_festival_feast_1794732697548.jpg';
+const utsavFestivalFeastImg = '/images/categories/utsav_specials.jpg';
 
 interface ProductContextType {
   products: Product[];

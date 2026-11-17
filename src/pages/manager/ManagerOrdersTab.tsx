@@ -79,7 +79,7 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
   const [prebookSubFilter, setPrebookSubFilter] = useState<'all' | 'balance_due' | 'settled'>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [orderTypeFilter, setOrderTypeFilter] = useState<'all' | 'delivery' | 'pickup'>('all');
-  const [deliveryTimingFilter, setDeliveryTimingFilter] = useState<'all' | 'immediate' | 'scheduled'>('all');
+  const [deliveryTimingFilter, setDeliveryTimingFilter] = useState<'all' | 'immediate' | 'scheduled' | 'pb-scheduled'>('all');
   const [dateFilter, setDateFilter] = useState<OrderDateFilterType>('all');
   const [singleDate, setSingleDate] = useState<string>(() => {
     const d = new Date();
@@ -403,8 +403,26 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
     return (
       order.orderType === 'prebook' ||
       (order as any).order_type === 'prebook' ||
+      order.deliveryType === 'pb-scheduled' ||
+      (order as any).delivery_type === 'pb-scheduled' ||
       Boolean(order.festiveEventId || (order as any).festive_event_id)
     );
+  };
+
+  const getOrderDeliveryTiming = (order: Order): 'immediate' | 'scheduled' | 'pb-scheduled' => {
+    if (isPrebookOrder(order) || order.customerDetails?.deliveryType === 'pb-scheduled') {
+      return 'pb-scheduled';
+    }
+    const isPickup = !!(order.isSelfPickup || order.orderType === 'pickup');
+    if (
+      !isPickup &&
+      (order.deliveryType === 'scheduled' ||
+        (order as any).delivery_type === 'scheduled' ||
+        order.customerDetails?.deliveryType === 'scheduled')
+    ) {
+      return 'scheduled';
+    }
+    return 'immediate';
   };
 
   const getOrderPaymentLedger = (order: Order) => {
@@ -490,12 +508,9 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
     out_for_delivery: orders.filter((o) => normalizeStatus(o) === 'out_for_delivery').length,
     delivered: orders.filter((o) => normalizeStatus(o) === 'delivered').length,
     cancelled: orders.filter((o) => normalizeStatus(o) === 'cancelled').length,
-    immediate: orders.filter(
-      (o) => !(o.deliveryType === 'scheduled' || o.customerDetails?.deliveryType === 'scheduled')
-    ).length,
-    scheduled: orders.filter(
-      (o) => o.deliveryType === 'scheduled' || o.customerDetails?.deliveryType === 'scheduled'
-    ).length,
+    immediate: orders.filter((o) => getOrderDeliveryTiming(o) === 'immediate').length,
+    scheduled: orders.filter((o) => getOrderDeliveryTiming(o) === 'scheduled').length,
+    pbScheduled: orders.filter((o) => getOrderDeliveryTiming(o) === 'pb-scheduled').length,
   };
 
   // Filtered and Sorted Orders (always newest on top by received date)
@@ -503,8 +518,7 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
     return orders
       .filter((order) => {
         const normSt = normalizeStatus(order);
-        const isScheduled =
-          order.deliveryType === 'scheduled' || order.customerDetails?.deliveryType === 'scheduled';
+        const timing = getOrderDeliveryTiming(order);
         const ledger = getOrderPaymentLedger(order);
 
         // Status / Pre-book filter
@@ -521,9 +535,8 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
         if (orderTypeFilter === 'delivery' && isPickup) return false;
         if (orderTypeFilter === 'pickup' && !isPickup) return false;
 
-        // Delivery timing filter (immediate vs scheduled)
-        if (deliveryTimingFilter === 'immediate' && isScheduled) return false;
-        if (deliveryTimingFilter === 'scheduled' && !isScheduled) return false;
+        // Delivery timing filter (immediate vs scheduled vs pb-scheduled)
+        if (deliveryTimingFilter !== 'all' && timing !== deliveryTimingFilter) return false;
 
         // Received Date filter (Single Date / All Time / This Week / This Month / Date Range)
         if (
@@ -832,7 +845,7 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
 
           {/* Type & Timing Filters */}
           <div className="flex flex-wrap items-center gap-2 shrink-0">
-            {/* Delivery Timing Filter (Express vs Scheduled) */}
+            {/* Delivery Timing Filter (Express vs Scheduled vs Pre-book) */}
             <div className="flex bg-stone-100 p-1 rounded-xl border border-stone-200 text-xs font-bold">
               <button
                 type="button"
@@ -868,6 +881,18 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
               >
                 <Calendar className="w-3 h-3 text-amber-500" />
                 <span>Scheduled ({counts.scheduled})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setDeliveryTimingFilter('pb-scheduled')}
+                className={`px-2.5 py-1 rounded-lg transition-colors flex items-center gap-1 cursor-pointer ${
+                  deliveryTimingFilter === 'pb-scheduled'
+                    ? 'bg-stone-900 text-amber-200 shadow-2xs'
+                    : 'text-stone-700 hover:text-stone-950'
+                }`}
+              >
+                <Calendar className="w-3 h-3 text-amber-600" />
+                <span>Pre-book ({counts.pbScheduled})</span>
               </button>
             </div>
 
@@ -1379,8 +1404,9 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
               );
             }
 
-            const isScheduled =
-              order.deliveryType === 'scheduled' || order.customerDetails?.deliveryType === 'scheduled';
+            const timing = getOrderDeliveryTiming(order);
+            const isPbScheduled = timing === 'pb-scheduled';
+            const isScheduled = timing === 'scheduled';
             const ledger = getOrderPaymentLedger(order);
 
             return (
@@ -1437,8 +1463,22 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
                         </span>
                       )}
 
-                    {/* Delivery Timing Indicator (Scheduled vs Express) */}
-                    {isScheduled ? (
+                    {/* Delivery Timing Indicator (Pre-book Scheduled vs Slot Scheduled vs Express) */}
+                    {isPbScheduled ? (
+                      <span className="text-[11px] font-black px-3 py-1 rounded-lg bg-amber-950 text-amber-100 border border-amber-900 shadow-xs flex items-center gap-1.5 uppercase tracking-wide tabular-nums">
+                        <Calendar className="w-3.5 h-3.5 text-amber-300" />
+                        <span>
+                          PRE-BOOK FESTIVAL |{' '}
+                          {order.festivalDeliveryAt
+                            ? new Date(order.festivalDeliveryAt).toLocaleDateString('en-IN', {
+                                day: 'numeric',
+                                month: 'short',
+                                year: 'numeric',
+                              })
+                            : 'Festival Date'}
+                        </span>
+                      </span>
+                    ) : isScheduled ? (
                       <span className="text-[11px] font-black px-3 py-1 rounded-lg bg-amber-900 text-amber-50 border border-amber-950 shadow-xs flex items-center gap-1.5 ring-2 ring-amber-400/60 uppercase tracking-wide">
                         <Calendar className="w-3.5 h-3.5 text-amber-300" />
                         <span>
@@ -1453,7 +1493,7 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
                     ) : (
                       <span className="text-[10px] font-extrabold px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-900 border border-emerald-300 flex items-center gap-1">
                         <Zap className="w-3 h-3 text-emerald-700" />
-                        <span>Express (30–40 Mins)</span>
+                        <span>{isPickup ? 'Instant Pickup (~25–30m)' : 'Express (30–40 Mins)'}</span>
                       </span>
                     )}
 
@@ -1546,7 +1586,21 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
                             +91 {order.customerDetails?.phone || '—'}
                           </a>
                         </div>
-                        {isScheduled ? (
+                        {isPbScheduled ? (
+                          <div className="text-[11px] text-amber-950 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md inline-flex items-center gap-1 font-semibold mt-0.5 tabular-nums">
+                            <Calendar className="w-3 h-3 text-amber-800 shrink-0" />
+                            <span>
+                              Pre-book Festival ({isPickup ? 'Counter Pickup' : 'Delivery'}):{' '}
+                              {order.festivalDeliveryAt
+                                ? new Date(order.festivalDeliveryAt).toLocaleDateString('en-IN', {
+                                    day: 'numeric',
+                                    month: 'short',
+                                    year: 'numeric',
+                                  })
+                                : 'Scheduled Festival Date'}
+                            </span>
+                          </div>
+                        ) : isScheduled ? (
                           <div className="text-[11px] text-amber-900 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md inline-flex items-center gap-1 font-medium mt-0.5">
                             <Clock className="w-3 h-3 text-amber-700 shrink-0" />
                             <span>
@@ -1557,7 +1611,10 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
                           </div>
                         ) : (
                           <div className="text-[11px] text-stone-500">
-                            Type: <span className="font-semibold capitalize">Immediate (Express)</span>
+                            Type:{' '}
+                            <span className="font-semibold">
+                              {isPickup ? 'Immediate (Instant Pickup)' : 'Immediate (Express)'}
+                            </span>
                           </div>
                         )}
                       </div>

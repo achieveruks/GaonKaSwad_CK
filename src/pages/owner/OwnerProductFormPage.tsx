@@ -80,7 +80,7 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
   const [image, setImage] = useState('https://images.unsplash.com/photo-1563379091339-03b21ab4a4f8?q=80&w=800&auto=format&fit=crop');
   const [isVeg, setIsVeg] = useState(true);
   const [isJainFriendly, setIsJainFriendly] = useState(false);
-  const [spiceLevel, setSpiceLevel] = useState<'Mild' | 'Medium' | 'Spicy' | 'Extra Spicy'>('Medium');
+  const [spiceLevel, setSpiceLevel] = useState<'Sweet' | 'Mild' | 'Medium' | 'Spicy' | 'Extra Spicy'>('Medium');
   const [prepTimeMinutes, setPrepTimeMinutes] = useState<number>(30);
   const [serves, setServes] = useState('Serves 1-2');
   const [calories, setCalories] = useState<string>('');
@@ -873,6 +873,7 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
                     onChange={(e) => setSpiceLevel(e.target.value as any)}
                     className="w-full px-3.5 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs text-gray-900 font-medium focus:outline-none focus:border-orange-500 focus:bg-white"
                   >
+                    <option value="Sweet">Sweet</option>
                     <option value="Mild">Mild</option>
                     <option value="Medium">Medium</option>
                     <option value="Spicy">Spicy</option>
