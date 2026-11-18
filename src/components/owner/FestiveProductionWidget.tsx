@@ -134,29 +134,44 @@ export const FestiveProductionWidget: React.FC<FestiveProductionWidgetProps> = (
     }
   }, [selectedEvent?.id, activeOutletId]);
 
-  // Supabase Realtime updates for orders & products
+  // Supabase Realtime updates for pre-book orders & products (filtered & debounced)
   useEffect(() => {
     if (!selectedEvent || !activeOutletId || !isSupabaseConfigured()) return;
+
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleRefresh = () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        if (document.visibilityState === 'visible') {
+          loadSummary(true);
+        }
+      }, 800);
+    };
 
     const channel = supabase
       .channel(`utsav-live-prod:${activeOutletId}:${selectedEvent.id}`)
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'orders' },
-        () => {
-          loadSummary(true);
+        { event: '*', schema: 'public', table: 'orders', filter: `outlet_id=eq.${activeOutletId}` } as any,
+        (payload: any) => {
+          const row = payload?.new || payload?.old;
+          if (row && row.order_type !== 'prebook' && !row.festive_event_id) {
+            return;
+          }
+          scheduleRefresh();
         }
       )
       .on(
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'products' },
         () => {
-          loadSummary(true);
+          scheduleRefresh();
         }
       )
       .subscribe();
 
     return () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
       supabase.removeChannel(channel);
     };
   }, [selectedEvent?.id, activeOutletId, loadSummary]);

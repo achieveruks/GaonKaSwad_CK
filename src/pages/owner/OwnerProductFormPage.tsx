@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { OwnerLayout } from './OwnerLayout';
 import { useProducts } from '../../context/ProductContext';
 import { useNavigation } from '../../context/NavigationContext';
@@ -26,6 +26,7 @@ import {
   PackageX,
   Lock,
   Unlock,
+  RefreshCw,
 } from 'lucide-react';
 
 interface OwnerProductFormPageProps {
@@ -50,7 +51,7 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
   mode,
   productId,
 }) => {
-  const { allProducts, addProduct, editProduct, categories } = useProducts();
+  const { allProducts, addProduct, editProduct, categories, isLoading: productsLoading } = useProducts();
   const { goToOwnerProducts } = useNavigation();
   const { token } = useAuth();
 
@@ -103,6 +104,12 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const [externalUpdateDetected, setExternalUpdateDetected] = useState(false);
+
+  const hydratedTargetKeyRef = useRef<string | null>(null);
+  const hydratedSnapshotRef = useRef<string | null>(null);
+  const targetKey = mode === 'edit' ? `edit:${String(productId || '')}` : 'new';
 
   // Fetch Outlets
   useEffect(() => {
@@ -145,84 +152,124 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
     }
   };
 
-  // Populate data in edit mode or set default outlet selections in new mode
+  const applyProductToForm = (found: Product, outletsList: Outlet[]) => {
+    setName(found.name);
+    setHindiName(found.hindiName || '');
+    setSlug(found.slug);
+    const matchedCat = categories.find(
+      (c) => c.slug === found.category || c.id === found.category
+    );
+    setCategory(matchedCat ? matchedCat.slug : found.category);
+    setShortDescription(found.shortDescription || '');
+    setDescription(found.description || '');
+    setStory(found.story || '');
+    setCulinaryTitle(found.culinaryTitle || '');
+    setCookingMethodTitle(found.cookingMethodTitle || '');
+    setCookingMethodDesc(found.cookingMethodDesc || '');
+    setAromaTitle(found.aromaTitle || '');
+    setAromaDesc(found.aromaDesc || '');
+    setPrice(String(found.price));
+    setOriginalPrice(found.originalPrice ? String(found.originalPrice) : '');
+    setImage(found.image || '');
+    setIsVeg(found.isVeg !== false);
+    setIsJainFriendly(!!found.isJainFriendly);
+    setSpiceLevel(found.spiceLevel || 'Medium');
+    setPrepTimeMinutes(found.prepTimeMinutes || 30);
+    setServes(found.serves || 'Serves 1-2');
+    setCalories(found.calories ? String(found.calories) : '');
+    setActive(found.active !== false);
+    setIngredientsText(
+      Array.isArray(found.ingredients)
+        ? found.ingredients.join(', ')
+        : 'Pure Cow Ghee, Heirloom Spices, Fresh Ingredients'
+    );
+
+    // Utsav Specials festive fields
+    setFestiveEventId(found.festiveEventId || '');
+    setAvailabilityMode(found.availabilityMode || 'normal');
+    setMaxBookingQuantity(found.maxBookingQuantity ? String(found.maxBookingQuantity) : '');
+    setSpecialPackaging(
+      found.specialPackaging !== false &&
+        (!!found.festiveEventId || !!found.festiveProduct || found.availabilityMode === 'prebook_only')
+    );
+    setFestiveProduct(!!found.festiveProduct || !!found.festiveEventId || found.availabilityMode === 'prebook_only');
+
+    // Map outlet configs
+    const configs: Record<string, { isAssigned: boolean; inStock: boolean; isFeatured: boolean; isBestseller: boolean; isChefSpecial: boolean; portionsLeft: number | null }> = {};
+    outletsList.forEach((o) => {
+      if (Array.isArray(found.outlets)) {
+        const oc = found.outlets.find((item) => item.outletId === o.id);
+        configs[o.id] = {
+          isAssigned: !!oc,
+          inStock: oc ? oc.inStock !== false : true,
+          isFeatured: oc ? !!oc.isFeatured : false,
+          isBestseller: oc ? !!oc.isBestseller : false,
+          isChefSpecial: oc ? !!oc.isChefSpecial : false,
+          portionsLeft: oc && oc.portionsLeft !== undefined ? oc.portionsLeft : null,
+        };
+      } else {
+        configs[o.id] = {
+          isAssigned: true,
+          inStock: found.inStock !== false,
+          isFeatured: !!found.featured,
+          isBestseller: !!found.bestseller,
+          isChefSpecial: false,
+          portionsLeft: null,
+        };
+      }
+    });
+    setOutletConfigs(configs);
+    hydratedSnapshotRef.current = JSON.stringify({
+      price: found.price,
+      active: found.active,
+      outlets: found.outlets || [],
+    });
+    setHasUnsavedChanges(false);
+    setExternalUpdateDetected(false);
+    setErrorMessage(null);
+  };
+
+  // Reset hydration tracking only when switching between products / new mode
+  useEffect(() => {
+    hydratedTargetKeyRef.current = null;
+    hydratedSnapshotRef.current = null;
+    setHasUnsavedChanges(false);
+    setExternalUpdateDetected(false);
+  }, [targetKey]);
+
+  // Populate data once per product/new target; never overwrite unsaved edits on background sync
   useEffect(() => {
     if (availableOutlets.length === 0) return;
 
     if (mode === 'edit' && productId) {
       const found = allProducts.find((p) => String(p.id) === String(productId));
-      if (found) {
-        setName(found.name);
-        setHindiName(found.hindiName || '');
-        setSlug(found.slug);
-        const matchedCat = categories.find(
-          (c) => c.slug === found.category || c.id === found.category
-        );
-        setCategory(matchedCat ? matchedCat.slug : found.category);
-        setShortDescription(found.shortDescription || '');
-        setDescription(found.description || '');
-        setStory(found.story || '');
-        setCulinaryTitle(found.culinaryTitle || '');
-        setCookingMethodTitle(found.cookingMethodTitle || '');
-        setCookingMethodDesc(found.cookingMethodDesc || '');
-        setAromaTitle(found.aromaTitle || '');
-        setAromaDesc(found.aromaDesc || '');
-        setPrice(String(found.price));
-        setOriginalPrice(found.originalPrice ? String(found.originalPrice) : '');
-        setImage(found.image || '');
-        setIsVeg(found.isVeg !== false);
-        setIsJainFriendly(!!found.isJainFriendly);
-        setSpiceLevel(found.spiceLevel || 'Medium');
-        setPrepTimeMinutes(found.prepTimeMinutes || 30);
-        setServes(found.serves || 'Serves 1-2');
-        setCalories(found.calories ? String(found.calories) : '');
-        setActive(found.active !== false);
-        setIngredientsText(
-          Array.isArray(found.ingredients)
-            ? found.ingredients.join(', ')
-            : 'Pure Cow Ghee, Heirloom Spices, Fresh Ingredients'
-        );
-
-        // Utsav Specials festive fields
-        setFestiveEventId(found.festiveEventId || '');
-        setAvailabilityMode(found.availabilityMode || 'normal');
-        setMaxBookingQuantity(found.maxBookingQuantity ? String(found.maxBookingQuantity) : '');
-        setSpecialPackaging(
-          found.specialPackaging !== false &&
-            (!!found.festiveEventId || !!found.festiveProduct || found.availabilityMode === 'prebook_only')
-        );
-        setFestiveProduct(!!found.festiveProduct || !!found.festiveEventId || found.availabilityMode === 'prebook_only');
-
-        // Map outlet configs
-        const configs: Record<string, { isAssigned: boolean; inStock: boolean; isFeatured: boolean; isBestseller: boolean; isChefSpecial: boolean; portionsLeft: number | null }> = {};
-        availableOutlets.forEach((o) => {
-          if (Array.isArray(found.outlets)) {
-            const oc = found.outlets.find((item) => item.outletId === o.id);
-            configs[o.id] = {
-              isAssigned: !!oc,
-              inStock: oc ? oc.inStock !== false : true,
-              isFeatured: oc ? !!oc.isFeatured : false,
-              isBestseller: oc ? !!oc.isBestseller : false,
-              isChefSpecial: oc ? !!oc.isChefSpecial : false,
-              portionsLeft: oc && oc.portionsLeft !== undefined ? oc.portionsLeft : null,
-            };
-          } else {
-            // Default assigned
-            configs[o.id] = {
-              isAssigned: true,
-              inStock: found.inStock !== false,
-              isFeatured: !!found.featured,
-              isBestseller: !!found.bestseller,
-              isChefSpecial: false,
-              portionsLeft: null,
-            };
-          }
-        });
-        setOutletConfigs(configs);
-      } else {
-        setErrorMessage('Product not found in current inventory.');
+      if (!found) {
+        if (!productsLoading && hydratedTargetKeyRef.current !== targetKey) {
+          setErrorMessage('Product not found in current inventory.');
+        }
+        return;
       }
+
+      if (hydratedTargetKeyRef.current === targetKey) {
+        const latestSnapshot = JSON.stringify({
+          price: found.price,
+          active: found.active,
+          outlets: found.outlets || [],
+        });
+        if (
+          !isSubmitting &&
+          hydratedSnapshotRef.current &&
+          latestSnapshot !== hydratedSnapshotRef.current
+        ) {
+          setExternalUpdateDetected(true);
+        }
+        return;
+      }
+
+      applyProductToForm(found, availableOutlets);
+      hydratedTargetKeyRef.current = targetKey;
     } else if (mode === 'new') {
+      if (hydratedTargetKeyRef.current === targetKey) return;
       // In new mode, default select all active outlets as in stock
       setOutletConfigs((prev) => {
         if (Object.keys(prev).length > 0) return prev;
@@ -239,10 +286,20 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
         });
         return initial;
       });
+      hydratedTargetKeyRef.current = targetKey;
     }
-  }, [mode, productId, allProducts, availableOutlets]);
+  }, [mode, productId, targetKey, allProducts, availableOutlets, productsLoading, isSubmitting]);
+
+  const handleReloadLiveProduct = () => {
+    if (mode !== 'edit' || !productId || availableOutlets.length === 0) return;
+    const found = allProducts.find((p) => String(p.id) === String(productId));
+    if (found) {
+      applyProductToForm(found, availableOutlets);
+    }
+  };
 
   const toggleOutletAssignment = (outletId: string) => {
+    setHasUnsavedChanges(true);
     setOutletConfigs((prev) => ({
       ...prev,
       [outletId]: {
@@ -257,6 +314,7 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
     field: 'inStock' | 'isFeatured' | 'isBestseller' | 'isChefSpecial' | 'portionsLeft',
     val: any
   ) => {
+    setHasUnsavedChanges(true);
     setOutletConfigs((prev) => ({
       ...prev,
       [outletId]: {
@@ -267,6 +325,7 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
   };
 
   const selectAllOutlets = (assigned: boolean) => {
+    setHasUnsavedChanges(true);
     setOutletConfigs((prev) => {
       const next = { ...prev };
       availableOutlets.forEach((o) => {
@@ -398,6 +457,13 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
         }, 1200);
       } else if (mode === 'edit' && productId) {
         const updated = await editProduct(productId, productPayload);
+        hydratedSnapshotRef.current = JSON.stringify({
+          price: updated.price,
+          active: updated.active,
+          outlets: updated.outlets || [],
+        });
+        setHasUnsavedChanges(false);
+        setExternalUpdateDetected(false);
         setSuccessMessage(`"${updated.name}" has been updated successfully.`);
         setTimeout(() => {
           goToOwnerProducts();
@@ -451,7 +517,35 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
         </div>
       )}
 
-      <form onSubmit={handleSubmit} className="space-y-6">
+      {externalUpdateDetected && (
+        <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-amber-900 text-xs">
+          <div className="flex items-start gap-2.5">
+            <Info className="w-4 h-4 shrink-0 text-amber-700 mt-0.5" />
+            <div>
+              <p className="font-bold">Live catalog data updated in the background</p>
+              <p className="text-[11px] text-amber-800 mt-0.5">
+                {hasUnsavedChanges
+                  ? 'Your unsaved edits are preserved safely. Click "Save Changes" to apply yours, or reload latest DB values.'
+                  : 'Pricing or availability for this dish changed in the database. Your current inputs are preserved.'}
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleReloadLiveProduct}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-amber-100 border border-amber-300 rounded-lg text-[11px] font-bold text-amber-900 shrink-0 cursor-pointer transition-colors"
+          >
+            <RefreshCw className="w-3.5 h-3.5" />
+            <span>Reload Live DB Values</span>
+          </button>
+        </div>
+      )}
+
+      <form
+        onSubmit={handleSubmit}
+        onChangeCapture={() => setHasUnsavedChanges(true)}
+        className="space-y-6"
+      >
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
           {/* Left Column: Primary Product Information (8 cols) */}
           <div className="lg:col-span-8 space-y-6">
@@ -967,7 +1061,10 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
                     <button
                       key={idx}
                       type="button"
-                      onClick={() => setImage(preset.url)}
+                      onClick={() => {
+                        setImage(preset.url);
+                        setHasUnsavedChanges(true);
+                      }}
                       className="text-left px-2 py-1 bg-gray-50 hover:bg-orange-50 hover:text-orange-900 border border-gray-200 rounded-lg text-[10px] text-gray-700 truncate transition-colors cursor-pointer"
                     >
                       {preset.label}

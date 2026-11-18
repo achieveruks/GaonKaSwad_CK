@@ -88,7 +88,6 @@ export interface OrderPaymentTransaction {
   gatewayOrderId?: string;
   gatewayPaymentId?: string;
   gatewaySignature?: string;
-  gatewayReference?: string;
   idempotencyKey?: string;
   notes?: string;
   paidAt?: string;
@@ -100,7 +99,13 @@ export interface PaymentAllocation {
   paymentTransactionId: string;
   orderId: string;
   allocatedAmount: number;
-  allocationType: 'normal_full' | 'prebook_advance' | 'prebook_full' | 'prebook_balance';
+  allocationType:
+    | 'normal_full'
+    | 'prebook_advance'
+    | 'prebook_full'
+    | 'prebook_balance'
+    | 'prebook_refund'
+    | 'refund';
   createdAt?: string;
 }
 
@@ -125,6 +130,19 @@ export interface CheckoutGroup {
   amountPaid: number;
   balanceDue: number;
   paymentStatus: 'pending' | 'partially_paid' | 'paid' | 'failed' | 'refunded';
+  paymentMethod?: string | null;
+  customerName?: string | null;
+  customerPhone?: string | null;
+  customerDetails?: Partial<CheckoutFormData> | Record<string, any> | null;
+  deliveryAddressSnapshot?: {
+    fullAddress?: string;
+    landmark?: string;
+    city?: string;
+    state?: string;
+    pincode?: string;
+  } | null;
+  deliveryPinCode?: string | null;
+  deliveryInstructions?: string | null;
   idempotencyKey?: string | null;
   createdAt?: string;
   updatedAt?: string;
@@ -640,6 +658,16 @@ export interface Order {
   deliveredAt?: string;
   cancelledAt?: string;
   cancellationReason?: string;
+  refundDetails?: {
+    transactionId?: string;
+    amount: number;
+    paymentMethod: 'upi' | 'bank_transfer' | 'cash' | 'gateway_ref' | string;
+    reference?: string;
+    refundedAt?: string;
+    destination?: string;
+    processedBy?: string;
+    notes?: string;
+  };
   estimatedDeliveryMinutes?: number;
   isRated?: boolean;
 }

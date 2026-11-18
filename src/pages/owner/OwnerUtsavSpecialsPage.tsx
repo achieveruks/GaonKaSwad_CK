@@ -394,17 +394,43 @@ export const OwnerUtsavSpecialsPage: React.FC = () => {
 
   useEffect(() => {
     if (!isSummaryModalOpen || !selectedEventForSummary || !isSupabaseConfigured()) return;
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleRefresh = () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        if (document.visibilityState === 'visible') {
+          loadModalSummary(selectedEventForSummary, true);
+        }
+      }, 800);
+    };
+
+    const outletIds = Array.isArray(selectedEventForSummary.outletIds)
+      ? selectedEventForSummary.outletIds
+      : [];
+    const orderFilter =
+      outletIds.length === 1
+        ? { event: '*', schema: 'public', table: 'orders', filter: `outlet_id=eq.${outletIds[0]}` }
+        : { event: '*', schema: 'public', table: 'orders' };
+
     const channel = supabase
       .channel(`utsav-modal-summary:${selectedEventForSummary.id}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => {
-        loadModalSummary(selectedEventForSummary, true);
+      .on('postgres_changes', orderFilter as any, (payload: any) => {
+        const row = payload?.new || payload?.old;
+        if (row && row.order_type !== 'prebook' && !row.festive_event_id) {
+          return;
+        }
+        if (row?.outlet_id && outletIds.length > 0 && !outletIds.includes(row.outlet_id)) {
+          return;
+        }
+        scheduleRefresh();
       })
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'products' }, () => {
-        loadModalSummary(selectedEventForSummary, true);
+        scheduleRefresh();
       })
       .subscribe();
 
     return () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
       supabase.removeChannel(channel);
     };
   }, [isSummaryModalOpen, selectedEventForSummary, loadModalSummary]);

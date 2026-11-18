@@ -115,7 +115,7 @@ export const OwnerDashboardPage: React.FC = () => {
       // 3. Fetch Orders for Order & Revenue performance
       let loadedOrders: Order[] = [];
       try {
-        const supaOrders = await fetchSupabaseOrders();
+        const supaOrders = await fetchSupabaseOrders(undefined, undefined, { limit: 500 });
         if (Array.isArray(supaOrders) && supaOrders.length > 0) {
           loadedOrders = supaOrders;
         } else {
@@ -149,23 +149,40 @@ export const OwnerDashboardPage: React.FC = () => {
     }
   };
 
+  const hasLoadedProducts = allProducts.length > 0;
+
   useEffect(() => {
     loadDashboardData();
-  }, [token, allProducts.length]);
+  }, [token, hasLoadedProducts]);
 
   useEffect(() => {
     if (!token || !isSupabaseConfigured()) return;
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleOverviewRefresh = () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        if (document.visibilityState === 'visible') {
+          getFestiveOverview(undefined, token).then(setUtsavOverview).catch(() => {});
+        }
+      }, 800);
+    };
+
     const channel = supabase
       .channel('owner-dashboard-utsav-realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, () => {
-        getFestiveOverview(undefined, token).then(setUtsavOverview).catch(() => {});
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload: any) => {
+        const row = payload?.new || payload?.old;
+        if (row && row.order_type !== 'prebook' && !row.festive_event_id) {
+          return;
+        }
+        scheduleOverviewRefresh();
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'festive_events' }, () => {
-        getFestiveOverview(undefined, token).then(setUtsavOverview).catch(() => {});
+        scheduleOverviewRefresh();
       })
       .subscribe();
 
     return () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
       supabase.removeChannel(channel);
     };
   }, [token]);

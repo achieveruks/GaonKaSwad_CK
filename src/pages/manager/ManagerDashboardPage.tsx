@@ -127,10 +127,10 @@ export const ManagerDashboardPage: React.FC = () => {
   const [feedbackMsg, setFeedbackMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
 
-  const showFeedback = (type: 'success' | 'error', text: string) => {
+  const showFeedback = useCallback((type: 'success' | 'error', text: string) => {
     setFeedbackMsg({ type, text });
     setTimeout(() => setFeedbackMsg(null), 4000);
-  };
+  }, []);
 
   // Guard: Protect manager dashboard (strictly outlet_manager or owner)
   useEffect(() => {
@@ -146,6 +146,8 @@ export const ManagerDashboardPage: React.FC = () => {
     }
   }, [authLoading, isAuthenticated, ownerUser, profile, goToOwnerLogin]);
 
+  const lastManagerSyncRef = useRef<number>(Date.now());
+
   // Load Data
   const fetchData = useCallback(async (isSilent = false) => {
     if (!isSilent) setIsLoading(true);
@@ -153,8 +155,9 @@ export const ManagerDashboardPage: React.FC = () => {
       const [fetchedOutlets, fetchedZones] = await Promise.all([
         getOutlets(true, token || undefined),
         getDeliveryZones(true, token || undefined),
-        refreshProducts(),
+        refreshProducts({ skipReviews: true }),
       ]);
+      lastManagerSyncRef.current = Date.now();
       const safeO = Array.isArray(fetchedOutlets) ? fetchedOutlets : [];
       const safeZ = Array.isArray(fetchedZones) ? fetchedZones : [];
       setOutlets(safeO);
@@ -178,18 +181,11 @@ export const ManagerDashboardPage: React.FC = () => {
     fetchData();
   }, [fetchData]);
 
-  // Real-time automatic background synchronization for Manager dashboard
+  // Throttled focus/visibility synchronization for Manager dashboard (replaces aggressive 5s polling)
   useEffect(() => {
-    // 1. Periodic poll every 5 seconds so portion updates and outlet changes appear live without manual refresh
-    const interval = setInterval(() => {
-      if (!isSavingMenu) {
-        fetchData(true);
-      }
-    }, 5000);
-
-    // 2. Refresh immediately when manager switches back to tab or focuses window
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible' && !isSavingMenu) {
+        if (Date.now() - lastManagerSyncRef.current < 60_000) return;
         fetchData(true);
       }
     };
@@ -197,7 +193,6 @@ export const ManagerDashboardPage: React.FC = () => {
     window.addEventListener('focus', handleVisibilityChange);
 
     return () => {
-      clearInterval(interval);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       window.removeEventListener('focus', handleVisibilityChange);
     };
@@ -970,6 +965,26 @@ export const ManagerDashboardPage: React.FC = () => {
                 </option>
               ))}
             </select>
+          </div>
+        )}
+
+        {!currentOutlet && (
+          <div className="bg-white rounded-2xl border border-stone-200 p-10 text-center space-y-3 shadow-2xs">
+            <AlertCircle className="w-8 h-8 text-amber-700 mx-auto" />
+            <h3 className="font-extrabold text-stone-900 text-sm">
+              No Kitchen Branch Assigned or Loaded
+            </h3>
+            <p className="text-xs text-stone-500 max-w-md mx-auto">
+              Could not resolve an assigned outlet for your manager account ({ownerUser?.email || 'current session'}).
+            </p>
+            <button
+              type="button"
+              onClick={() => fetchData()}
+              className="px-4 py-2 bg-amber-800 hover:bg-amber-900 text-white rounded-xl text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>Retry Loading Kitchens</span>
+            </button>
           </div>
         )}
 

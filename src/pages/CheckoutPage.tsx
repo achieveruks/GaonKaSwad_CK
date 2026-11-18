@@ -1278,22 +1278,39 @@ export const CheckoutPage: React.FC = () => {
     };
 
     const targetOrderId = placedOrder.orderId || placedOrder.id;
+    const normalizedCurrentStatus = String(placedOrder.status || placedOrder.orderStatus || '').toLowerCase();
+    const isTerminalStatus =
+      normalizedCurrentStatus === 'delivered' ||
+      normalizedCurrentStatus === 'picked up' ||
+      normalizedCurrentStatus === 'picked_up' ||
+      normalizedCurrentStatus === 'cancelled';
+
+    if (isTerminalStatus) return;
 
     // Supabase Realtime channel listener
     let channel: any = null;
     if (isSupabaseConfigured() && targetOrderId) {
+      const realtimeConfig = placedOrder.id
+        ? {
+            event: 'UPDATE',
+            schema: 'public',
+            table: 'orders',
+            filter: `id=eq.${placedOrder.id}`,
+          }
+        : {
+            event: 'UPDATE',
+            schema: 'public',
+            table: 'orders',
+          };
+
       channel = supabase
         .channel(`order-live-${targetOrderId}`)
         .on(
           'postgres_changes',
-          {
-            event: 'UPDATE',
-            schema: 'public',
-            table: 'orders',
-          },
+          realtimeConfig as any,
           (payload) => {
-            if (payload.new) {
-              const updated = payload.new;
+            if (payload.new && typeof payload.new === 'object') {
+              const updated = payload.new as Record<string, any>;
               if (
                 (placedOrder.id && updated.id === placedOrder.id) ||
                 (placedOrder.orderId && (updated.order_id === placedOrder.orderId || updated.order_number === placedOrder.orderId))
@@ -1331,9 +1348,9 @@ export const CheckoutPage: React.FC = () => {
         .subscribe();
     }
 
-    // Resilient fallback heartbeat poll every 4 seconds to sync status and timestamps even if websockets lag
+    // Low-frequency fallback heartbeat poll every 20 seconds when tab is visible
     const pollInterval = setInterval(async () => {
-      if (!targetOrderId) return;
+      if (!targetOrderId || document.visibilityState !== 'visible') return;
       try {
         // First try server API endpoint
         const res = await fetch(`/api/orders/${encodeURIComponent(targetOrderId)}`);
@@ -1358,7 +1375,7 @@ export const CheckoutPage: React.FC = () => {
           // Silent catch on poll
         }
       }
-    }, 4000);
+    }, 20_000);
 
     return () => {
       clearInterval(pollInterval);
@@ -1366,7 +1383,7 @@ export const CheckoutPage: React.FC = () => {
         supabase.removeChannel(channel);
       }
     };
-  }, [placedOrder?.id, placedOrder?.orderId]);
+  }, [placedOrder?.id, placedOrder?.orderId, placedOrder?.status, placedOrder?.orderStatus]);
 
   // Form Validation Logic
   const validateField = (name: string, value: string): string => {
@@ -2314,8 +2331,7 @@ export const CheckoutPage: React.FC = () => {
                   const childIsPrebook =
                     child.orderType === 'prebook' ||
                     child.deliveryType === 'pb-scheduled' ||
-                    (child as any).delivery_type === 'pb-scheduled' ||
-                    child.customerDetails?.deliveryType === 'pb-scheduled';
+                    (child as any).delivery_type === 'pb-scheduled';
 
                   if (childIsPrebook) {
                     const festDate = child.festivalDeliveryAt

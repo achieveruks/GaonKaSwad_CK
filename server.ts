@@ -1348,11 +1348,23 @@ app.get('/api/reviews/eligibility', async (req, res) => {
 
       let supaOrders: any[] = [];
       if (normPhone && normPhone.length >= 10) {
-        const { data } = await serverSupabase
-          .from('orders')
-          .select('*')
+        const { data: cgMatches, error: cgErr } = await serverSupabase
+          .from('checkout_groups')
+          .select('id')
           .ilike('customer_phone', `%${normPhone}%`);
-        if (Array.isArray(data)) supaOrders.push(...data);
+        if (!cgErr && Array.isArray(cgMatches) && cgMatches.length > 0) {
+          const { data: ordByCg } = await serverSupabase
+            .from('orders')
+            .select('*')
+            .in('checkout_group_id', cgMatches.map((g: any) => g.id));
+          if (Array.isArray(ordByCg)) supaOrders.push(...ordByCg);
+        } else if (cgErr) {
+          const { data } = await serverSupabase
+            .from('orders')
+            .select('*')
+            .ilike('customer_phone', `%${normPhone}%`);
+          if (Array.isArray(data)) supaOrders.push(...data);
+        }
       }
 
       if (isUUID(identifier)) {
@@ -1369,7 +1381,7 @@ app.get('/api/reviews/eligibility', async (req, res) => {
           const isDelivered = rawStatus === 'delivered';
           if (!isDelivered) continue;
 
-          const deliveredAt = ord.delivered_at || ord.placed_at || ord.created_at;
+          const deliveredAt = ord.delivered_at || ord.created_at;
           const isWithin7Days = deliveredAt
             ? Date.now() <= new Date(deliveredAt).getTime() + 7 * 24 * 60 * 60 * 1000
             : true;
@@ -1445,11 +1457,23 @@ app.post('/api/reviews', async (req, res) => {
 
         let supaOrders: any[] = [];
         if (normPhone && normPhone.length >= 10) {
-          const { data } = await serverSupabase
-            .from('orders')
-            .select('*')
+          const { data: cgMatches, error: cgErr } = await serverSupabase
+            .from('checkout_groups')
+            .select('id')
             .ilike('customer_phone', `%${normPhone}%`);
-          if (Array.isArray(data)) supaOrders.push(...data);
+          if (!cgErr && Array.isArray(cgMatches) && cgMatches.length > 0) {
+            const { data: ordByCg } = await serverSupabase
+              .from('orders')
+              .select('*')
+              .in('checkout_group_id', cgMatches.map((g: any) => g.id));
+            if (Array.isArray(ordByCg)) supaOrders.push(...ordByCg);
+          } else if (cgErr) {
+            const { data } = await serverSupabase
+              .from('orders')
+              .select('*')
+              .ilike('customer_phone', `%${normPhone}%`);
+            if (Array.isArray(data)) supaOrders.push(...data);
+          }
         }
 
         if (isUUID(identifier)) {
@@ -2363,12 +2387,28 @@ app.post('/api/coupons/validate', async (req, res) => {
         });
       }
 
-      const { data: orderRows } = await serverSupabase
-        .from('orders')
+      const { data: cgRows, error: cgErr } = await serverSupabase
+        .from('checkout_groups')
         .select('id')
         .ilike('customer_phone', `%${cleanPhone}%`);
-      if (Array.isArray(orderRows)) {
-        customerOrders = orderRows.map((o: any) => o.id).filter(Boolean);
+      if (!cgErr && Array.isArray(cgRows)) {
+        if (cgRows.length > 0) {
+          const { data: orderRows } = await serverSupabase
+            .from('orders')
+            .select('id')
+            .in('checkout_group_id', cgRows.map((g: any) => g.id));
+          if (Array.isArray(orderRows)) {
+            customerOrders = orderRows.map((o: any) => o.id).filter(Boolean);
+          }
+        }
+      } else {
+        const { data: orderRows } = await serverSupabase
+          .from('orders')
+          .select('id')
+          .ilike('customer_phone', `%${cleanPhone}%`);
+        if (Array.isArray(orderRows)) {
+          customerOrders = orderRows.map((o: any) => o.id).filter(Boolean);
+        }
       }
     }
 
@@ -2669,7 +2709,7 @@ app.post('/api/coupons/redeem', async (req, res) => {
       const { data: orderRow } = await serverSupabase
         .from('orders')
         .select('id')
-        .or(`id.eq.${orderId},order_id.eq.${orderId}`)
+        .or(`id.eq.${orderId},order_number.eq.${orderId}`)
         .maybeSingle();
       if (orderRow?.id) {
         resolvedOrderId = orderRow.id;
@@ -3517,7 +3557,31 @@ export async function executeSwadCoinDailyRewards(runType: 'MANUAL' | 'SCHEDULED
       .from('orders')
       .select('*')
       .in('order_status', ['delivered', 'picked_up']);
-    if (data) supaOrders = data;
+    if (data && data.length > 0) {
+      const groupIds = Array.from(new Set(data.map((r: any) => r.checkout_group_id).filter(Boolean)));
+      const cgMap = new Map<string, any>();
+      if (groupIds.length > 0) {
+        const { data: cgRows } = await serverSupabase
+          .from('checkout_groups')
+          .select('*')
+          .in('id', groupIds);
+        (cgRows || []).forEach((g: any) => {
+          if (g?.id) cgMap.set(String(g.id), g);
+        });
+      }
+      supaOrders = data.map((r: any) => {
+        const cg = r.checkout_group_id ? cgMap.get(String(r.checkout_group_id)) : null;
+        return cg
+          ? {
+              ...r,
+              customer_name: cg.customer_name ?? r.customer_name,
+              customer_phone: cg.customer_phone ?? r.customer_phone,
+              customer_details: cg.customer_details ?? r.customer_details,
+              delivery_address_snapshot: cg.delivery_address_snapshot ?? r.delivery_address_snapshot,
+            }
+          : r;
+      });
+    }
   } catch (e) {
     console.warn('Supabase fetch note in executeSwadCoinDailyRewards:', e);
   }
@@ -3771,7 +3835,7 @@ async function getNextServerOrderId(): Promise<string> {
     const [{ data: orderRows }, { data: groupRows }] = await Promise.all([
       serverSupabase
         .from('orders')
-        .select('order_id, order_number')
+        .select('order_number')
         .order('created_at', { ascending: false })
         .limit(150),
       serverSupabase
@@ -3796,7 +3860,6 @@ async function getNextServerOrderId(): Promise<string> {
     if (Array.isArray(orderRows)) {
       orderRows.forEach((r: any) => {
         scanRef(r.order_number);
-        scanRef(r.order_id);
       });
     }
     if (Array.isArray(groupRows)) {
@@ -3822,19 +3885,122 @@ async function getNextServerOrderId(): Promise<string> {
   }
 }
 
-function mapDbOrderRow(data: any): any {
+async function insertServerWithSchemaResilience(table: string, payload: Record<string, any>) {
+  let workingPayload = { ...payload };
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const res = await serverSupabase.from(table).insert(workingPayload).select().single();
+    if (!res.error) return res;
+    const msg = res.error.message || '';
+    const match = msg.match(/Could not find the '([^']+)' column/i) || msg.match(/column "([^"]+)" of relation "[^"]+" does not exist/i);
+    if (match && match[1] && Object.prototype.hasOwnProperty.call(workingPayload, match[1])) {
+      delete workingPayload[match[1]];
+      continue;
+    }
+    return res;
+  }
+  return serverSupabase.from(table).insert(workingPayload).select().single();
+}
+
+function buildSlimCustomerDetailsSnapshot(raw?: Record<string, any> | null) {
+  if (!raw || typeof raw !== 'object') return {};
+  const slim: Record<string, any> = {};
+  if (raw.email) slim.email = String(raw.email).trim();
+  if (raw.includeCutlery !== undefined) slim.includeCutlery = Boolean(raw.includeCutlery);
+  if (raw.scheduledDate) slim.scheduledDate = raw.scheduledDate;
+  if (raw.scheduledTimeSlot) slim.scheduledTimeSlot = raw.scheduledTimeSlot;
+  if (raw.scheduledSlotLabel) slim.scheduledSlotLabel = raw.scheduledSlotLabel;
+  if (raw.scheduledSlotCategory) slim.scheduledSlotCategory = raw.scheduledSlotCategory;
+  return slim;
+}
+
+function buildApiCheckoutGroupObject(cg: any) {
+  if (!cg) return undefined;
+  return {
+    id: cg.id,
+    checkoutReference: cg.checkout_reference,
+    outletId: cg.outlet_id,
+    orderMode: cg.order_mode,
+    prebookPaymentPlan: cg.prebook_payment_plan,
+    subtotal: Number(cg.subtotal || 0),
+    discountAmount: Number(cg.discount_amount || 0),
+    swadCoinDiscountAmount: Number(cg.swad_coin_discount_amount || 0),
+    packagingFee: Number(cg.packaging_fee || 0),
+    deliveryCharge: Number(cg.delivery_charge || 0),
+    taxAmount: Number(cg.tax_amount || 0),
+    grandTotal: Number(cg.grand_total || 0),
+    amountDueNow: Number(cg.amount_due_now || 0),
+    amountPaid: Number(cg.amount_paid || 0),
+    balanceDue: Number(cg.balance_due || 0),
+    paymentStatus: cg.payment_status,
+    paymentMethod: cg.payment_method || undefined,
+    customerName: cg.customer_name || undefined,
+    customerPhone: cg.customer_phone || undefined,
+    deliveryPinCode: cg.delivery_pincode || undefined,
+    deliveryInstructions: cg.delivery_instructions || undefined,
+    createdAt: cg.created_at,
+  };
+}
+
+function buildRefundDetailsFromTxRow(txRow: any) {
+  if (!txRow) return undefined;
+  const rawNotes = typeof txRow.notes === 'string' ? txRow.notes : '';
+  const extractTag = (prefix: string) => {
+    const match = rawNotes
+      .split(' | ')
+      .find((part: string) => part.trim().toLowerCase().startsWith(prefix.toLowerCase()));
+    return match ? match.trim().slice(prefix.length).trim() : undefined;
+  };
+  const destination = extractTag('To:');
+  const processedBy = extractTag('Processed by:');
+  const cleanNotes = extractTag('Notes:');
+
+  return {
+    transactionId: txRow.id || undefined,
+    amount: Number(txRow.amount || 0),
+    paymentMethod: txRow.payment_method || 'upi',
+    reference: txRow.gateway_payment_id || undefined,
+    refundedAt: txRow.paid_at || txRow.created_at || undefined,
+    destination: destination || undefined,
+    processedBy: processedBy || undefined,
+    notes: cleanNotes || (destination || processedBy ? undefined : rawNotes || undefined),
+  };
+}
+
+function mapDbOrderRow(data: any, cgRow?: any, refundTxRow?: any): any {
   if (!data) return null;
+  const cg = cgRow || (data.checkout_groups && !Array.isArray(data.checkout_groups) ? data.checkout_groups : null) || {};
+  const rawCustDetails =
+    (cg.customer_details && typeof cg.customer_details === 'object' && Object.keys(cg.customer_details).length > 0
+      ? cg.customer_details
+      : null) ||
+    (data.customer_details && typeof data.customer_details === 'object' && Object.keys(data.customer_details).length > 0
+      ? data.customer_details
+      : null);
+  const rawAddressSnapshot =
+    (cg.delivery_address_snapshot && typeof cg.delivery_address_snapshot === 'object' && Object.keys(cg.delivery_address_snapshot).length > 0
+      ? cg.delivery_address_snapshot
+      : null) ||
+    (data.delivery_address_snapshot && typeof data.delivery_address_snapshot === 'object' && Object.keys(data.delivery_address_snapshot).length > 0
+      ? data.delivery_address_snapshot
+      : null);
+
+  const resolvedCustomerName = cg.customer_name || data.customer_name || rawCustDetails?.fullName || undefined;
+  const resolvedCustomerPhone = cg.customer_phone || data.customer_phone || rawCustDetails?.phone || undefined;
+  const resolvedPincode = cg.delivery_pincode || data.delivery_pincode || rawCustDetails?.pincode || rawAddressSnapshot?.pincode || '';
+  const resolvedInstructions = cg.delivery_instructions || data.delivery_instructions || rawCustDetails?.deliveryNotes || undefined;
+  const resolvedAddressId = cg.customer_address_id || data.address_id || undefined;
+  const resolvedCouponCode = cg.coupon_code_snapshot || data.discount_code || data.coupon_code || undefined;
+  const resolvedPaymentMethod = cg.payment_method || data.payment_method || rawCustDetails?.paymentMethod || 'cod';
+
   const isPickup = data.order_type === 'pickup' || !!data.is_self_pickup;
   const isPrebook = data.order_type === 'prebook' || Boolean(data.festive_event_id);
   const deliveryType: 'immediate' | 'scheduled' | 'pb-scheduled' =
-    isPrebook ||
-    data.delivery_type === 'pb-scheduled' ||
-    data.customer_details?.deliveryType === 'pb-scheduled'
+    isPrebook || data.delivery_type === 'pb-scheduled'
       ? 'pb-scheduled'
       : isPickup
         ? 'immediate'
         : data.delivery_type === 'scheduled' ||
-            data.customer_details?.deliveryType === 'scheduled'
+            (!data.delivery_type && rawCustDetails?.deliveryType === 'scheduled')
           ? 'scheduled'
           : 'immediate';
   const rawStatus = String(data.order_status || data.status || 'received').toLowerCase().trim();
@@ -3861,17 +4027,35 @@ function mapDbOrderRow(data: any): any {
                         ? 'Cancelled'
                         : rawStatus.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase());
 
+  const mergedCustomerDetails = {
+    ...(rawCustDetails || {}),
+    fullName: rawCustDetails?.fullName || resolvedCustomerName,
+    phone: rawCustDetails?.phone || resolvedCustomerPhone,
+    address: isPickup ? '' : (rawCustDetails?.address || rawAddressSnapshot?.fullAddress || ''),
+    landmark: isPickup ? '' : (rawCustDetails?.landmark || rawAddressSnapshot?.landmark || ''),
+    city: isPickup ? '' : (rawCustDetails?.city || rawAddressSnapshot?.city || 'Bhubaneswar'),
+    state: isPickup ? '' : (rawCustDetails?.state || rawAddressSnapshot?.state || 'Odisha'),
+    pincode: isPickup ? '' : (rawCustDetails?.pincode || resolvedPincode),
+    deliveryNotes: rawCustDetails?.deliveryNotes || resolvedInstructions,
+    paymentMethod: rawCustDetails?.paymentMethod || resolvedPaymentMethod,
+    includeCutlery: rawCustDetails?.includeCutlery !== undefined ? Boolean(rawCustDetails.includeCutlery) : true,
+    deliveryType,
+    orderType: data.order_type || (isPickup ? 'pickup' : 'delivery'),
+    isSelfPickup: isPickup,
+  };
+
   return {
     id: data.id,
     orderId: data.order_id || data.order_number || data.id,
     orderNumber: data.order_number || data.order_id,
     checkoutGroupId: data.checkout_group_id || undefined,
     checkout_group_id: data.checkout_group_id || undefined,
-    checkoutReference: data.checkout_reference || undefined,
+    checkoutReference: cg.checkout_reference || data.checkout_reference || undefined,
+    checkoutGroup: cg?.id ? buildApiCheckoutGroupObject(cg) : undefined,
     outletId: data.outlet_id,
-    outletName: data.outlet_name || (data.delivery_address_snapshot as any)?.outletName || undefined,
-    customerId: data.customer_id,
-    addressId: isPickup ? undefined : (data.address_id || undefined),
+    outletName: data.outlet_name || rawAddressSnapshot?.outletName || undefined,
+    customerId: data.customer_id || cg.customer_id,
+    addressId: isPickup ? undefined : resolvedAddressId,
     orderType: data.order_type || (isPickup ? 'pickup' : 'delivery'),
     order_type: data.order_type || (isPickup ? 'pickup' : 'delivery'),
     isSelfPickup: isPickup,
@@ -3889,33 +4073,29 @@ function mapDbOrderRow(data: any): any {
     festival_delivery_at: data.festival_delivery_at || undefined,
     festivalName: data.festival_name || undefined,
     festival_name: data.festival_name || undefined,
-    paymentMethod: data.payment_method || data.customer_details?.paymentMethod || 'cod',
-    payment_method: data.payment_method || data.customer_details?.paymentMethod || 'cod',
+    paymentMethod: resolvedPaymentMethod,
+    payment_method: resolvedPaymentMethod,
     paymentStatus: data.payment_status || 'pending',
     payment_status: data.payment_status || 'pending',
     items: Array.isArray(data.items) ? data.items.map(deserializeOrderItem) : [],
     subtotal: Number(data.subtotal || 0),
     discount: Number(data.discount_amount || data.discount || 0),
-    welcomeDiscountAmount: Number(data.welcome_discount_amount || 0),
-    isWelcomeDiscountApplied: !!data.welcome_discount_applied,
     deliveryFee: Number(data.delivery_fee || 0),
     packagingFee: Number(data.packaging_fee || 0),
     gst: Number(data.tax_amount || data.gst || 0),
-    swadCoinsUsed: Number(data.swad_coins_used || 0),
+    swadCoinsUsed: Math.round(Number(data.swad_coin_discount_amount ?? data.swad_coins_used ?? 0)),
     swadCoinDiscountAmount: Number(data.swad_coin_discount_amount || 0),
     total: Number(data.total_amount || data.total || 0),
-    couponCode: data.discount_code || data.coupon_code || undefined,
-    deliveryPinCode: data.delivery_pincode || '',
-    customerDetails: data.customer_details || {
-      fullName: data.customer_name,
-      phone: data.customer_phone,
-    },
-    deliveryAddressSnapshot: isPickup ? undefined : (data.delivery_address_snapshot || undefined),
+    couponCode: resolvedCouponCode,
+    deliveryPinCode: resolvedPincode,
+    deliveryNotes: resolvedInstructions,
+    customerDetails: mergedCustomerDetails,
+    deliveryAddressSnapshot: isPickup ? undefined : (rawAddressSnapshot || undefined),
     status: displayStatus,
     orderStatus: data.order_status,
     estimatedDeliveryMinutes: data.estimated_delivery_minutes || (isPickup ? 25 : 35),
-    createdAt: data.placed_at || data.created_at,
-    placedAt: data.placed_at || data.created_at,
+    createdAt: data.created_at || data.placed_at,
+    placedAt: data.created_at || data.placed_at,
     confirmedAt: data.confirmed_at || undefined,
     preparingAt: data.preparing_at || undefined,
     readyAt: data.ready_at || undefined,
@@ -3923,6 +4103,7 @@ function mapDbOrderRow(data: any): any {
     deliveredAt: data.delivered_at || undefined,
     cancelledAt: data.cancelled_at || undefined,
     cancellationReason: data.cancellation_reason || undefined,
+    refundDetails: buildRefundDetailsFromTxRow(refundTxRow),
     deliveryType,
     delivery_type: deliveryType,
     scheduledAt: data.scheduled_at || undefined,
@@ -4383,7 +4564,7 @@ app.post('/api/orders', async (req, res) => {
         serverSupabase
           .from('orders')
           .select('id, order_number')
-          .or(`order_number.eq.${finalOrderId},order_id.eq.${finalOrderId}`)
+          .eq('order_number', finalOrderId)
           .maybeSingle(),
         !payload.checkoutGroupId
           ? serverSupabase
@@ -4420,37 +4601,51 @@ app.post('/api/orders', async (req, res) => {
 
       let resolvedCheckoutGroupId: string | null = payload.checkoutGroupId || null;
       let createdGroupRecord: any = null;
+      const directDeliverySnapshot = isSelfPickup ? null : (order.deliveryAddressSnapshot || null);
+      const directPincode = order.deliveryPinCode || order.customerDetails?.pincode || '';
+      const directCustomerDetails = buildSlimCustomerDetailsSnapshot(order.customerDetails);
+      const directGateway = isOnlineFallbackPayment ? (payload.paymentGateway || 'demo_gateway') : 'cod';
+      const directGatewayOrderId = payload.gatewayOrderId || baseRef;
+      const directGatewayPaymentId = payload.paymentGatewayPaymentId || (isOnlineFallbackPayment ? `DEMO-${baseRef}` : null);
+      const directGatewaySignature = payload.gatewaySignature || null;
+      const directPaidAt = isOnlineFallbackPayment ? new Date().toISOString() : null;
+
       if (!resolvedCheckoutGroupId) {
         try {
           const nowGroupIso = new Date().toISOString();
-          const { data: cgInserted, error: cgErr } = await serverSupabase
-            .from('checkout_groups')
-            .insert({
-              checkout_reference: baseRef,
-              customer_id: isUUID(supaCustomerId) ? supaCustomerId : null,
-              customer_address_id: !isSelfPickup && isUUID(supaAddressId) ? supaAddressId : null,
-              outlet_id: safeOutletId,
-              coupon_id: isUUID(payload.couponId) ? payload.couponId : null,
-              coupon_code_snapshot: order.couponCode || null,
-              subtotal: Number(order.subtotal || 0),
-              discount_amount: Number(order.discount || 0),
-              swad_coin_discount_amount: Number(order.swadCoinDiscountAmount || 0),
-              packaging_fee: Number(order.packagingFee || 0),
-              delivery_charge: Number(order.deliveryFee || 0),
-              tax_amount: Number(order.gst || 0),
-              grand_total: Number(order.total || 0),
-              order_mode: isPrebook ? 'prebook' : 'normal',
-              prebook_payment_plan: isPrebook ? paymentPlan : null,
-              amount_due_now: isPrebook ? Number(advanceAmount || 0) : Number(order.total || 0),
-              amount_paid: fallbackPaidNow,
-              balance_due: fallbackBalance,
-              payment_status: fallbackPaymentStatus,
-              idempotency_key: payload.idempotencyKey || null,
-              created_at: nowGroupIso,
-              updated_at: nowGroupIso,
-            })
-            .select()
-            .single();
+          const cgInsertPayload: Record<string, any> = {
+            checkout_reference: baseRef,
+            customer_id: isUUID(supaCustomerId) ? supaCustomerId : null,
+            customer_address_id: !isSelfPickup && isUUID(supaAddressId) ? supaAddressId : null,
+            outlet_id: safeOutletId,
+            coupon_id: isUUID(payload.couponId) ? payload.couponId : null,
+            coupon_code_snapshot: order.couponCode || null,
+            subtotal: Number(order.subtotal || 0),
+            discount_amount: Number(order.discount || 0),
+            swad_coin_discount_amount: Number(order.swadCoinDiscountAmount || 0),
+            packaging_fee: Number(order.packagingFee || 0),
+            delivery_charge: Number(order.deliveryFee || 0),
+            tax_amount: Number(order.gst || 0),
+            grand_total: Number(order.total || 0),
+            order_mode: isPrebook ? 'prebook' : 'normal',
+            prebook_payment_plan: isPrebook ? paymentPlan : null,
+            amount_due_now: isPrebook ? Number(advanceAmount || 0) : Number(order.total || 0),
+            amount_paid: fallbackPaidNow,
+            balance_due: fallbackBalance,
+            payment_status: fallbackPaymentStatus,
+            payment_method: order.customerDetails?.paymentMethod || 'cod',
+            customer_name: supaCustomerName,
+            customer_phone: supaCustomerPhone,
+            customer_details: directCustomerDetails,
+            delivery_address_snapshot: directDeliverySnapshot,
+            delivery_pincode: directPincode,
+            delivery_instructions: supaDeliveryInstructions,
+            idempotency_key: payload.idempotencyKey || null,
+            created_at: nowGroupIso,
+            updated_at: nowGroupIso,
+          };
+
+          const { data: cgInserted, error: cgErr } = await insertServerWithSchemaResilience('checkout_groups', cgInsertPayload);
 
           if (!cgErr && cgInserted) {
             resolvedCheckoutGroupId = cgInserted.id;
@@ -4471,6 +4666,13 @@ app.post('/api/orders', async (req, res) => {
               amountPaid: fallbackPaidNow,
               balanceDue: fallbackBalance,
               paymentStatus: fallbackPaymentStatus,
+              paymentMethod: order.customerDetails?.paymentMethod || 'cod',
+              customerName: supaCustomerName,
+              customerPhone: supaCustomerPhone,
+              customerDetails: directCustomerDetails,
+              deliveryAddressSnapshot: directDeliverySnapshot,
+              deliveryPinCode: directPincode,
+              deliveryInstructions: supaDeliveryInstructions,
               createdAt: nowGroupIso,
             };
             productStorage.recordCheckoutGroup(createdGroupRecord);
@@ -4482,14 +4684,10 @@ app.post('/api/orders', async (req, res) => {
 
       const supaPayload: any = {
         id: order.id || `order-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
-        order_id: finalOrderId,
         order_number: finalOrderId,
         checkout_group_id: resolvedCheckoutGroupId,
         outlet_id: safeOutletId,
         customer_id: isUUID(supaCustomerId) ? supaCustomerId : null,
-        address_id: isSelfPickup ? null : (isUUID(supaAddressId) ? supaAddressId : null),
-        customer_name: supaCustomerName,
-        customer_phone: supaCustomerPhone,
         is_self_pickup: isSelfPickup,
         items: safeItems,
         subtotal: Number(order.subtotal || 0),
@@ -4498,14 +4696,7 @@ app.post('/api/orders', async (req, res) => {
         discount_amount: Number(order.discount || 0),
         tax_amount: Number(order.gst || 0),
         total_amount: Number(order.total || 0),
-        discount_type: (order.discount && Number(order.discount) > 0) ? 'coupon' : 'NONE',
-        discount_code: order.couponCode || null,
-        discount_description: null,
-        welcome_discount_applied: !!order.isWelcomeDiscountApplied,
-        welcome_discount_amount: Number(order.welcomeDiscountAmount || 0),
-        swad_coins_used: Number(order.swadCoinsUsed || 0),
         swad_coin_discount_amount: Number(order.swadCoinDiscountAmount || 0),
-        payment_method: order.customerDetails?.paymentMethod || 'cod',
         payment_status: orderData.paymentStatus || fallbackPaymentStatus,
         order_type: isPbScheduled ? 'prebook' : (isSelfPickup ? 'pickup' : 'delivery'),
         payment_plan: paymentPlan,
@@ -4517,9 +4708,7 @@ app.post('/api/orders', async (req, res) => {
         festival_name: payload.festivalName || null,
         delivery_type: deliveryType,
         scheduled_at: scheduledAt,
-        delivery_instructions: supaDeliveryInstructions,
         order_status: (order.orderStatus || order.status || 'received').toLowerCase().replace(/\s+/g, '_'),
-        placed_at: new Date().toISOString(),
         confirmed_at: null,
         preparing_at: null,
         ready_at: null,
@@ -4527,30 +4716,17 @@ app.post('/api/orders', async (req, res) => {
         delivered_at: null,
         cancelled_at: null,
         cancellation_reason: null,
-        customer_details: {
-          ...(order.customerDetails || {}),
-          orderType: isPbScheduled ? 'prebook' : (isSelfPickup ? 'pickup' : 'delivery'),
-          isSelfPickup,
-          deliveryType,
-        },
-        delivery_address_snapshot: isSelfPickup ? null : (order.deliveryAddressSnapshot || null),
-        delivery_pincode: order.deliveryPinCode || order.customerDetails?.pincode || '',
         estimated_delivery_minutes: Number(order.estimatedDeliveryMinutes || (isSelfPickup ? 25 : 35)),
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };
 
-      let res1 = await serverSupabase
-        .from('orders')
-        .insert(supaPayload)
-        .select()
-        .single();
+      let res1 = await insertServerWithSchemaResilience('orders', supaPayload);
 
       // If duplicate constraint race occurs, retry with newly computed next ID
       if (res1.error && (res1.error.code === '23505' || res1.error.message.includes('unique constraint') || res1.error.message.includes('order_number'))) {
         baseRef = await getNextServerOrderId();
         finalOrderId = `${baseRef}${targetChildSuffix}`;
-        supaPayload.order_id = finalOrderId;
         supaPayload.order_number = finalOrderId;
         if (resolvedCheckoutGroupId) {
           try {
@@ -4560,31 +4736,26 @@ app.post('/api/orders', async (req, res) => {
               .eq('id', resolvedCheckoutGroupId);
           } catch {}
         }
-        res1 = await serverSupabase
-          .from('orders')
-          .insert(supaPayload)
-          .select()
-          .single();
+        res1 = await insertServerWithSchemaResilience('orders', supaPayload);
       }
 
       if (res1.data) {
         // If a stale Supabase BEFORE INSERT trigger overwrote our SWADCLK-000xx-I/-PB ID, restore it immediately
-        const dbOrderId = String(res1.data.order_id || res1.data.order_number || finalOrderId);
+        const dbOrderId = String(res1.data.order_number || res1.data.order_id || finalOrderId);
         if (dbOrderId !== finalOrderId) {
           try {
             await serverSupabase
               .from('orders')
-              .update({ order_id: finalOrderId, order_number: finalOrderId })
+              .update({ order_number: finalOrderId })
               .eq('id', res1.data.id);
-            res1.data.order_id = finalOrderId;
             res1.data.order_number = finalOrderId;
           } catch (cleanErr) {
             console.warn('Post-insert ID alignment notice:', cleanErr);
           }
         }
 
-        console.log(`Order ${res1.data.order_id || res1.data.id} successfully persisted to Supabase.`);
-        order.orderId = res1.data.order_id || finalOrderId;
+        console.log(`Order ${res1.data.order_number || res1.data.id} successfully persisted to Supabase.`);
+        order.orderId = res1.data.order_number || finalOrderId;
         order.orderNumber = res1.data.order_number || order.orderId;
         order.checkoutGroupId = resolvedCheckoutGroupId || undefined;
         order.checkoutReference = baseRef;
@@ -4629,31 +4800,72 @@ app.post('/api/orders', async (req, res) => {
           }
         }
 
-        // Record payment transaction in order_payment_transactions if pre-booking or online advance paid
-        if (isPrebook || advanceAmount > 0) {
+        // Record payment transaction & gateway audit exclusively in order_payment_transactions
+        if (isPrebook || advanceAmount > 0 || isOnlineFallbackPayment) {
           try {
-            await serverSupabase
+            const directTxNow = new Date().toISOString();
+            const directTxType = isPrebook
+              ? (paymentPlan === 'advance_25' ? 'advance' : 'full')
+              : 'initial';
+            const directTxAmount = isOnlineFallbackPayment ? fallbackPaidNow : 0;
+            const directTxNotes = isPrebook
+              ? `Pre-booking ${paymentPlan === 'advance_25' ? '25% advance' : '100% full'} payment`
+              : `Online Checkout (${finalOrderId})`;
+
+            const { data: directTxRow } = await serverSupabase
               .from('order_payment_transactions')
               .insert({
                 order_id: res1.data.id,
-                transaction_type: paymentPlan === 'advance_25' ? 'advance' : 'full',
-                amount: advanceAmount,
-                payment_method: order.customerDetails?.paymentMethod || 'online',
-                status: 'success',
-                gateway_payment_id: payload.paymentGatewayPaymentId || null,
-                notes: `Pre-booking ${paymentPlan === 'advance_25' ? '25% advance' : '100% full'} payment`,
-                paid_at: new Date().toISOString(),
-                created_at: new Date().toISOString(),
-              });
+                checkout_group_id: resolvedCheckoutGroupId,
+                transaction_type: directTxType,
+                amount: directTxAmount,
+                payment_method: fallbackPaymentMethod,
+                payment_gateway: directGateway,
+                status: isOnlineFallbackPayment ? 'success' : 'pending',
+                gateway_order_id: directGatewayOrderId,
+                gateway_payment_id: directGatewayPaymentId,
+                gateway_signature: directGatewaySignature,
+                notes: directTxNotes,
+                paid_at: directPaidAt,
+                created_at: directTxNow,
+              })
+              .select()
+              .single();
+
             productStorage.recordPaymentTransaction({
+              id: directTxRow?.id,
               orderId: res1.data.id,
-              transactionType: paymentPlan === 'advance_25' ? 'advance' : 'full',
-              amount: advanceAmount,
-              paymentMethod: order.customerDetails?.paymentMethod || 'online',
-              status: 'success',
-              gatewayPaymentId: payload.paymentGatewayPaymentId || undefined,
-              notes: `Pre-booking ${paymentPlan === 'advance_25' ? '25% advance' : '100% full'} payment`,
+              checkoutGroupId: resolvedCheckoutGroupId,
+              transactionType: directTxType,
+              amount: directTxAmount,
+              paymentMethod: fallbackPaymentMethod,
+              paymentGateway: directGateway,
+              status: isOnlineFallbackPayment ? 'success' : 'pending',
+              gatewayOrderId: directGatewayOrderId,
+              gatewayPaymentId: directGatewayPaymentId || undefined,
+              gatewaySignature: directGatewaySignature || undefined,
+              notes: directTxNotes,
+              paidAt: directPaidAt || undefined,
             });
+
+            if (isOnlineFallbackPayment && directTxRow?.id && directTxAmount > 0) {
+              const allocType = isPrebook
+                ? (paymentPlan === 'advance_25' ? 'prebook_advance' : 'prebook_full')
+                : 'normal_full';
+              await serverSupabase.from('payment_allocations').insert({
+                payment_transaction_id: directTxRow.id,
+                order_id: res1.data.id,
+                allocated_amount: directTxAmount,
+                allocation_type: allocType,
+                created_at: directTxNow,
+              });
+              productStorage.recordPaymentAllocation({
+                paymentTransactionId: directTxRow.id,
+                orderId: res1.data.id,
+                allocatedAmount: directTxAmount,
+                allocationType: allocType,
+              });
+            }
           } catch (txInsertErr) {
             console.warn('order_payment_transactions insert notice:', txInsertErr);
           }
@@ -4696,7 +4908,7 @@ app.post('/api/orders', async (req, res) => {
               if (redErr) {
                 console.warn('Coupon redemption Supabase insert notice in /api/orders:', redErr.message);
               } else {
-                console.log(`Coupon redemption for order ${res1.data.order_id || res1.data.id} recorded in Supabase.`);
+                console.log(`Coupon redemption for order ${res1.data.order_number || res1.data.id} recorded in Supabase.`);
               }
             }
           } catch (cRedeemErr) {
@@ -4715,15 +4927,15 @@ app.post('/api/orders', async (req, res) => {
                 amount: swadCoinRedemptionTx.amount,
                 balance_before: swadCoinRedemptionTx.balanceBefore,
                 balance_after: swadCoinRedemptionTx.balanceAfter,
-                order_id: res1.data.order_id || res1.data.id || order.orderId,
-                description: `Redeemed ${swadCoinRedemptionTx.coinsUsed} Swad Coins on order ${res1.data.order_id || res1.data.id || order.orderId}`,
+                order_id: res1.data.order_number || res1.data.id || order.orderId,
+                description: `Redeemed ${swadCoinRedemptionTx.coinsUsed} Swad Coins on order ${res1.data.order_number || res1.data.id || order.orderId}`,
                 created_at: new Date().toISOString(),
               });
 
             if (txErr) {
               console.warn('Swad Coin REDEEM transaction Supabase insert notice:', txErr.message);
             } else {
-              console.log(`Swad Coins REDEEM transaction for order ${res1.data.order_id || res1.data.id} logged in Supabase.`);
+              console.log(`Swad Coins REDEEM transaction for order ${res1.data.order_number || res1.data.id} logged in Supabase.`);
             }
 
             // Double-ensure customer's balance in Supabase is updated to balanceAfter
@@ -4854,7 +5066,7 @@ app.post('/api/orders/checkout', async (req, res) => {
           .order('created_at', { ascending: true });
 
         const mappedChildren = (existingChildren || []).map((c: any) => ({
-          ...mapDbOrderRow(c),
+          ...mapDbOrderRow(c, existingGroup),
           checkoutReference: existingGroup.checkout_reference,
         }));
         const normalOrder = mappedChildren.find((o: any) => o.orderType !== 'prebook') || null;
@@ -4863,25 +5075,7 @@ app.post('/api/orders/checkout', async (req, res) => {
         return res.status(200).json({
           success: true,
           idempotentReplay: true,
-          checkoutGroup: {
-            id: existingGroup.id,
-            checkoutReference: existingGroup.checkout_reference,
-            outletId: existingGroup.outlet_id,
-            orderMode: existingGroup.order_mode,
-            prebookPaymentPlan: existingGroup.prebook_payment_plan,
-            subtotal: Number(existingGroup.subtotal || 0),
-            discountAmount: Number(existingGroup.discount_amount || 0),
-            swadCoinDiscountAmount: Number(existingGroup.swad_coin_discount_amount || 0),
-            packagingFee: Number(existingGroup.packaging_fee || 0),
-            deliveryCharge: Number(existingGroup.delivery_charge || 0),
-            taxAmount: Number(existingGroup.tax_amount || 0),
-            grandTotal: Number(existingGroup.grand_total || 0),
-            amountDueNow: Number(existingGroup.amount_due_now || 0),
-            amountPaid: Number(existingGroup.amount_paid || 0),
-            balanceDue: Number(existingGroup.balance_due || 0),
-            paymentStatus: existingGroup.payment_status,
-            createdAt: existingGroup.created_at,
-          },
+          checkoutGroup: buildApiCheckoutGroupObject(existingGroup),
           orders: mappedChildren,
           normalOrder,
           prebookOrder,
@@ -5317,7 +5511,16 @@ app.post('/api/orders/checkout', async (req, res) => {
         ? 'partially_paid'
         : 'paid';
 
-    // 6. Insert parent checkout_groups row
+    // 6. Insert parent checkout_groups row (owns checkout customer, address, discount & payment method; gateway audit lives on order_payment_transactions)
+    const checkoutGateway = isOnlinePayment ? (payload.paymentGateway || 'demo_gateway') : 'cod';
+    const checkoutGatewayOrderId = payload.gatewayOrderId || baseReference;
+    const checkoutGatewayPaymentId = payload.paymentGatewayPaymentId || (isOnlinePayment ? `DEMO-${baseReference}` : null);
+    const checkoutGatewaySignature = payload.gatewaySignature || null;
+    const checkoutPaidAt = isOnlinePayment ? nowIso : null;
+    const checkoutCustomerDetails = buildSlimCustomerDetailsSnapshot(payload.customerDetails);
+    const checkoutAddressSnapshot = isSelfPickup ? null : (payload.deliveryAddressSnapshot || null);
+    const checkoutDeliveryNotes = payload.customerDetails?.deliveryNotes || null;
+
     const groupInsertPayload = {
       checkout_reference: baseReference,
       customer_id: isUUID(supaCustomerId) ? supaCustomerId : null,
@@ -5338,17 +5541,20 @@ app.post('/api/orders/checkout', async (req, res) => {
       amount_paid: initialPaidAmount,
       balance_due: parentBalanceDue,
       payment_status: parentPaymentStatus,
+      payment_method: paymentMethod,
+      customer_name: payload.customerDetails?.fullName || null,
+      customer_phone: payload.customerDetails?.phone || null,
+      customer_details: checkoutCustomerDetails,
+      delivery_address_snapshot: checkoutAddressSnapshot,
+      delivery_pincode: deliveryPinCode,
+      delivery_instructions: checkoutDeliveryNotes,
       idempotency_key: idempotencyKey,
       created_at: nowIso,
       updated_at: nowIso,
     };
 
     let insertedGroup: any = null;
-    const { data: cgRow, error: cgErr } = await serverSupabase
-      .from('checkout_groups')
-      .insert(groupInsertPayload)
-      .select()
-      .single();
+    const { data: cgRow, error: cgErr } = await insertServerWithSchemaResilience('checkout_groups', groupInsertPayload);
 
     if (cgErr) {
       console.error('checkout_groups insert error:', cgErr.message);
@@ -5380,10 +5586,17 @@ app.post('/api/orders/checkout', async (req, res) => {
       amountPaid: initialPaidAmount,
       balanceDue: parentBalanceDue,
       paymentStatus: parentPaymentStatus,
+      paymentMethod,
+      customerName: payload.customerDetails?.fullName || null,
+      customerPhone: payload.customerDetails?.phone || null,
+      customerDetails: checkoutCustomerDetails,
+      deliveryAddressSnapshot: checkoutAddressSnapshot,
+      deliveryPinCode,
+      deliveryInstructions: checkoutDeliveryNotes,
       idempotencyKey,
     });
 
-    // Helper to build & insert a child order
+    // Helper to build & insert a child order (kitchen dispatch & split amounts only)
     const createdChildRows: any[] = [];
     const buildChildPayload = (
       childKind: 'normal' | 'prebook',
@@ -5432,14 +5645,10 @@ app.post('/api/orders/checkout', async (req, res) => {
 
       return {
         id: childOrderIdUuid,
-        order_id: childOrderNumber,
         order_number: childOrderNumber,
         checkout_group_id: insertedGroup.id,
         outlet_id: outletId,
         customer_id: isUUID(supaCustomerId) ? supaCustomerId : null,
-        address_id: isSelfPickup ? null : (isUUID(supaAddressId) ? supaAddressId : null),
-        customer_name: payload.customerDetails?.fullName || null,
-        customer_phone: payload.customerDetails?.phone || null,
         is_self_pickup: isSelfPickup,
         order_type: childOrderType,
         payment_plan: totals.paymentPlan,
@@ -5456,33 +5665,11 @@ app.post('/api/orders/checkout', async (req, res) => {
         discount_amount: totals.discount,
         tax_amount: totals.gst,
         total_amount: totals.total,
-        discount_type: totals.discount > 0 ? 'coupon' : 'NONE',
-        discount_code: validatedCouponCode,
-        swad_coins_used: Math.round(totals.swadCoinDiscount),
         swad_coin_discount_amount: totals.swadCoinDiscount,
-        payment_method: paymentMethod,
         payment_status: childPaymentStatus,
         delivery_type: childDeliveryType,
         scheduled_at: childScheduledAt,
-        delivery_instructions: payload.customerDetails?.deliveryNotes || null,
         order_status: 'received',
-        placed_at: nowIso,
-        customer_details: {
-          ...(payload.customerDetails || {}),
-          orderType: childOrderType,
-          isSelfPickup,
-          deliveryType: childDeliveryType,
-          ...(childKind === 'prebook' || childDeliveryType !== 'scheduled'
-            ? {
-                scheduledAt: childScheduledAt || undefined,
-                ...(childDeliveryType !== 'scheduled'
-                  ? { scheduledDate: undefined, scheduledTimeSlot: undefined, scheduledSlotLabel: undefined }
-                  : {}),
-              }
-            : {}),
-        },
-        delivery_address_snapshot: isSelfPickup ? null : (payload.deliveryAddressSnapshot || null),
-        delivery_pincode: deliveryPinCode,
         estimated_delivery_minutes: isSelfPickup ? 25 : 35,
         created_at: nowIso,
         updated_at: nowIso,
@@ -5490,31 +5677,22 @@ app.post('/api/orders/checkout', async (req, res) => {
     };
 
     const insertChildOrder = async (supaOrderPayload: any, rawChildItems: any[]) => {
-      const { data: row, error: insErr } = await serverSupabase
-        .from('orders')
-        .insert(supaOrderPayload)
-        .select()
-        .single();
+      const { data: row, error: insErr } = await insertServerWithSchemaResilience('orders', supaOrderPayload);
 
       if (insErr || !row) {
         throw new Error(insErr?.message || `Failed to create order ${supaOrderPayload.order_number}`);
       }
 
-      // Guard: if a stale DB BEFORE INSERT trigger overwrote order_id/order_number, restore it immediately
-      if (
-        row.order_id !== supaOrderPayload.order_id ||
-        row.order_number !== supaOrderPayload.order_number
-      ) {
+      // Guard: if a stale DB BEFORE INSERT trigger overwrote order_number, restore it immediately
+      if (row.order_number !== supaOrderPayload.order_number) {
         try {
           const { error: alignErr } = await serverSupabase
             .from('orders')
             .update({
-              order_id: supaOrderPayload.order_id,
               order_number: supaOrderPayload.order_number,
             })
             .eq('id', row.id);
           if (!alignErr) {
-            row.order_id = supaOrderPayload.order_id;
             row.order_number = supaOrderPayload.order_number;
           }
         } catch (alignWrapErr) {
@@ -5586,18 +5764,18 @@ app.post('/api/orders/checkout', async (req, res) => {
         transaction_type: 'initial',
         amount: isOnlinePayment ? breakdown.amountDueNow : 0,
         payment_method: paymentMethod,
-        payment_gateway: isOnlinePayment ? 'demo_gateway' : 'cod',
+        payment_gateway: checkoutGateway,
         status: isOnlinePayment ? 'success' : 'pending',
-        gateway_order_id: payload.gatewayOrderId || baseReference,
-        gateway_payment_id: payload.paymentGatewayPaymentId || (isOnlinePayment ? `DEMO-${baseReference}` : null),
-        gateway_signature: payload.gatewaySignature || null,
+        gateway_order_id: checkoutGatewayOrderId,
+        gateway_payment_id: checkoutGatewayPaymentId,
+        gateway_signature: checkoutGatewaySignature,
         idempotency_key: `init-${idempotencyKey}`,
         notes: breakdown.isMixed
           ? `Unified Mixed Checkout (${baseReference}-I + ${baseReference}-PB)`
           : breakdown.hasPrebook
             ? `Utsav Pre-book ${prebookPaymentPlan === 'advance_25' ? '25% Advance' : '100% Upfront'} (${baseReference}-PB)`
             : `Online Checkout (${baseReference}-I)`,
-        paid_at: isOnlinePayment ? nowIso : null,
+        paid_at: checkoutPaidAt,
         created_at: nowIso,
       };
 
@@ -5618,7 +5796,9 @@ app.post('/api/orders/checkout', async (req, res) => {
           paymentMethod,
           paymentGateway: txRow.payment_gateway,
           status: txRow.status,
+          gatewayOrderId: txRow.gateway_order_id,
           gatewayPaymentId: txRow.gateway_payment_id,
+          gatewaySignature: txRow.gateway_signature,
           idempotencyKey: txRow.idempotency_key,
           notes: txRow.notes,
           paidAt: txRow.paid_at,
@@ -5721,31 +5901,13 @@ app.post('/api/orders/checkout', async (req, res) => {
       }
     }
 
-    const mappedNormal = normalOrderRow ? { ...mapDbOrderRow(normalOrderRow), checkoutReference: baseReference } : null;
-    const mappedPrebook = prebookOrderRow ? { ...mapDbOrderRow(prebookOrderRow), checkoutReference: baseReference } : null;
+    const mappedNormal = normalOrderRow ? { ...mapDbOrderRow(normalOrderRow, insertedGroup), checkoutReference: baseReference } : null;
+    const mappedPrebook = prebookOrderRow ? { ...mapDbOrderRow(prebookOrderRow, insertedGroup), checkoutReference: baseReference } : null;
     const mappedOrders = [mappedNormal, mappedPrebook].filter(Boolean);
 
     return res.status(201).json({
       success: true,
-      checkoutGroup: {
-        id: insertedGroup.id,
-        checkoutReference: baseReference,
-        outletId,
-        orderMode: breakdown.orderMode,
-        prebookPaymentPlan: breakdown.hasPrebook ? breakdown.prebookPaymentPlan : null,
-        subtotal: breakdown.combinedSubtotal,
-        discountAmount: breakdown.totalCouponDiscount,
-        swadCoinDiscountAmount: breakdown.totalSwadCoinDiscount,
-        packagingFee: breakdown.totalPackagingFee,
-        deliveryCharge: breakdown.totalDeliveryFee,
-        taxAmount: breakdown.totalGst,
-        grandTotal: breakdown.grandTotal,
-        amountDueNow: breakdown.amountDueNow,
-        amountPaid: initialPaidAmount,
-        balanceDue: parentBalanceDue,
-        paymentStatus: parentPaymentStatus,
-        createdAt: nowIso,
-      },
+      checkoutGroup: buildApiCheckoutGroupObject(insertedGroup),
       orders: mappedOrders,
       normalOrder: mappedNormal,
       prebookOrder: mappedPrebook,
@@ -5950,7 +6112,7 @@ app.post('/api/orders/:id/collect-balance', requireOwnerAuth, async (req: Authen
         const { data: currentOrderRow } = await serverSupabase
           .from('orders')
           .select('*')
-          .or(`id.eq.${id},order_id.eq.${id},order_number.eq.${id}`)
+          .or(`id.eq.${id},order_number.eq.${id}`)
           .maybeSingle();
 
         return res.json({
@@ -5967,7 +6129,7 @@ app.post('/api/orders/:id/collect-balance', requireOwnerAuth, async (req: Authen
     const { data: orderRow, error: fetchErr } = await serverSupabase
       .from('orders')
       .select('*')
-      .or(`id.eq.${id},order_id.eq.${id},order_number.eq.${id}`)
+      .or(`id.eq.${id},order_number.eq.${id}`)
       .maybeSingle();
 
     if (fetchErr || !orderRow) {
@@ -6115,15 +6277,380 @@ app.post('/api/orders/:id/collect-balance', requireOwnerAuth, async (req: Authen
       }
     }
 
+    let latestCgRow: any = null;
+    if (orderRow.checkout_group_id) {
+      try {
+        const { data: cgFresh } = await serverSupabase
+          .from('checkout_groups')
+          .select('*')
+          .eq('id', orderRow.checkout_group_id)
+          .maybeSingle();
+        latestCgRow = cgFresh || null;
+      } catch {}
+    }
+
     return res.json({
       success: true,
-      order: mapDbOrderRow(updatedOrder),
+      order: mapDbOrderRow(updatedOrder, latestCgRow),
       transaction: txRow,
       message: `Successfully recorded balance collection of ₹${collectedAmount}.`,
     });
   } catch (err: any) {
     console.error('Collect balance error:', err);
     return res.status(500).json({ success: false, error: err.message || 'Failed to collect balance' });
+  }
+});
+
+// Pre-booking: Cancel Unfulfillable PB Order & Record Immediate Advance Refund (Protected - Owner/Outlet-Scoped Manager)
+const ALLOWED_REFUND_METHODS = new Set(['upi', 'bank_transfer', 'cash', 'gateway_ref']);
+const DIGITAL_REFUND_METHODS = new Set(['upi', 'bank_transfer', 'gateway_ref']);
+
+app.post('/api/orders/:id/cancel-with-refund', requireOwnerAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      cancellationReason,
+      refundAmount,
+      refundMethod,
+      refundReference,
+      refundedAt,
+      payoutDestination,
+      refundNotes,
+      idempotencyKey,
+    } = req.body || {};
+
+    const cleanReason = String(cancellationReason || '').trim();
+    if (!cleanReason) {
+      return res.status(400).json({
+        success: false,
+        error: 'Cancellation reason is required.',
+      });
+    }
+
+    // 0. Idempotency replay protection
+    if (idempotencyKey) {
+      const { data: existingTx } = await serverSupabase
+        .from('order_payment_transactions')
+        .select('*')
+        .eq('idempotency_key', String(idempotencyKey))
+        .maybeSingle();
+
+      if (existingTx) {
+        const { data: currentOrderRow } = await serverSupabase
+          .from('orders')
+          .select('*')
+          .or(`id.eq.${id},order_number.eq.${id}`)
+          .maybeSingle();
+
+        let replayCgRow: any = null;
+        if (currentOrderRow?.checkout_group_id) {
+          const { data: cgRow } = await serverSupabase
+            .from('checkout_groups')
+            .select('*')
+            .eq('id', currentOrderRow.checkout_group_id)
+            .maybeSingle();
+          replayCgRow = cgRow || null;
+        }
+
+        return res.json({
+          success: true,
+          idempotentReplay: true,
+          order: currentOrderRow ? mapDbOrderRow(currentOrderRow, replayCgRow, existingTx) : currentOrderRow,
+          transaction: existingTx,
+          message: 'Cancellation and advance refund already recorded.',
+        });
+      }
+    }
+
+    // 1. Fetch order & verify staff outlet access
+    const { data: orderRow, error: fetchErr } = await serverSupabase
+      .from('orders')
+      .select('*')
+      .or(`id.eq.${id},order_number.eq.${id}`)
+      .maybeSingle();
+
+    if (fetchErr || !orderRow) {
+      return res.status(404).json({ success: false, error: 'Order not found' });
+    }
+
+    const access = await resolveStaffOutletAccess(req, orderRow.outlet_id);
+    if (!access.allowed) {
+      return res.status(access.status || 403).json({ success: false, error: access.error });
+    }
+
+    if (String(orderRow.order_status || '').toLowerCase().trim() === 'cancelled') {
+      return res.status(400).json({
+        success: false,
+        error: 'This order is already cancelled.',
+      });
+    }
+
+    // Resolve authoritative staff identity from verified session
+    let processedByLabel = req.user?.email || req.user?.phone || req.user?.id || 'Outlet Staff';
+    if (req.user?.id && isUUID(req.user.id)) {
+      try {
+        const { data: staffProf } = await serverSupabase
+          .from('profiles')
+          .select('full_name, email')
+          .eq('id', req.user.id)
+          .maybeSingle();
+        if (staffProf?.full_name || staffProf?.email) {
+          processedByLabel = staffProf.full_name
+            ? `${staffProf.full_name}${staffProf.email ? ` (${staffProf.email})` : ''}`
+            : staffProf.email;
+        }
+      } catch {}
+    }
+
+    const isPrebook =
+      orderRow.order_type === 'prebook' ||
+      orderRow.delivery_type === 'pb-scheduled' ||
+      Boolean(orderRow.festive_event_id);
+    const currentPaid = Number(orderRow.paid_amount ?? orderRow.advance_amount ?? 0);
+    const now = new Date().toISOString();
+
+    let txRow: any = null;
+    let nextPaidAmount = currentPaid;
+    let nextPaymentStatus = orderRow.payment_status || 'pending';
+
+    // 2. If Pre-book order with paid advance/amount > 0, enforce neat pre-record refund validation
+    if (isPrebook && currentPaid > 0) {
+      const normalizedMethod = String(refundMethod || '').toLowerCase().trim();
+      if (!ALLOWED_REFUND_METHODS.has(normalizedMethod)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Please select a valid refund mode (UPI, Bank Transfer, Cash, or Gateway Ref).',
+        });
+      }
+
+      const parsedRefundAmount =
+        refundAmount !== undefined && refundAmount !== '' ? Number(refundAmount) : currentPaid;
+      if (
+        !Number.isFinite(parsedRefundAmount) ||
+        parsedRefundAmount <= 0 ||
+        parsedRefundAmount > currentPaid
+      ) {
+        return res.status(400).json({
+          success: false,
+          error: `Refund amount must be between ₹1 and ₹${currentPaid}.`,
+        });
+      }
+
+      const cleanReference = String(refundReference || '').trim();
+      if (DIGITAL_REFUND_METHODS.has(normalizedMethod) && cleanReference.length < 3) {
+        const modeReadable =
+          normalizedMethod === 'upi'
+            ? 'UPI UTR / Transaction ID'
+            : normalizedMethod === 'bank_transfer'
+              ? 'Bank IMPS/NEFT Reference'
+              : 'Gateway Refund ID';
+        return res.status(400).json({
+          success: false,
+          error: `${modeReadable} (tr-reference) is required before recording a ${normalizedMethod.replace('_', ' ').toUpperCase()} refund.`,
+        });
+      }
+
+      let resolvedRefundedAt = now;
+      if (refundedAt) {
+        const parsedTs = new Date(String(refundedAt));
+        if (!isNaN(parsedTs.getTime())) {
+          resolvedRefundedAt = parsedTs.toISOString();
+        }
+      }
+
+      const cleanDest = String(payoutDestination || '').trim();
+      const cleanRemarks = String(refundNotes || '').trim();
+      const auditParts = [
+        `Cancel Reason: ${cleanReason}`,
+        cleanDest ? `To: ${cleanDest}` : null,
+        cleanRemarks ? `Notes: ${cleanRemarks}` : null,
+        `Processed by: ${processedByLabel}`,
+      ].filter(Boolean);
+
+      const txInsertPayload: any = {
+        order_id: orderRow.id,
+        checkout_group_id: orderRow.checkout_group_id || null,
+        transaction_type: 'refund',
+        amount: Number(parsedRefundAmount.toFixed(2)),
+        payment_method: normalizedMethod,
+        payment_gateway: normalizedMethod === 'gateway_ref' ? 'online_gateway' : 'offline_outlet',
+        status: 'refunded',
+        gateway_payment_id: cleanReference || null,
+        idempotency_key: idempotencyKey ? String(idempotencyKey) : null,
+        notes: auditParts.join(' | '),
+        paid_at: resolvedRefundedAt,
+        created_at: now,
+      };
+
+      const { data: insertedTx, error: txErr } = await serverSupabase
+        .from('order_payment_transactions')
+        .insert(txInsertPayload)
+        .select()
+        .single();
+
+      if (txErr || !insertedTx) {
+        console.error('Advance refund ledger insert failed:', txErr);
+        return res.status(500).json({
+          success: false,
+          error: txErr?.message || 'Failed to record refund transaction in payment ledger.',
+        });
+      }
+
+      txRow = insertedTx;
+
+      try {
+        await serverSupabase.from('payment_allocations').insert({
+          payment_transaction_id: insertedTx.id,
+          order_id: orderRow.id,
+          allocated_amount: Number(parsedRefundAmount.toFixed(2)),
+          allocation_type: 'prebook_refund',
+          created_at: now,
+        });
+      } catch (allocErr) {
+        console.warn('Prebook refund allocation insert notice:', allocErr);
+      }
+
+      productStorage.recordPaymentTransaction({
+        id: insertedTx.id,
+        orderId: orderRow.id,
+        checkoutGroupId: orderRow.checkout_group_id || null,
+        transactionType: 'refund',
+        amount: Number(parsedRefundAmount.toFixed(2)),
+        paymentMethod: normalizedMethod,
+        paymentGateway: txInsertPayload.payment_gateway,
+        status: 'refunded',
+        gatewayPaymentId: cleanReference || undefined,
+        idempotencyKey: idempotencyKey ? String(idempotencyKey) : undefined,
+        notes: txInsertPayload.notes,
+        paidAt: resolvedRefundedAt,
+      });
+
+      productStorage.recordPaymentAllocation({
+        paymentTransactionId: insertedTx.id,
+        orderId: orderRow.id,
+        allocatedAmount: Number(parsedRefundAmount.toFixed(2)),
+        allocationType: 'prebook_refund',
+      });
+
+      nextPaidAmount = Math.max(0, Number((currentPaid - parsedRefundAmount).toFixed(2)));
+      nextPaymentStatus = nextPaidAmount <= 0 ? 'refunded' : 'partially_paid';
+    }
+
+    // 3. Cancel the order in public.orders & zero balance due
+    const { data: updatedOrder, error: updateErr } = await serverSupabase
+      .from('orders')
+      .update({
+        order_status: 'cancelled',
+        cancelled_at: now,
+        cancellation_reason: cleanReason,
+        paid_amount: nextPaidAmount,
+        balance_amount: 0,
+        payment_status: nextPaymentStatus,
+        updated_at: now,
+      })
+      .eq('id', orderRow.id)
+      .select()
+      .single();
+
+    if (updateErr || !updatedOrder) {
+      return res.status(500).json({
+        success: false,
+        error: updateErr?.message || 'Failed to update order status to cancelled.',
+      });
+    }
+
+    // 4. Automatically refund any redeemed Swad Coins
+    let swadCoinsRefunded = 0;
+    try {
+      const coinRes = await refundOrderSwadCoins(orderRow.order_number || orderRow.id, cleanReason);
+      swadCoinsRefunded = coinRes.refundedCoins || 0;
+    } catch (coinErr) {
+      console.warn('Swad Coin refund warning during cancel-with-refund:', coinErr);
+    }
+
+    // 5. Recompute parent checkout_groups totals & status cleanly (mixed-cart safe)
+    if (orderRow.checkout_group_id) {
+      try {
+        const { data: siblingOrders } = await serverSupabase
+          .from('orders')
+          .select('id, order_status, payment_status, paid_amount, advance_amount, balance_amount')
+          .eq('checkout_group_id', orderRow.checkout_group_id);
+
+        if (Array.isArray(siblingOrders) && siblingOrders.length > 0) {
+          const groupPaid = siblingOrders.reduce(
+            (sum: number, o: any) => sum + Number(o.paid_amount ?? o.advance_amount ?? 0),
+            0
+          );
+          const groupBalance = siblingOrders.reduce(
+            (sum: number, o: any) => sum + Number(o.balance_amount ?? 0),
+            0
+          );
+          const allCancelled = siblingOrders.every(
+            (o: any) => String(o.order_status || '').toLowerCase().trim() === 'cancelled'
+          );
+          const anyRefunded = siblingOrders.some(
+            (o: any) => String(o.payment_status || '').toLowerCase().trim() === 'refunded'
+          );
+
+          const groupStatus =
+            allCancelled && groupPaid <= 0 && anyRefunded
+              ? 'refunded'
+              : groupBalance <= 0 && groupPaid > 0
+                ? 'paid'
+                : groupPaid > 0
+                  ? 'partially_paid'
+                  : anyRefunded
+                    ? 'refunded'
+                    : 'pending';
+
+          await serverSupabase
+            .from('checkout_groups')
+            .update({
+              amount_paid: Number(groupPaid.toFixed(2)),
+              balance_due: Number(groupBalance.toFixed(2)),
+              payment_status: groupStatus,
+              updated_at: now,
+            })
+            .eq('id', orderRow.checkout_group_id);
+
+          productStorage.updateCheckoutGroup(orderRow.checkout_group_id, {
+            amountPaid: Number(groupPaid.toFixed(2)),
+            balanceDue: Number(groupBalance.toFixed(2)),
+            paymentStatus: groupStatus,
+          });
+        }
+      } catch (groupSyncErr) {
+        console.warn('Parent checkout_groups sync notice on cancel-with-refund:', groupSyncErr);
+      }
+    }
+
+    let latestCgRow: any = null;
+    if (orderRow.checkout_group_id) {
+      try {
+        const { data: cgFresh } = await serverSupabase
+          .from('checkout_groups')
+          .select('*')
+          .eq('id', orderRow.checkout_group_id)
+          .maybeSingle();
+        latestCgRow = cgFresh || null;
+      } catch {}
+    }
+
+    return res.json({
+      success: true,
+      order: mapDbOrderRow(updatedOrder, latestCgRow, txRow),
+      transaction: txRow,
+      swadCoinsRefunded,
+      message: txRow
+        ? `Order cancelled and advance refund of ₹${txRow.amount} recorded.`
+        : 'Order cancelled successfully.',
+    });
+  } catch (err: any) {
+    console.error('Cancel with refund error:', err);
+    return res.status(500).json({
+      success: false,
+      error: err.message || 'Failed to process order cancellation and refund',
+    });
   }
 });
 
@@ -6770,11 +7297,22 @@ async function refundOrderSwadCoins(
     // Find order in Supabase
     const { data: supaOrder } = await serverSupabase
       .from('orders')
-      .select('id, order_id, order_number, customer_id, customer_phone, swad_coins_used')
-      .or(`order_id.eq.${orderId},id.eq.${orderId},order_number.eq.${orderId}`)
+      .select('id, order_number, customer_id, checkout_group_id, swad_coin_discount_amount')
+      .or(`order_number.eq.${orderId},id.eq.${orderId}`)
       .maybeSingle();
 
-    const canonicalOrderId = supaOrder?.order_id || supaOrder?.order_number || orderId;
+    const canonicalOrderId = supaOrder?.order_number || orderId;
+    let groupPhone: string | null = null;
+    if (supaOrder?.checkout_group_id) {
+      try {
+        const { data: cgPhoneRow } = await serverSupabase
+          .from('checkout_groups')
+          .select('customer_phone')
+          .eq('id', supaOrder.checkout_group_id)
+          .maybeSingle();
+        if (cgPhoneRow?.customer_phone) groupPhone = cgPhoneRow.customer_phone;
+      } catch {}
+    }
 
     // Check if refund was ALREADY recorded in Supabase swad_coin_transactions (idempotency guard)
     const { data: existingRefunds } = await serverSupabase
@@ -6784,8 +7322,8 @@ async function refundOrderSwadCoins(
       .eq('type', 'REFUND');
 
     if (!existingRefunds || existingRefunds.length === 0) {
-      // Determine coins to refund
-      let coinsToRefund = Number(supaOrder?.swad_coins_used || 0);
+      // Determine coins to refund (1 Swad Coin = ₹1)
+      let coinsToRefund = Math.round(Number(supaOrder?.swad_coin_discount_amount || 0));
       let supaCustomerId = supaOrder?.customer_id;
 
       // Check if REDEEM transaction exists in Supabase
@@ -6820,8 +7358,9 @@ async function refundOrderSwadCoins(
           const { data } = await serverSupabase.from('customers').select('*').eq('id', supaCustomerId).maybeSingle();
           supaCust = data;
         }
-        if (!supaCust && supaOrder?.customer_phone) {
-          const normPhone = normalizePhone(supaOrder.customer_phone);
+        const resolvedPhoneForCust = groupPhone || (supaOrder as any)?.customer_phone || null;
+        if (!supaCust && resolvedPhoneForCust) {
+          const normPhone = normalizePhone(resolvedPhoneForCust);
           if (normPhone) {
             const { data } = await serverSupabase.from('customers').select('*').or(`phone.eq.${normPhone},phone.eq.+91${normPhone}`).maybeSingle();
             supaCust = data;
@@ -6954,7 +7493,7 @@ app.patch('/api/orders/:orderId/status', async (req, res) => {
       const { data: supaUpdated, error: supaErr } = await serverSupabase
         .from('orders')
         .update(supaUpdate)
-        .or(`order_id.eq.${orderIdentifier},order_number.eq.${orderIdentifier},id.eq.${orderIdentifier}`)
+        .or(`order_number.eq.${orderIdentifier},id.eq.${orderIdentifier}`)
         .select()
         .maybeSingle();
 
@@ -6971,7 +7510,19 @@ app.patch('/api/orders/:orderId/status', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Order not found in database' });
     }
 
-    return res.json({ success: true, order: mapDbOrderRow(updatedRow) });
+    let statusCgRow: any = null;
+    if (updatedRow.checkout_group_id) {
+      try {
+        const { data: cgRow } = await serverSupabase
+          .from('checkout_groups')
+          .select('*')
+          .eq('id', updatedRow.checkout_group_id)
+          .maybeSingle();
+        statusCgRow = cgRow || null;
+      } catch {}
+    }
+
+    return res.json({ success: true, order: mapDbOrderRow(updatedRow, statusCgRow) });
   } catch (err: any) {
     console.error('Update order status error:', err);
     return res.status(500).json({ success: false, error: 'Failed to update order status' });
@@ -7013,7 +7564,7 @@ app.delete('/api/orders/:orderId', async (req, res) => {
       const { error } = await serverSupabase
         .from('orders')
         .delete()
-        .or(`order_id.eq.${orderIdParam},id.eq.${orderIdParam},order_number.eq.${orderIdParam},order_id.eq.${cleanParam},order_number.eq.${cleanParam}`);
+        .or(`id.eq.${orderIdParam},order_number.eq.${orderIdParam},order_number.eq.${cleanParam}`);
       if (error) {
         console.warn('Supabase order delete error:', error.message);
       }
@@ -7046,14 +7597,27 @@ app.get('/api/orders/:orderId', authenticateToken, async (req, res) => {
       const { data, error } = await serverSupabase
         .from('orders')
         .select('*')
-        .or(`order_number.eq.${cleanParam},order_id.eq.${cleanParam},id.eq.${cleanParam},order_number.eq.${param},order_id.eq.${param}`)
+        .or(`order_number.eq.${cleanParam},id.eq.${cleanParam},order_number.eq.${param}`)
         .maybeSingle();
 
       if (data) {
+        let cgRow: any = null;
+        if (data.checkout_group_id) {
+          try {
+            const { data: fetchedCg } = await serverSupabase
+              .from('checkout_groups')
+              .select('*')
+              .eq('id', data.checkout_group_id)
+              .maybeSingle();
+            cgRow = fetchedCg || null;
+          } catch {}
+        }
+
         // Ownership verification: Staff can view any; Customers can only view their own order
         if (!isStaff) {
           const userPhoneNorm = authUser.phone ? authUser.phone.replace(/\D/g, '').slice(-10) : '';
-          const orderPhoneNorm = data.customer_phone ? String(data.customer_phone).replace(/\D/g, '').slice(-10) : '';
+          const rawOrderPhone = cgRow?.customer_phone || data.customer_phone || '';
+          const orderPhoneNorm = rawOrderPhone ? String(rawOrderPhone).replace(/\D/g, '').slice(-10) : '';
           const isMatchById = authUser.id && data.customer_id && authUser.id === data.customer_id;
           const isMatchByPhone = userPhoneNorm && orderPhoneNorm && userPhoneNorm === orderPhoneNorm;
 
@@ -7062,30 +7626,23 @@ app.get('/api/orders/:orderId', authenticateToken, async (req, res) => {
           }
         }
 
-        const mappedOrder = mapDbOrderRow(data);
-        if (data.checkout_group_id) {
+        let refundTxRow: any = null;
+        if (String(data.order_status || '').toLowerCase() === 'cancelled' || data.payment_status === 'refunded') {
           try {
-            const { data: cgRow } = await serverSupabase
-              .from('checkout_groups')
-              .select('id, checkout_reference, order_mode, prebook_payment_plan, grand_total, amount_paid, balance_due, payment_status')
-              .eq('id', data.checkout_group_id)
-              .maybeSingle();
-            if (cgRow) {
-              mappedOrder.checkoutReference = cgRow.checkout_reference;
-              mappedOrder.checkoutGroup = {
-                id: cgRow.id,
-                checkoutReference: cgRow.checkout_reference,
-                orderMode: cgRow.order_mode,
-                prebookPaymentPlan: cgRow.prebook_payment_plan,
-                grandTotal: Number(cgRow.grand_total || 0),
-                amountPaid: Number(cgRow.amount_paid || 0),
-                balanceDue: Number(cgRow.balance_due || 0),
-                paymentStatus: cgRow.payment_status,
-              };
+            const { data: refRows } = await serverSupabase
+              .from('order_payment_transactions')
+              .select('*')
+              .eq('order_id', data.id)
+              .eq('transaction_type', 'refund')
+              .order('created_at', { ascending: false })
+              .limit(1);
+            if (Array.isArray(refRows) && refRows[0]) {
+              refundTxRow = refRows[0];
             }
           } catch {}
         }
 
+        const mappedOrder = mapDbOrderRow(data, cgRow, refundTxRow);
         return res.json({ success: true, order: mappedOrder });
       }
       if (!error) {
@@ -7118,6 +7675,7 @@ app.get('/api/orders', authenticateToken, async (req, res) => {
 
     try {
       let supaQuery = serverSupabase.from('orders').select('*').order('created_at', { ascending: false });
+      const cgPreloadMap = new Map<string, any>();
 
       if (isStaff) {
         // Staff filters
@@ -7129,19 +7687,51 @@ app.get('/api/orders', authenticateToken, async (req, res) => {
         }
         if (req.query.phone) {
           const cleanPhone = (req.query.phone as string).replace(/\D/g, '').slice(-10);
-          supaQuery = supaQuery.ilike('customer_phone', `%${cleanPhone}%`);
+          const { data: cgPhoneMatches, error: cgPhoneErr } = await serverSupabase
+            .from('checkout_groups')
+            .select('*')
+            .ilike('customer_phone', `%${cleanPhone}%`);
+          if (!cgPhoneErr && Array.isArray(cgPhoneMatches)) {
+            if (cgPhoneMatches.length === 0) {
+              return res.json({ success: true, orders: [], count: 0 });
+            }
+            cgPhoneMatches.forEach((g: any) => cgPreloadMap.set(String(g.id), g));
+            supaQuery = supaQuery.in('checkout_group_id', cgPhoneMatches.map((g: any) => g.id));
+          } else {
+            supaQuery = supaQuery.ilike('customer_phone', `%${cleanPhone}%`);
+          }
         }
       } else {
         // Customer: strictly restrict to verified authenticated identity
         const customerUuid = authUser.id && isUUID(authUser.id) ? authUser.id : null;
         const customerPhone = authUser.phone ? authUser.phone.replace(/\D/g, '').slice(-10) : null;
 
-        if (customerUuid && customerPhone) {
+        let phoneGroupIds: string[] = [];
+        let cgPhoneLookupOk = false;
+        if (customerPhone) {
+          const { data: cgPhoneMatches, error: cgPhoneErr } = await serverSupabase
+            .from('checkout_groups')
+            .select('*')
+            .ilike('customer_phone', `%${customerPhone}%`);
+          if (!cgPhoneErr && Array.isArray(cgPhoneMatches)) {
+            cgPhoneLookupOk = true;
+            cgPhoneMatches.forEach((g: any) => cgPreloadMap.set(String(g.id), g));
+            phoneGroupIds = cgPhoneMatches.map((g: any) => String(g.id));
+          }
+        }
+
+        if (customerUuid && phoneGroupIds.length > 0) {
+          supaQuery = supaQuery.or(`customer_id.eq.${customerUuid},checkout_group_id.in.(${phoneGroupIds.join(',')})`);
+        } else if (customerUuid && !cgPhoneLookupOk && customerPhone) {
           supaQuery = supaQuery.or(`customer_id.eq.${customerUuid},customer_phone.ilike.%${customerPhone}%`);
         } else if (customerUuid) {
           supaQuery = supaQuery.eq('customer_id', customerUuid);
-        } else if (customerPhone) {
+        } else if (phoneGroupIds.length > 0) {
+          supaQuery = supaQuery.in('checkout_group_id', phoneGroupIds);
+        } else if (!cgPhoneLookupOk && customerPhone) {
           supaQuery = supaQuery.ilike('customer_phone', `%${customerPhone}%`);
+        } else if (customerPhone) {
+          return res.json({ success: true, orders: [], count: 0 });
         } else {
           return res.status(401).json({ success: false, error: 'Authentication required. Customer identity missing.' });
         }
@@ -7153,40 +7743,59 @@ app.get('/api/orders', authenticateToken, async (req, res) => {
         return res.status(500).json({ success: false, error: error.message });
       }
 
-      let mapped = (data || []).map(mapDbOrderRow);
-
-      // Hydrate parent checkoutReference & summary from checkout_groups
-      const groupIds = Array.from(new Set(mapped.map((o: any) => o.checkoutGroupId).filter(Boolean)));
-      if (groupIds.length > 0) {
+      const rawRows = data || [];
+      // Hydrate parent checkout_groups snapshots & summaries onto all orders
+      const missingGroupIds = Array.from(
+        new Set(
+          rawRows
+            .map((o: any) => o.checkout_group_id)
+            .filter((gid: any) => gid && !cgPreloadMap.has(String(gid)))
+        )
+      );
+      if (missingGroupIds.length > 0) {
         try {
           const { data: cgRows } = await serverSupabase
             .from('checkout_groups')
-            .select('id, checkout_reference, order_mode, prebook_payment_plan, grand_total, amount_paid, balance_due, payment_status')
-            .in('id', groupIds);
+            .select('*')
+            .in('id', missingGroupIds);
           if (Array.isArray(cgRows)) {
-            const cgMap = new Map<string, any>();
-            cgRows.forEach((g: any) => cgMap.set(String(g.id), g));
-            mapped = mapped.map((o: any) => {
-              const cg = o.checkoutGroupId ? cgMap.get(String(o.checkoutGroupId)) : null;
-              if (!cg) return o;
-              return {
-                ...o,
-                checkoutReference: cg.checkout_reference,
-                checkoutGroup: {
-                  id: cg.id,
-                  checkoutReference: cg.checkout_reference,
-                  orderMode: cg.order_mode,
-                  prebookPaymentPlan: cg.prebook_payment_plan,
-                  grandTotal: Number(cg.grand_total || 0),
-                  amountPaid: Number(cg.amount_paid || 0),
-                  balanceDue: Number(cg.balance_due || 0),
-                  paymentStatus: cg.payment_status,
-                },
-              };
+            cgRows.forEach((g: any) => cgPreloadMap.set(String(g.id), g));
+          }
+        } catch {}
+      }
+
+      const cancelledOrderIds = rawRows
+        .filter(
+          (o: any) =>
+            String(o.order_status || '').toLowerCase() === 'cancelled' ||
+            o.payment_status === 'refunded'
+        )
+        .map((o: any) => o.id)
+        .filter(Boolean);
+      const refundTxMap = new Map<string, any>();
+      if (cancelledOrderIds.length > 0) {
+        try {
+          const { data: refRows } = await serverSupabase
+            .from('order_payment_transactions')
+            .select('*')
+            .in('order_id', cancelledOrderIds)
+            .eq('transaction_type', 'refund')
+            .order('created_at', { ascending: false });
+          if (Array.isArray(refRows)) {
+            refRows.forEach((tx: any) => {
+              if (tx?.order_id && !refundTxMap.has(String(tx.order_id))) {
+                refundTxMap.set(String(tx.order_id), tx);
+              }
             });
           }
         } catch {}
       }
+
+      let mapped = rawRows.map((row: any) => {
+        const cg = row.checkout_group_id ? cgPreloadMap.get(String(row.checkout_group_id)) : undefined;
+        const refundTx = refundTxMap.get(String(row.id));
+        return mapDbOrderRow(row, cg, refundTx);
+      });
 
       if (status) {
         const normStatus = status.toLowerCase().replace(/\s+/g, '_');
@@ -7358,11 +7967,11 @@ app.get('/api/orders/:orderId/reviewable-items', async (req, res) => {
     // 1. Fetch order from Supabase
     let orderRow: any = null;
     try {
-      const q1 = await serverSupabase.from('orders').select('*').eq('order_id', rawOrderId).maybeSingle();
+      const q1 = await serverSupabase.from('orders').select('*').eq('order_number', rawOrderId).maybeSingle();
       if (q1.data) {
         orderRow = q1.data;
       } else {
-        const q2 = await serverSupabase.from('orders').select('*').eq('order_id', noHashOrderId).maybeSingle();
+        const q2 = await serverSupabase.from('orders').select('*').eq('order_number', noHashOrderId).maybeSingle();
         if (q2.data) {
           orderRow = q2.data;
         } else {
@@ -7370,7 +7979,7 @@ app.get('/api/orders/:orderId/reviewable-items', async (req, res) => {
           if (q3.data) {
             orderRow = q3.data;
           } else {
-            const q4 = await serverSupabase.from('orders').select('*').ilike('order_id', `%${noHashOrderId}%`).maybeSingle();
+            const q4 = await serverSupabase.from('orders').select('*').ilike('order_number', `%${noHashOrderId}%`).maybeSingle();
             if (q4.data) orderRow = q4.data;
           }
         }
@@ -7385,7 +7994,7 @@ app.get('/api/orders/:orderId/reviewable-items', async (req, res) => {
 
     const rawStatus = String(orderRow.order_status || orderRow.status || '').toLowerCase().trim();
     const isDelivered = rawStatus === 'delivered';
-    const deliveredAt = orderRow.delivered_at || (isDelivered ? (orderRow.placed_at || orderRow.created_at) : undefined);
+    const deliveredAt = orderRow.delivered_at || (isDelivered ? orderRow.created_at : undefined);
 
     let isEligible = false;
     let isExpired = false;
@@ -7424,7 +8033,7 @@ app.get('/api/orders/:orderId/reviewable-items', async (req, res) => {
     // Fetch reviews for this order directly from Supabase product_reviews table ONLY
     let dbReviews: any[] = [];
     try {
-      const candidateKeys = [orderRow.id, orderRow.order_id, rawOrderId, noHashOrderId].filter(Boolean);
+      const candidateKeys = [orderRow.id, orderRow.order_number, rawOrderId, noHashOrderId].filter(Boolean);
       const { data: revData } = await serverSupabase
         .from('product_reviews')
         .select('*')
@@ -7438,7 +8047,7 @@ app.get('/api/orders/:orderId/reviewable-items', async (req, res) => {
 
     const reviewableItems = itemsList.map((it: any, index: number) => {
       const productId = String(it.productId || it.product?.id || it.id || '');
-      const orderItemId = String(it.id || `${orderRow.order_id || orderRow.id}-${productId}-${index}`);
+      const orderItemId = String(it.id || `${orderRow.order_number || orderRow.id}-${productId}-${index}`);
       const productName = String(it.name || it.product_name || it.product?.name || `Dish #${productId}`);
       const productImage = String(it.image || it.product?.image || '');
       const variantName = it.selectedVariant?.name || it.variantName || it.product_variant_name || undefined;
@@ -7448,7 +8057,7 @@ app.get('/api/orders/:orderId/reviewable-items', async (req, res) => {
       const existing = dbReviews.find(
         (r: any) =>
           r.order_item_id === orderItemId ||
-          (String(r.product_id) === productId && (r.order_id === orderRow.id || r.order_id === orderRow.order_id || r.order_id === rawOrderId || r.order_id === noHashOrderId))
+          (String(r.product_id) === productId && (r.order_id === orderRow.id || r.order_id === orderRow.order_number || r.order_id === rawOrderId || r.order_id === noHashOrderId))
       );
 
       return {
@@ -7482,7 +8091,7 @@ app.get('/api/orders/:orderId/reviewable-items', async (req, res) => {
 
     return res.json({
       success: true,
-      orderId: orderRow.order_id || orderRow.id,
+      orderId: orderRow.order_number || orderRow.id,
       orderStatus: rawStatus,
       isDelivered,
       deliveredAt,
@@ -7535,11 +8144,11 @@ app.post('/api/product-reviews', async (req, res) => {
         let orderRow: any = null;
 
         // Search order in Supabase without broken .or() syntax
-        const q1 = await serverSupabase.from('orders').select('*').eq('order_id', rawIdentifier).maybeSingle();
+        const q1 = await serverSupabase.from('orders').select('*').eq('order_number', rawIdentifier).maybeSingle();
         if (q1.data) {
           orderRow = q1.data;
         } else {
-          const q2 = await serverSupabase.from('orders').select('*').eq('order_id', noHashIdentifier).maybeSingle();
+          const q2 = await serverSupabase.from('orders').select('*').eq('order_number', noHashIdentifier).maybeSingle();
           if (q2.data) {
             orderRow = q2.data;
           } else {
@@ -7547,14 +8156,14 @@ app.post('/api/product-reviews', async (req, res) => {
             if (q3.data) {
               orderRow = q3.data;
             } else {
-              const q4 = await serverSupabase.from('orders').select('*').ilike('order_id', `%${noHashIdentifier}%`).maybeSingle();
+              const q4 = await serverSupabase.from('orders').select('*').ilike('order_number', `%${noHashIdentifier}%`).maybeSingle();
               if (q4.data) orderRow = q4.data;
             }
           }
         }
 
         if (orderRow) {
-          targetOrderId = orderRow.id || orderRow.order_id || targetOrderId;
+          targetOrderId = orderRow.id || orderRow.order_number || targetOrderId;
           targetOutletId = orderRow.outlet_id || targetOutletId;
           if (orderRow.customer_id && isUUID(orderRow.customer_id)) {
             validCustomerUuid = orderRow.customer_id;
@@ -7565,7 +8174,7 @@ app.post('/api/product-reviews', async (req, res) => {
             return res.status(400).json({ success: false, error: 'You can only review items from delivered orders.' });
           }
 
-          const delAt = orderRow.delivered_at || orderRow.placed_at || orderRow.created_at;
+          const delAt = orderRow.delivered_at || orderRow.created_at;
           if (delAt) {
             const deadline = new Date(delAt).getTime() + 7 * 24 * 60 * 60 * 1000;
             if (Date.now() > deadline) {

@@ -46,8 +46,9 @@ import {
 } from '../../utils/dateUtils';
 import { fetchSupabaseOrders, updateSupabaseOrderStatus, formatDisplayOrderId } from '../../lib/supabaseService';
 import { supabase, isSupabaseConfigured } from '../../lib/supabase';
+import { useAuth } from '../../context/AuthContext';
 import { ManagerOrderDetailsModal } from './ManagerOrderDetailsModal';
-import { CancelOrderModal } from './CancelOrderModal';
+import { CancelOrderModal, CancelRefundPayload } from './CancelOrderModal';
 
 interface ManagerOrdersTabProps {
   currentOutlet: Outlet;
@@ -69,6 +70,7 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
   currentOutlet,
   showFeedback,
 }) => {
+  const { token, ownerUser, profile } = useAuth();
   const [orders, setOrders] = useState<Order[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
@@ -97,6 +99,9 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
 
   // Wallet privacy visibility (default: closed)
   const [isWalletOpen, setIsWalletOpen] = useState<boolean>(false);
+  const [showFullArchive, setShowFullArchive] = useState<boolean>(false);
+  const isInitialLoadRef = useRef<boolean>(true);
+  const lastOrdersSyncRef = useRef<number>(0);
 
   // Date picker input refs to trigger calendar popup
   const singleDateInputRef = useRef<HTMLInputElement>(null);
@@ -128,11 +133,36 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
 
   // Balance Collection Modal State
   const [collectBalanceOrder, setCollectBalanceOrder] = useState<Order | null>(null);
+  const [pendingCompletionStatus, setPendingCompletionStatus] = useState<'Delivered' | 'Picked Up' | null>(null);
   const [collectAmount, setCollectAmount] = useState<string>('');
   const [collectMethod, setCollectMethod] = useState<'cash' | 'upi' | 'card' | 'netbanking'>('cash');
   const [collectNotes, setCollectNotes] = useState<string>('');
+  const [collectError, setCollectError] = useState<string | null>(null);
   const [isCollectingBalance, setIsCollectingBalance] = useState<boolean>(false);
   const collectIdempotencyKeyRef = useRef<string>('');
+
+  const getStaffAuthHeaders = useCallback(
+    async (includeJson = true): Promise<Record<string, string>> => {
+      const headers: Record<string, string> = {};
+      if (includeJson) {
+        headers['Content-Type'] = 'application/json';
+      }
+      let authToken = token;
+      if (isSupabaseConfigured()) {
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          if (session?.access_token) {
+            authToken = session.access_token;
+          }
+        } catch {}
+      }
+      if (authToken) {
+        headers['Authorization'] = `Bearer ${authToken}`;
+      }
+      return headers;
+    },
+    [token]
+  );
 
   // Notification Sound
   const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
@@ -161,7 +191,12 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
     } catch {}
   }, [soundEnabled]);
 
-  // Fetch orders
+  const needsFullHistory =
+    showFullArchive ||
+    searchQuery.trim().length > 0 ||
+    (dateFilter !== 'all' && dateFilter !== 'this_week');
+
+  // Fetch orders (windowed to active + last 14 days by default to cut Supabase egress)
   const loadOrders = useCallback(
     async (isManualRefresh = false) => {
       if (!currentOutlet) return;
@@ -174,7 +209,11 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
         let supaSuccess = false;
         try {
           if (isSupabaseConfigured()) {
-            fetchedList = await fetchSupabaseOrders(currentOutlet.id);
+            fetchedList = await fetchSupabaseOrders(
+              currentOutlet.id,
+              undefined,
+              needsFullHistory ? undefined : { activeOrRecentDays: 14, limit: 250 }
+            );
             supaSuccess = true;
           }
         } catch (e) {
@@ -184,7 +223,11 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
         // 2. Fetch/merge from Express backend API (only fallback or supplemental if Supabase is offline)
         if (!supaSuccess) {
           try {
-            const res = await fetch(`/api/orders?outletId=${currentOutlet.id}`);
+            const headers = await getStaffAuthHeaders(false);
+            const res = await fetch(`/api/orders?outletId=${currentOutlet.id}`, {
+              headers,
+              credentials: 'include',
+            });
             if (res.ok) {
               const data = await res.json();
               if (data.success && Array.isArray(data.orders)) {
@@ -209,7 +252,7 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
         }).length;
 
         if (
-          !isLoading &&
+          !isInitialLoadRef.current &&
           currentReceivedCount > previousReceivedCountRef.current &&
           previousReceivedCountRef.current >= 0
         ) {
@@ -217,6 +260,8 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
           showFeedback('success', `🔔 New order received! Total new: ${currentReceivedCount}`);
         }
         previousReceivedCountRef.current = currentReceivedCount;
+        isInitialLoadRef.current = false;
+        lastOrdersSyncRef.current = Date.now();
 
         setOrders(fetchedList);
       } catch (err) {
@@ -226,36 +271,50 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
         setIsRefreshing(false);
       }
     },
-    [currentOutlet, isLoading, playChime, showFeedback]
+    [currentOutlet, getStaffAuthHeaders, needsFullHistory, playChime, showFeedback]
   );
 
-  // Real-time synchronization and polling for orders
+  // Real-time synchronization and low-frequency fallback polling for orders
   useEffect(() => {
     loadOrders();
 
-    // 1. Supabase Realtime channel for instant order arrivals/updates
+    // 1. Supabase Realtime channel filtered strictly to this outlet + debounced
     let channel: any = null;
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+
     if (isSupabaseConfigured()) {
+      const channelFilter = currentOutlet?.id
+        ? { event: '*', schema: 'public', table: 'orders', filter: `outlet_id=eq.${currentOutlet.id}` }
+        : { event: '*', schema: 'public', table: 'orders' };
+
       channel = supabase
         .channel(`manager:orders:${currentOutlet?.id || 'all'}`)
         .on(
           'postgres_changes',
-          { event: '*', schema: 'public', table: 'orders' },
+          channelFilter as any,
           () => {
-            loadOrders();
+            if (debounceTimer) clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(() => {
+              if (document.visibilityState === 'visible') {
+                loadOrders();
+              }
+            }, 700);
           }
         )
         .subscribe();
     }
 
-    // 2. Periodic background poll (every 5 seconds)
+    // 2. Fallback poll every 45 seconds (only when tab is visible)
     const interval = setInterval(() => {
-      loadOrders();
-    }, 5000);
+      if (document.visibilityState === 'visible') {
+        loadOrders();
+      }
+    }, 45_000);
 
-    // 3. Tab visibility listener (refresh instantly when manager switches back to tab)
+    // 3. Tab visibility listener with 15-second cooldown
     const handleVisibility = () => {
       if (document.visibilityState === 'visible') {
+        if (Date.now() - lastOrdersSyncRef.current < 15_000) return;
         loadOrders();
       }
     };
@@ -263,6 +322,7 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
     window.addEventListener('focus', handleVisibility);
 
     return () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
       if (channel) {
         supabase.removeChannel(channel);
       }
@@ -293,9 +353,11 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
 
       // 2. Also patch backend API
       try {
+        const headers = await getStaffAuthHeaders(true);
         const res = await fetch(`/api/orders/${encodeURIComponent(targetId)}/status`, {
           method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
+          credentials: 'include',
           body: JSON.stringify({
             status: newStatus,
             cancellationReason,
@@ -410,15 +472,15 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
   };
 
   const getOrderDeliveryTiming = (order: Order): 'immediate' | 'scheduled' | 'pb-scheduled' => {
-    if (isPrebookOrder(order) || order.customerDetails?.deliveryType === 'pb-scheduled') {
+    if (isPrebookOrder(order)) {
       return 'pb-scheduled';
     }
     const isPickup = !!(order.isSelfPickup || order.orderType === 'pickup');
+    const explicitTiming = order.deliveryType || (order as any).delivery_type;
     if (
       !isPickup &&
-      (order.deliveryType === 'scheduled' ||
-        (order as any).delivery_type === 'scheduled' ||
-        order.customerDetails?.deliveryType === 'scheduled')
+      (explicitTiming === 'scheduled' ||
+        (!explicitTiming && order.customerDetails?.deliveryType === 'scheduled'))
     ) {
       return 'scheduled';
     }
@@ -443,30 +505,60 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
     return { isPrebook, total, paid, balance, parentRef };
   };
 
-  const openCollectBalanceModal = (order: Order) => {
+  const closeCollectBalanceModal = () => {
+    setCollectBalanceOrder(null);
+    setPendingCompletionStatus(null);
+    setCollectError(null);
+  };
+
+  const openCollectBalanceModal = (
+    order: Order,
+    completionTarget?: 'Delivered' | 'Picked Up'
+  ) => {
     const { balance } = getOrderPaymentLedger(order);
     setCollectBalanceOrder(order);
-    setCollectAmount(balance > 0 ? String(Math.round(balance)) : '0');
+    setPendingCompletionStatus(completionTarget || null);
+    setCollectAmount(
+      balance > 0 ? (Number.isInteger(balance) ? String(balance) : balance.toFixed(2)) : '0'
+    );
     setCollectMethod('cash');
     setCollectNotes('');
+    setCollectError(null);
     collectIdempotencyKeyRef.current = `bal_${order.orderId || order.id}_${Date.now()}`;
   };
 
   const handleConfirmCollectBalance = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!collectBalanceOrder) return;
-    const targetId = collectBalanceOrder.orderId || collectBalanceOrder.id;
+    if (!collectBalanceOrder || isCollectingBalance) return;
+    setCollectError(null);
+
+    const targetOrder = collectBalanceOrder;
+    const nextCompletionStatus = pendingCompletionStatus;
+    const { balance } = getOrderPaymentLedger(targetOrder);
+    const targetId = targetOrder.orderId || targetOrder.id;
     const amountNum = Number(collectAmount);
     if (!Number.isFinite(amountNum) || amountNum <= 0) {
-      showFeedback('error', 'Please enter a valid collection amount greater than ₹0.');
+      setCollectError('Please enter a valid collection amount greater than ₹0.');
+      return;
+    }
+    if (balance > 0 && amountNum > balance) {
+      setCollectError(`Collection amount cannot exceed outstanding balance of ₹${balance}.`);
+      return;
+    }
+    if (nextCompletionStatus && balance > 0 && amountNum < balance) {
+      setCollectError(
+        `Please collect the full remaining balance of ₹${balance} to mark this order as ${nextCompletionStatus}.`
+      );
       return;
     }
 
     setIsCollectingBalance(true);
     try {
+      const headers = await getStaffAuthHeaders(true);
       const res = await fetch(`/api/orders/${encodeURIComponent(targetId)}/collect-balance`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
+        credentials: 'include',
         body: JSON.stringify({
           amount: amountNum,
           paymentMethod: collectMethod,
@@ -476,22 +568,65 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
       });
       const data = await res.json().catch(() => ({} as any));
       if (!res.ok || !data.success) {
-        showFeedback('error', data?.error || 'Failed to record balance collection.');
+        setCollectError(
+          data?.error ||
+            (res.status === 401 || res.status === 403
+              ? 'Unauthorized. Please sign in with your staff/owner account to record collection.'
+              : 'Failed to record balance collection.')
+        );
         setIsCollectingBalance(false);
         return;
       }
 
-      showFeedback(
-        'success',
-        `Recorded ₹${amountNum} (${collectMethod.toUpperCase()}) for ${formatDisplayOrderId(targetId)}.`
-      );
-      setCollectBalanceOrder(null);
-      await loadOrders(true);
+      closeCollectBalanceModal();
+
+      if (nextCompletionStatus) {
+        await handleStatusTransition(targetOrder, nextCompletionStatus);
+        showFeedback(
+          'success',
+          `Collected ₹${amountNum} (${collectMethod.toUpperCase()}) and marked ${formatDisplayOrderId(targetId)} as "${nextCompletionStatus}".`
+        );
+      } else {
+        showFeedback(
+          'success',
+          `Recorded ₹${amountNum} (${collectMethod.toUpperCase()}) for ${formatDisplayOrderId(targetId)}.`
+        );
+        await loadOrders(true);
+      }
     } catch (err: any) {
-      showFeedback('error', err?.message || 'Network error while recording balance.');
+      setCollectError(err?.message || 'Network error while recording balance.');
     } finally {
       setIsCollectingBalance(false);
     }
+  };
+
+  const handleConfirmCancelWithRefund = async (orderId: string, payload: CancelRefundPayload) => {
+    const headers = await getStaffAuthHeaders(true);
+    const res = await fetch(`/api/orders/${encodeURIComponent(orderId)}/cancel-with-refund`, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => ({} as any));
+    if (!res.ok || !data.success) {
+      throw new Error(
+        data?.error ||
+          (res.status === 401 || res.status === 403
+            ? 'Unauthorized. Please sign in with your staff/owner account to record advance refunds.'
+            : 'Failed to cancel order and record advance refund.')
+      );
+    }
+
+    setCancelTargetOrder(null);
+    const modeText = payload.refundMethod.replace('_', ' ').toUpperCase();
+    const coinNote =
+      data.swadCoinsRefunded > 0 ? ` (+ ${data.swadCoinsRefunded} Swad Coins returned)` : '';
+    showFeedback(
+      'success',
+      `Cancelled ${formatDisplayOrderId(orderId)} and recorded ₹${payload.refundAmount} refund via ${modeText}${coinNote}.`
+    );
+    await loadOrders(true);
   };
 
   // Status Counts
@@ -1088,7 +1223,7 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
               ))}
             </div>
             <span className="text-[11px] text-stone-500">
-              Use &ldquo;Record Balance Collection&rdquo; on any 25% advance order once final balance is collected.
+              Balance collection unlocks at dispatch/pickup handover, or auto-prompts when marking Delivered / Picked Up.
             </span>
           </div>
         )}
@@ -1113,6 +1248,25 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
                 <span className="font-extrabold text-stone-900 shrink-0 text-xs">
                   Showing {filteredOrders.length} {filteredOrders.length === 1 ? 'order' : 'orders'}
                 </span>
+
+                {dateFilter === 'all' && !searchQuery.trim() && (
+                  <button
+                    type="button"
+                    onClick={() => setShowFullArchive((prev) => !prev)}
+                    className={`px-2 py-0.5 rounded-lg text-[10px] font-bold border transition-colors cursor-pointer ${
+                      showFullArchive
+                        ? 'bg-amber-900 text-amber-50 border-amber-950'
+                        : 'bg-stone-100 text-stone-700 border-stone-200 hover:bg-stone-200'
+                    }`}
+                    title={
+                      showFullArchive
+                        ? 'Switch back to active orders + last 14 days for faster loading'
+                        : 'Currently showing active orders + last 14 days (max 250). Click to load complete order archive.'
+                    }
+                  >
+                    {showFullArchive ? 'Full Archive · Switch to Active + 14d' : 'Active + 14d · Load Full Archive'}
+                  </button>
+                )}
 
                 <div className="h-4 w-px bg-stone-200 hidden sm:block" />
 
@@ -1445,16 +1599,6 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
                       </button>
                     </div>
 
-                    {/* Utsav Pre-book & Group Reference Metadata */}
-                    {ledger.isPrebook && (
-                      <span className="text-[10px] font-extrabold px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-950 border border-amber-300 tabular-nums">
-                        Utsav Pre-book{order.festivalName ? ` · ${order.festivalName}` : ''}
-                        {order.festivalDeliveryAt
-                          ? ` (${new Date(order.festivalDeliveryAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })})`
-                          : ''}
-                      </span>
-                    )}
-
                     {ledger.parentRef &&
                       formatDisplayOrderId(ledger.parentRef) !==
                         formatDisplayOrderId(order.orderId || order.id) && (
@@ -1465,10 +1609,12 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
 
                     {/* Delivery Timing Indicator (Pre-book Scheduled vs Slot Scheduled vs Express) */}
                     {isPbScheduled ? (
-                      <span className="text-[11px] font-black px-3 py-1 rounded-lg bg-amber-950 text-amber-100 border border-amber-900 shadow-xs flex items-center gap-1.5 uppercase tracking-wide tabular-nums">
-                        <Calendar className="w-3.5 h-3.5 text-amber-300" />
+                      <span className="text-[11px] font-black px-3 py-1 rounded-lg bg-amber-950 text-amber-100 border border-amber-900 shadow-xs flex items-center gap-1.5 tracking-wide tabular-nums">
+                        <Calendar className="w-3.5 h-3.5 text-amber-300 shrink-0" />
                         <span>
-                          PRE-BOOK FESTIVAL |{' '}
+                          PRE BOOK
+                          {order.festivalName ? ` | ${order.festivalName}` : ''}
+                          {' | '}
                           {order.festivalDeliveryAt
                             ? new Date(order.festivalDeliveryAt).toLocaleDateString('en-IN', {
                                 day: 'numeric',
@@ -1765,15 +1911,23 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
                       </div>
 
                       <div className="flex items-center gap-3 flex-wrap tabular-nums">
-                        {(ledger.isPrebook || ledger.balance > 0) && (
+                        {(ledger.isPrebook || ledger.balance > 0 || order.paymentStatus === 'refunded' || order.refundDetails) && (
                           <div className="flex items-center gap-2 text-xs">
-                            <span className="text-emerald-800 font-semibold">
-                              Paid: ₹{ledger.paid.toFixed(0)}
-                            </span>
-                            {ledger.balance > 0 && (
-                              <span className="font-bold text-amber-900 bg-amber-100 px-2 py-0.5 rounded">
-                                Due: ₹{ledger.balance.toFixed(0)}
+                            {order.paymentStatus === 'refunded' || order.refundDetails ? (
+                              <span className="font-bold text-purple-900 bg-purple-100 px-2 py-0.5 rounded">
+                                Refunded: ₹{Number(order.refundDetails?.amount ?? ledger.paid ?? 0).toFixed(0)}
                               </span>
+                            ) : (
+                              <>
+                                <span className="text-emerald-800 font-semibold">
+                                  Paid: ₹{ledger.paid.toFixed(0)}
+                                </span>
+                                {ledger.balance > 0 && (
+                                  <span className="font-bold text-amber-900 bg-amber-100 px-2 py-0.5 rounded">
+                                    Due: ₹{ledger.balance.toFixed(0)}
+                                  </span>
+                                )}
+                              </>
                             )}
                           </div>
                         )}
@@ -1861,8 +2015,8 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
                       </div>
 
                       {order.cancelledAt && (
-                        <div className="mt-2 p-2 bg-rose-50 border border-rose-200 rounded-lg text-rose-900 text-xs">
-                          <div className="flex justify-between font-bold">
+                        <div className="mt-2 p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-rose-900 text-xs space-y-1">
+                          <div className="flex flex-wrap justify-between gap-2 font-bold">
                             <span>Cancelled At: {formatExactTime(order.cancelledAt)}</span>
                             {order.cancellationReason && (
                               <span className="font-normal text-rose-700">
@@ -1870,6 +2024,20 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
                               </span>
                             )}
                           </div>
+                          {order.refundDetails && (
+                            <div className="pt-1 border-t border-rose-200/70 flex flex-wrap items-center justify-between gap-2 text-[11px] text-purple-950 font-semibold tabular-nums">
+                              <span>
+                                Advance Refunded: ₹{Number(order.refundDetails.amount || 0).toFixed(0)} via{' '}
+                                {String(order.refundDetails.paymentMethod || '').replace('_', ' ').toUpperCase()}
+                                {order.refundDetails.reference ? ` · Ref: ${order.refundDetails.reference}` : ''}
+                              </span>
+                              {order.refundDetails.processedBy && (
+                                <span className="text-stone-600 font-normal">
+                                  By: {order.refundDetails.processedBy}
+                                </span>
+                              )}
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
@@ -1886,7 +2054,11 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
                           <span>Full Details & KOT</span>
                         </button>
 
-                        {ledger.balance > 0 && normSt !== 'cancelled' && (
+                        {ledger.balance > 0 &&
+                          normSt !== 'cancelled' &&
+                          (isPickup
+                            ? normSt === 'ready' || normSt === 'delivered'
+                            : normSt === 'out_for_delivery' || normSt === 'delivered') && (
                           <button
                             type="button"
                             onClick={() => openCollectBalanceModal(order)}
@@ -1956,7 +2128,13 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
                               <button
                                 type="button"
                                 disabled={isUpdating}
-                                onClick={() => handleStatusTransition(order, 'Picked Up')}
+                                onClick={() => {
+                                  if (ledger.balance > 0) {
+                                    openCollectBalanceModal(order, 'Picked Up');
+                                  } else {
+                                    handleStatusTransition(order, 'Picked Up');
+                                  }
+                                }}
                                 className="flex-1 sm:flex-none px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black transition-all flex items-center justify-center gap-1.5 shadow-sm disabled:opacity-60 cursor-pointer"
                               >
                                 <CheckCheck className="w-4 h-4" />
@@ -1971,7 +2149,13 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
                           <button
                             type="button"
                             disabled={isUpdating}
-                            onClick={() => handleStatusTransition(order, 'Delivered')}
+                            onClick={() => {
+                              if (ledger.balance > 0) {
+                                openCollectBalanceModal(order, 'Delivered');
+                              } else {
+                                handleStatusTransition(order, 'Delivered');
+                              }
+                            }}
                             className="flex-1 sm:flex-none px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black transition-all flex items-center justify-center gap-1.5 shadow-sm disabled:opacity-60 cursor-pointer"
                           >
                             <CheckCheck className="w-4 h-4" />
@@ -2002,15 +2186,21 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
         </div>
       )}
 
-      {/* Cancel Order Reason Modal */}
+      {/* Cancel Order & Pre-book Advance Refund Modal */}
       {cancelTargetOrder && (
         <CancelOrderModal
           order={cancelTargetOrder}
           isOpen={!!cancelTargetOrder}
+          staffLabel={
+            profile?.fullName || ownerUser?.name
+              ? `${profile?.fullName || ownerUser?.name}${(profile?.email || ownerUser?.email) ? ` (${profile?.email || ownerUser?.email})` : ''}`
+              : profile?.email || ownerUser?.email || 'Outlet Staff'
+          }
           onClose={() => setCancelTargetOrder(null)}
           onConfirmCancel={async (orderId, reason) => {
             await handleStatusTransition(cancelTargetOrder, 'Cancelled', reason);
           }}
+          onConfirmCancelWithRefund={handleConfirmCancelWithRefund}
         />
       )}
 
@@ -2026,25 +2216,60 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
 
       {/* One-Click Record Balance Collection Modal */}
       {collectBalanceOrder && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
-          <div className="bg-white rounded-2xl border border-stone-200 shadow-2xl max-w-md w-full overflow-hidden">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !isCollectingBalance) {
+              closeCollectBalanceModal();
+            }
+          }}
+        >
+          <div
+            className="bg-white rounded-2xl border border-stone-200 shadow-2xl max-w-md w-full overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="px-5 py-4 bg-stone-900 text-white flex items-center justify-between">
               <div>
-                <h3 className="font-bold text-sm text-white">Record Balance Collection</h3>
+                <h3 className="font-bold text-sm text-white">
+                  {pendingCompletionStatus
+                    ? `Collect Balance & Mark ${pendingCompletionStatus}`
+                    : 'Record Balance Collection'}
+                </h3>
                 <p className="text-[11px] text-stone-300 font-mono">
                   {formatDisplayOrderId(collectBalanceOrder.orderId || collectBalanceOrder.id)}
                 </p>
               </div>
               <button
                 type="button"
-                onClick={() => setCollectBalanceOrder(null)}
-                className="p-1.5 rounded-lg text-stone-300 hover:text-white hover:bg-white/10 cursor-pointer"
+                disabled={isCollectingBalance}
+                onClick={closeCollectBalanceModal}
+                className="p-1.5 rounded-lg text-stone-300 hover:text-white hover:bg-white/10 cursor-pointer disabled:opacity-50"
               >
                 <XCircle className="w-4 h-4" />
               </button>
             </div>
 
             <form onSubmit={handleConfirmCollectBalance} className="p-5 space-y-4 text-xs">
+              {pendingCompletionStatus && (
+                <div className="p-3 rounded-xl bg-amber-50 border border-amber-300 text-amber-950 flex items-start gap-2 font-semibold leading-relaxed">
+                  <Wallet className="w-4 h-4 text-amber-800 shrink-0 mt-0.5" />
+                  <span>
+                    Collect the remaining balance below to complete handover and mark this order as{' '}
+                    <strong>{pendingCompletionStatus}</strong>.
+                  </span>
+                </div>
+              )}
+
+              {collectError && (
+                <div
+                  role="alert"
+                  className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 flex items-start gap-2 font-semibold leading-relaxed"
+                >
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                  <span>{collectError}</span>
+                </div>
+              )}
+
               {(() => {
                 const ledger = getOrderPaymentLedger(collectBalanceOrder);
                 return (
@@ -2078,11 +2303,15 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
                 <input
                   type="number"
                   min={1}
-                  step="1"
+                  step="any"
                   required
+                  disabled={isCollectingBalance}
                   value={collectAmount}
-                  onChange={(e) => setCollectAmount(e.target.value)}
-                  className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-sm font-mono font-bold text-stone-900 focus:outline-none focus:border-amber-800 focus:bg-white"
+                  onChange={(e) => {
+                    setCollectAmount(e.target.value);
+                    if (collectError) setCollectError(null);
+                  }}
+                  className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-sm font-mono font-bold text-stone-900 focus:outline-none focus:border-amber-800 focus:bg-white disabled:opacity-60"
                 />
               </div>
 
@@ -2095,8 +2324,12 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
                     <button
                       key={m}
                       type="button"
-                      onClick={() => setCollectMethod(m)}
-                      className={`py-2 px-2 rounded-xl font-bold uppercase text-[11px] border transition-colors cursor-pointer ${
+                      disabled={isCollectingBalance}
+                      onClick={() => {
+                        setCollectMethod(m);
+                        if (collectError) setCollectError(null);
+                      }}
+                      className={`py-2 px-2 rounded-xl font-bold uppercase text-[11px] border transition-colors cursor-pointer disabled:opacity-60 ${
                         collectMethod === m
                           ? 'bg-amber-800 text-white border-amber-800'
                           : 'bg-stone-50 text-stone-700 border-stone-200 hover:bg-stone-100'
@@ -2114,18 +2347,20 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
                 </label>
                 <input
                   type="text"
+                  disabled={isCollectingBalance}
                   value={collectNotes}
                   onChange={(e) => setCollectNotes(e.target.value)}
                   placeholder="e.g. Collected at delivery via PhonePe"
-                  className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-800 focus:bg-white"
+                  className="w-full px-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-xs text-stone-900 focus:outline-none focus:border-amber-800 focus:bg-white disabled:opacity-60"
                 />
               </div>
 
               <div className="pt-2 flex items-center justify-end gap-2">
                 <button
                   type="button"
-                  onClick={() => setCollectBalanceOrder(null)}
-                  className="px-4 py-2 rounded-xl bg-stone-100 hover:bg-stone-200 text-stone-700 font-bold cursor-pointer"
+                  disabled={isCollectingBalance}
+                  onClick={closeCollectBalanceModal}
+                  className="px-4 py-2 rounded-xl bg-stone-100 hover:bg-stone-200 text-stone-700 font-bold cursor-pointer disabled:opacity-50"
                 >
                   Cancel
                 </button>
@@ -2134,7 +2369,13 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
                   disabled={isCollectingBalance}
                   className="px-4 py-2 rounded-xl bg-amber-800 hover:bg-amber-900 disabled:opacity-60 text-white font-bold cursor-pointer"
                 >
-                  {isCollectingBalance ? 'Recording...' : 'Confirm Collection'}
+                  {isCollectingBalance
+                    ? pendingCompletionStatus
+                      ? 'Recording & Completing...'
+                      : 'Recording...'
+                    : pendingCompletionStatus
+                      ? `Confirm & Mark ${pendingCompletionStatus}`
+                      : 'Confirm Collection'}
                 </button>
               </div>
             </form>

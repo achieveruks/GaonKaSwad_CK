@@ -105,8 +105,7 @@ export const OrderDetailsModal: React.FC<OrderDetailsModalProps> = ({
   const isPbScheduled =
     isPrebook ||
     order.deliveryType === 'pb-scheduled' ||
-    order.delivery_type === 'pb-scheduled' ||
-    order.customerDetails?.deliveryType === 'pb-scheduled';
+    order.delivery_type === 'pb-scheduled';
   const festivalDateDisplay = order.festivalDeliveryAt
     ? new Date(order.festivalDeliveryAt).toLocaleDateString('en-IN', {
         day: 'numeric',
@@ -615,17 +614,28 @@ export const OrderDetailsModal: React.FC<OrderDetailsModalProps> = ({
               <span className="text-amber-900 font-serif text-base">₹{Number(order.total).toFixed(0)}</span>
             </div>
 
-            {(isPrebook || balanceAmount > 0) && (
+            {(isPrebook || balanceAmount > 0 || order.refundDetails) && (
               <div className="pt-2 border-t border-stone-200/70 space-y-1 tabular-nums">
-                <div className="flex justify-between text-emerald-800 font-semibold">
-                  <span>Paid So Far</span>
-                  <span>₹{paidAmount.toFixed(0)}</span>
-                </div>
-                {balanceAmount > 0 && (
-                  <div className="flex justify-between text-amber-900 font-bold">
-                    <span>Remaining Balance Due</span>
-                    <span>₹{balanceAmount.toFixed(0)}</span>
+                {order.refundDetails ? (
+                  <div className="flex justify-between text-purple-900 font-bold">
+                    <span>
+                      Advance Refunded ({String(order.refundDetails.paymentMethod || '').replace('_', ' ').toUpperCase()})
+                    </span>
+                    <span>₹{Number(order.refundDetails.amount || 0).toFixed(0)}</span>
                   </div>
+                ) : (
+                  <>
+                    <div className="flex justify-between text-emerald-800 font-semibold">
+                      <span>Paid So Far</span>
+                      <span>₹{paidAmount.toFixed(0)}</span>
+                    </div>
+                    {balanceAmount > 0 && (
+                      <div className="flex justify-between text-amber-900 font-bold">
+                        <span>Remaining Balance Due</span>
+                        <span>₹{balanceAmount.toFixed(0)}</span>
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             )}
@@ -657,10 +667,16 @@ export const OrderDetailsModal: React.FC<OrderDetailsModalProps> = ({
             let statusLabel = 'PAID';
             let statusBadge = 'bg-emerald-100 text-emerald-800';
 
-            if (rawPayStatus === 'paid' || (balanceAmount <= 0 && paidAmount > 0 && !isCOD)) {
+            if (rawPayStatus === 'refunded') {
+              statusLabel = 'REFUNDED';
+              statusBadge = 'bg-purple-100 text-purple-800';
+            } else if (rawPayStatus === 'failed') {
+              statusLabel = 'FAILED';
+              statusBadge = 'bg-rose-100 text-rose-800';
+            } else if (rawPayStatus === 'paid' || (balanceAmount <= 0 && paidAmount > 0 && !isCOD)) {
               statusLabel = 'PAID';
               statusBadge = 'bg-emerald-100 text-emerald-800';
-            } else if (rawPayStatus === 'partial' || rawPayStatus === 'advance_paid' || (paidAmount > 0 && balanceAmount > 0)) {
+            } else if (rawPayStatus === 'partial' || rawPayStatus === 'partially_paid' || rawPayStatus === 'advance_paid' || (paidAmount > 0 && balanceAmount > 0)) {
               statusLabel = 'ADVANCE PAID';
               statusBadge = 'bg-amber-100 text-amber-900';
             } else if (rawPayStatus === 'pending') {
@@ -674,12 +690,6 @@ export const OrderDetailsModal: React.FC<OrderDetailsModalProps> = ({
                 statusLabel = 'PENDING';
                 statusBadge = 'bg-amber-100 text-amber-800';
               }
-            } else if (rawPayStatus === 'refunded') {
-              statusLabel = 'REFUNDED';
-              statusBadge = 'bg-purple-100 text-purple-800';
-            } else if (rawPayStatus === 'failed') {
-              statusLabel = 'FAILED';
-              statusBadge = 'bg-rose-100 text-rose-800';
             } else {
               // Fallback based on delivery & payment method
               if (isDelivered) {
@@ -695,20 +705,35 @@ export const OrderDetailsModal: React.FC<OrderDetailsModalProps> = ({
             }
 
             return (
-              <div className="bg-stone-50/70 rounded-xl p-4 border border-stone-200 flex items-center justify-between text-xs">
-                <div className="flex items-center gap-2.5">
-                  <CreditCard className="w-4 h-4 text-stone-500" />
+              <div className="bg-stone-50/70 rounded-xl p-4 border border-stone-200 space-y-2.5 text-xs">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <CreditCard className="w-4 h-4 text-stone-500" />
+                    <div>
+                      <p className="text-stone-500 uppercase tracking-wider font-semibold text-[10px]">Payment Method</p>
+                      <p className="font-bold text-stone-900">{methodLabel}</p>
+                    </div>
+                  </div>
                   <div>
-                    <p className="text-stone-500 uppercase tracking-wider font-semibold text-[10px]">Payment Method</p>
-                    <p className="font-bold text-stone-900">{methodLabel}</p>
+                    <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full font-bold text-[11px] ${statusBadge}`}>
+                      <CheckCircle2 className="w-3 h-3" />
+                      {statusLabel}
+                    </span>
                   </div>
                 </div>
-                <div>
-                  <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full font-bold text-[11px] ${statusBadge}`}>
-                    <CheckCircle2 className="w-3 h-3" />
-                    {statusLabel}
-                  </span>
-                </div>
+                {order.refundDetails && (
+                  <div className="pt-2 border-t border-stone-200/80 text-[11px] text-purple-950 flex flex-wrap items-center justify-between gap-2 tabular-nums">
+                    <span className="font-semibold">
+                      Advance Refunded: ₹{Number(order.refundDetails.amount || 0).toFixed(0)} via{' '}
+                      {String(order.refundDetails.paymentMethod || '').replace('_', ' ').toUpperCase()}
+                    </span>
+                    {order.refundDetails.reference && (
+                      <span className="font-mono text-stone-600">
+                        Ref: {order.refundDetails.reference}
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })()}

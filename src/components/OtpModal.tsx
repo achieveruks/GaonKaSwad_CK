@@ -26,14 +26,6 @@ export const OtpModal: React.FC<OtpModalProps> = ({
   const modalPhone = propPhone !== undefined ? propPhone : context.otpModalPhone;
   const modalMode = propMode !== undefined ? propMode : context.otpModalMode;
 
-  const handleClose = () => {
-    if (propOnClose) {
-      propOnClose();
-    } else {
-      context.closeOtpModal();
-    }
-  };
-
   // View state: 'signin' | 'signup' | 'otp'
   const [view, setView] = useState<'signin' | 'signup' | 'otp'>('signin');
   const [phone, setPhone] = useState('');
@@ -44,63 +36,101 @@ export const OtpModal: React.FC<OtpModalProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [infoNotice, setInfoNotice] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [loadingMessage, setLoadingMessage] = useState<string>('Checking account...');
   const [isSuccess, setIsSuccess] = useState(false);
   const [verifiedName, setVerifiedName] = useState('');
   const [resendTimer, setResendTimer] = useState(30);
 
   const firstInputRef = useRef<HTMLInputElement | null>(null);
   const otpInputRefs = useRef<(HTMLInputElement | null)[]>([]);
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wasOpenRef = useRef(false);
 
-  // Initialize or reset form whenever modal opens or mode changes
-  useEffect(() => {
-    if (isModalOpen) {
-      const cleanPhone = (modalPhone || '').replace(/\D/g, '').slice(-10);
-      setPhone(cleanPhone);
-      setFullName(context.otpModalExtraData?.fullName || context.customer?.fullName || '');
-      setEmail(context.otpModalExtraData?.email || context.customer?.email || '');
-      setOtp(['', '', '', '', '', '']);
-      setError(null);
-      setInfoNotice(null);
-      setIsSuccess(false);
-      setVerifiedName('');
-      setResendTimer(30);
-
-      if (modalMode === 'create_account') {
-        setView('signup');
-        setTimeout(() => {
-          firstInputRef.current?.focus();
-        }, 100);
-      } else if (modalMode === 'direct_otp' || modalMode === 'signin_otp') {
-        setView('otp');
-        setInfoNotice(`A 6-digit verification code has been sent to +91 ${cleanPhone}.`);
-        setTimeout(() => {
-          otpInputRefs.current[0]?.focus();
-        }, 150);
-      } else {
-        setView('signin');
-        setTimeout(() => {
-          firstInputRef.current?.focus();
-        }, 100);
-      }
+  const clearPendingCloseTimer = () => {
+    if (closeTimerRef.current) {
+      clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
     }
-  }, [isModalOpen, modalPhone, modalMode, context.customer]);
+  };
+
+  const handleClose = () => {
+    clearPendingCloseTimer();
+    setIsLoading(false);
+    setIsSuccess(false);
+    if (propOnClose) {
+      propOnClose();
+    } else {
+      context.closeOtpModal();
+    }
+  };
+
+  // Initialize form ONLY when modal opens (never reset mid-session when context.customer updates after OTP verification)
+  useEffect(() => {
+    if (!isModalOpen) {
+      wasOpenRef.current = false;
+      clearPendingCloseTimer();
+      setIsLoading(false);
+      return;
+    }
+
+    if (wasOpenRef.current) {
+      return;
+    }
+    wasOpenRef.current = true;
+    clearPendingCloseTimer();
+
+    const cleanPhone = (modalPhone || '').replace(/\D/g, '').slice(-10);
+    setPhone(cleanPhone);
+    setFullName(context.otpModalExtraData?.fullName || context.customer?.fullName || '');
+    setEmail(context.otpModalExtraData?.email || context.customer?.email || '');
+    setOtp(['', '', '', '', '', '']);
+    setError(null);
+    setInfoNotice(null);
+    setIsLoading(false);
+    setIsSuccess(false);
+    setVerifiedName('');
+    setResendTimer(30);
+
+    if (modalMode === 'create_account') {
+      setView('signup');
+      setTimeout(() => {
+        firstInputRef.current?.focus();
+      }, 100);
+    } else if (modalMode === 'direct_otp' || modalMode === 'signin_otp') {
+      setView('otp');
+      setInfoNotice(`A 6-digit verification code has been sent to +91 ${cleanPhone}.`);
+      setTimeout(() => {
+        otpInputRefs.current[0]?.focus();
+      }, 150);
+    } else {
+      setView('signin');
+      setTimeout(() => {
+        firstInputRef.current?.focus();
+      }, 100);
+    }
+  }, [isModalOpen, modalPhone, modalMode]);
+
+  useEffect(() => {
+    return () => clearPendingCloseTimer();
+  }, []);
 
   // Timer countdown for OTP resend
   useEffect(() => {
     let interval: any;
-    if (isModalOpen && view === 'otp' && resendTimer > 0) {
+    if (isModalOpen && view === 'otp' && !isSuccess && resendTimer > 0) {
       interval = setInterval(() => {
         setResendTimer((prev) => (prev > 0 ? prev - 1 : 0));
       }, 1000);
     }
     return () => clearInterval(interval);
-  }, [isModalOpen, view, resendTimer]);
+  }, [isModalOpen, view, isSuccess, resendTimer]);
 
   if (!isModalOpen) return null;
 
-  // 1. Sign In Submit: checks if customer exists in server
+  // 1. Sign In Submit: keeps loading active continuously until switching to SignUp or OTP screen
   const handleSignInSendOtp = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
+    if (isLoading) return;
     setError(null);
     setInfoNotice(null);
 
@@ -111,33 +141,39 @@ export const OtpModal: React.FC<OtpModalProps> = ({
     }
 
     setIsLoading(true);
+    setLoadingMessage('Checking account...');
 
     try {
-      // Check customer existence in server
+      // Step A: Check customer existence in server
       const lookupResult = await context.lookupCustomer(normPhone);
 
-      setIsLoading(false);
-
       if (!lookupResult.exists) {
-        // Customer does not exist in server: Switch to SignUp interface with pre-filled phone
+        // Customer does not exist: transition directly to SignUp view
+        setIsLoading(false);
         setView('signup');
         setInfoNotice(`No account found for +91 ${normPhone}. Please enter your details below to create an account.`);
-      } else {
-        // Customer exists: Send OTP & Proceed to OTP interface
-        const otpResult = await context.sendOtp(normPhone);
-        setIsLoading(false);
-        if (!otpResult.success) {
-          setError(otpResult.error || 'Failed to send verification code.');
-          return;
-        }
-        setView('otp');
-        setInfoNotice(`A 6-digit verification code has been sent to +91 ${normPhone}.`);
-        setOtp(['', '', '', '', '', '']);
-        setResendTimer(30);
-        setTimeout(() => {
-          otpInputRefs.current[0]?.focus();
-        }, 150);
+        return;
       }
+
+      // Step B: Customer exists — keep loading active seamlessly while sending OTP
+      setLoadingMessage('Sending OTP...');
+      const otpResult = await context.sendOtp(normPhone);
+
+      if (!otpResult.success) {
+        setIsLoading(false);
+        setError(otpResult.error || 'Failed to send verification code.');
+        return;
+      }
+
+      // Transition to OTP view cleanly before clearing loading state
+      setOtp(['', '', '', '', '', '']);
+      setResendTimer(30);
+      setInfoNotice(`A 6-digit verification code has been sent to +91 ${normPhone}.`);
+      setView('otp');
+      setIsLoading(false);
+      setTimeout(() => {
+        otpInputRefs.current[0]?.focus();
+      }, 120);
     } catch (err: any) {
       setIsLoading(false);
       setError('Unable to verify mobile number. Please check your internet connection.');
@@ -147,6 +183,7 @@ export const OtpModal: React.FC<OtpModalProps> = ({
   // 2. Sign Up Submit: registers details and moves to OTP
   const handleSignUpSubmit = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
+    if (isLoading) return;
     setError(null);
     setInfoNotice(null);
 
@@ -169,23 +206,25 @@ export const OtpModal: React.FC<OtpModalProps> = ({
     }
 
     setIsLoading(true);
+    setLoadingMessage('Sending OTP...');
 
     try {
       // Trigger OTP generation and transition to OTP screen
       const otpResult = await context.sendOtp(normPhone);
-      setIsLoading(false);
       if (!otpResult.success) {
+        setIsLoading(false);
         setError(otpResult.error || 'Failed to send verification code.');
         return;
       }
 
-      setView('otp');
-      setInfoNotice(`A 6-digit verification code has been sent to +91 ${normPhone}.`);
       setOtp(['', '', '', '', '', '']);
       setResendTimer(30);
+      setInfoNotice(`A 6-digit verification code has been sent to +91 ${normPhone}.`);
+      setView('otp');
+      setIsLoading(false);
       setTimeout(() => {
         otpInputRefs.current[0]?.focus();
-      }, 150);
+      }, 120);
     } catch (err: any) {
       setIsLoading(false);
       setError('Unable to proceed. Please try again.');
@@ -228,6 +267,8 @@ export const OtpModal: React.FC<OtpModalProps> = ({
 
   const handleVerifyOtp = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
+    if (isLoading || isSuccess) return;
+
     const fullOtp = otp.join('');
     const normPhone = phone.replace(/\D/g, '').slice(-10);
 
@@ -242,47 +283,64 @@ export const OtpModal: React.FC<OtpModalProps> = ({
     }
 
     setIsLoading(true);
+    setLoadingMessage('Verifying OTP...');
     setError(null);
+    setInfoNotice(null);
 
-    const result = await context.verifyOtp(normPhone, fullOtp, {
-      fullName: fullName.trim() || undefined,
-      email: email.trim() || undefined,
-    });
+    try {
+      const result = await context.verifyOtp(normPhone, fullOtp, {
+        fullName: fullName.trim() || undefined,
+        email: email.trim() || undefined,
+      });
 
-    setIsLoading(false);
+      if (!result.success) {
+        setIsLoading(false);
+        setError(result.error || 'Invalid verification code. Please try again.');
+        return;
+      }
 
-    if (!result.success) {
-      setError(result.error || 'Invalid verification code. Please try again.');
-      return;
+      const cName = result.customer?.fullName || fullName.trim() || 'Customer';
+      setVerifiedName(cName);
+      setIsLoading(false);
+      setIsSuccess(true);
+
+      const callback = propOnSuccess || context.otpModalOnSuccess;
+      if (callback) {
+        callback(result.customer || null, result.defaultAddress || null);
+      }
+
+      clearPendingCloseTimer();
+      closeTimerRef.current = setTimeout(() => {
+        handleClose();
+      }, 950);
+    } catch {
+      setIsLoading(false);
+      setError('Unable to verify OTP right now. Please try again.');
     }
-
-    const cName = result.customer?.fullName || fullName.trim() || 'Customer';
-    setVerifiedName(cName);
-    setIsSuccess(true);
-
-    const callback = propOnSuccess || context.otpModalOnSuccess;
-    if (callback) {
-      callback(result.customer || null, result.defaultAddress || null);
-    }
-
-    setTimeout(() => {
-      handleClose();
-    }, 1800);
   };
 
   const handleResendOtp = async () => {
+    if (isLoading || isSuccess) return;
     setError(null);
     const normPhone = phone.replace(/\D/g, '').slice(-10);
     if (normPhone) {
-      const otpResult = await context.sendOtp(normPhone);
-      if (!otpResult.success) {
-        setError(otpResult.error || 'Failed to send verification code.');
-        if (otpResult.retryAfter) {
-          setResendTimer(otpResult.retryAfter);
+      setIsLoading(true);
+      setLoadingMessage('Resending OTP...');
+      try {
+        const otpResult = await context.sendOtp(normPhone);
+        setIsLoading(false);
+        if (!otpResult.success) {
+          setError(otpResult.error || 'Failed to send verification code.');
+          if (otpResult.retryAfter) {
+            setResendTimer(otpResult.retryAfter);
+          }
+        } else {
+          setResendTimer(30);
+          setInfoNotice('A new 6-digit verification code has been sent to your mobile number.');
         }
-      } else {
-        setResendTimer(30);
-        setInfoNotice('A new 6-digit verification code has been sent to your mobile number.');
+      } catch {
+        setIsLoading(false);
+        setError('Failed to resend verification code. Please try again.');
       }
     }
   };
@@ -330,37 +388,39 @@ export const OtpModal: React.FC<OtpModalProps> = ({
           </div>
 
           <h3 className="text-xl font-bold font-heading text-white">
-            {view === 'signin' && 'Sign In to Your Account'}
-            {view === 'signup' && 'Create Customer Account'}
-            {view === 'otp' && 'Enter 6-Digit OTP'}
+            {isSuccess && 'Signed In Successfully'}
+            {!isSuccess && view === 'signin' && 'Sign In to Your Account'}
+            {!isSuccess && view === 'signup' && 'Create Customer Account'}
+            {!isSuccess && view === 'otp' && 'Enter 6-Digit OTP'}
           </h3>
 
           <p className="text-xs text-amber-200/90 mt-1 leading-relaxed">
-            {view === 'signin' && 'Enter your mobile number to sign in & access saved preferences.'}
-            {view === 'signup' && 'Register your details to enjoy instant 10% welcome savings & faster checkout.'}
-            {view === 'otp' && `We've sent a 6-digit verification code to +91 ${phone || 'your mobile'}.`}
+            {isSuccess && 'Your account has been verified securely.'}
+            {!isSuccess && view === 'signin' && 'Enter your mobile number to sign in & access saved preferences.'}
+            {!isSuccess && view === 'signup' && 'Register your details to enjoy instant 10% welcome savings & faster checkout.'}
+            {!isSuccess && view === 'otp' && `We've sent a 6-digit verification code to +91 ${phone || 'your mobile'}.`}
           </p>
         </div>
 
         {/* Modal Body */}
         <div className="p-6 space-y-4">
           {/* Info Notice */}
-          {infoNotice && (
+          {!isSuccess && infoNotice && (
             <div className="bg-amber-50 border border-amber-200 text-amber-900 px-3.5 py-2.5 rounded-xl text-xs font-semibold text-left">
               {infoNotice}
             </div>
           )}
 
           {/* Error Notice */}
-          {error && (
+          {!isSuccess && error && (
             <div className="bg-rose-50 border border-rose-200 text-rose-700 px-3.5 py-2.5 rounded-xl text-xs font-semibold text-left">
               {error}
             </div>
           )}
 
-          {/* Success Notice */}
+          {/* Success Notice (Replaces form cleanly while dismissing) */}
           {isSuccess && (
-            <div className="py-5 px-4 text-center space-y-2.5 bg-amber-50/80 border border-amber-200 rounded-2xl animate-in fade-in zoom-in duration-300">
+            <div className="py-5 px-4 text-center space-y-2.5 bg-amber-50/80 border border-amber-200 rounded-2xl animate-in fade-in zoom-in duration-200">
               <div className="w-12 h-12 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto shadow-xs">
                 <CheckCircle2 className="w-7 h-7" />
               </div>
@@ -373,7 +433,7 @@ export const OtpModal: React.FC<OtpModalProps> = ({
                 </h3>
               </div>
               <p className="text-xs text-stone-600 font-medium">
-                Signed in successfully. Preparing your kitchen menu...
+                Signed in successfully. Taking you back...
               </p>
             </div>
           )}
@@ -381,7 +441,7 @@ export const OtpModal: React.FC<OtpModalProps> = ({
           {/* ========================================================================= */}
           {/* VIEW 1: SIGN IN (Mobile Number -> "Send me OTP")                           */}
           {/* ========================================================================= */}
-          {view === 'signin' && (
+          {!isSuccess && view === 'signin' && (
             <form onSubmit={handleSignInSendOtp} className="space-y-4 text-left">
               <div>
                 <label className="block text-xs font-bold text-stone-700 uppercase tracking-wider mb-1.5">
@@ -396,10 +456,11 @@ export const OtpModal: React.FC<OtpModalProps> = ({
                     ref={firstInputRef}
                     type="tel"
                     maxLength={10}
+                    disabled={isLoading}
                     value={phone}
                     onChange={(e) => setPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
                     placeholder="10-digit mobile number"
-                    className="w-full pl-16 pr-3 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-sm font-semibold text-stone-900 focus:outline-none focus:border-amber-600 focus:bg-white transition-colors"
+                    className="w-full pl-16 pr-3 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-sm font-semibold text-stone-900 focus:outline-none focus:border-amber-600 focus:bg-white transition-colors disabled:opacity-60"
                   />
                 </div>
               </div>
@@ -416,7 +477,7 @@ export const OtpModal: React.FC<OtpModalProps> = ({
                 {isLoading ? (
                   <>
                     <RefreshCw className="w-4 h-4 animate-spin" />
-                    <span>Checking account...</span>
+                    <span>{loadingMessage}</span>
                   </>
                 ) : (
                   <>
@@ -432,12 +493,13 @@ export const OtpModal: React.FC<OtpModalProps> = ({
                   New Customer?{' '}
                   <button
                     type="button"
+                    disabled={isLoading}
                     onClick={() => {
                       setError(null);
                       setInfoNotice(null);
                       setView('signup');
                     }}
-                    className="font-bold text-amber-800 hover:text-amber-900 underline transition-colors"
+                    className="font-bold text-amber-800 hover:text-amber-900 underline transition-colors disabled:opacity-50"
                   >
                     Create account
                   </button>
@@ -449,7 +511,7 @@ export const OtpModal: React.FC<OtpModalProps> = ({
           {/* ========================================================================= */}
           {/* VIEW 2: SIGN UP (Full Name, Phone, Email -> "Create Account")             */}
           {/* ========================================================================= */}
-          {view === 'signup' && (
+          {!isSuccess && view === 'signup' && (
             <form onSubmit={handleSignUpSubmit} className="space-y-3.5 text-left">
               {/* Full Name */}
               <div>
@@ -461,10 +523,11 @@ export const OtpModal: React.FC<OtpModalProps> = ({
                   <input
                     ref={firstInputRef}
                     type="text"
+                    disabled={isLoading}
                     value={fullName}
                     onChange={(e) => setFullName(e.target.value)}
                     placeholder="Enter your full name"
-                    className="w-full pl-9 pr-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-sm font-medium text-stone-900 focus:outline-none focus:border-amber-600 focus:bg-white"
+                    className="w-full pl-9 pr-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-sm font-medium text-stone-900 focus:outline-none focus:border-amber-600 focus:bg-white disabled:opacity-60"
                   />
                 </div>
               </div>
@@ -482,10 +545,11 @@ export const OtpModal: React.FC<OtpModalProps> = ({
                   <input
                     type="tel"
                     maxLength={10}
+                    disabled={isLoading}
                     value={phone}
                     onChange={(e) => setPhone(e.target.value.replace(/\D/g, '').slice(0, 10))}
                     placeholder="10-digit mobile number"
-                    className="w-full pl-16 pr-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-sm font-medium text-stone-900 focus:outline-none focus:border-amber-600 focus:bg-white"
+                    className="w-full pl-16 pr-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-sm font-medium text-stone-900 focus:outline-none focus:border-amber-600 focus:bg-white disabled:opacity-60"
                   />
                 </div>
               </div>
@@ -502,10 +566,11 @@ export const OtpModal: React.FC<OtpModalProps> = ({
                   <Mail className="w-4 h-4 absolute left-3 text-stone-400" />
                   <input
                     type="email"
+                    disabled={isLoading}
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="your.email@example.com"
-                    className="w-full pl-9 pr-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-sm font-medium text-stone-900 focus:outline-none focus:border-amber-600 focus:bg-white"
+                    className="w-full pl-9 pr-3 py-2 bg-stone-50 border border-stone-200 rounded-xl text-sm font-medium text-stone-900 focus:outline-none focus:border-amber-600 focus:bg-white disabled:opacity-60"
                   />
                 </div>
               </div>
@@ -526,7 +591,7 @@ export const OtpModal: React.FC<OtpModalProps> = ({
                 {isLoading ? (
                   <>
                     <RefreshCw className="w-4 h-4 animate-spin" />
-                    <span>Preparing Account...</span>
+                    <span>{loadingMessage}</span>
                   </>
                 ) : (
                   <>
@@ -542,12 +607,13 @@ export const OtpModal: React.FC<OtpModalProps> = ({
                   Already have an account?{' '}
                   <button
                     type="button"
+                    disabled={isLoading}
                     onClick={() => {
                       setError(null);
                       setInfoNotice(null);
                       setView('signin');
                     }}
-                    className="font-bold text-amber-800 hover:text-amber-900 underline transition-colors"
+                    className="font-bold text-amber-800 hover:text-amber-900 underline transition-colors disabled:opacity-50"
                   >
                     Sign In
                   </button>
@@ -559,7 +625,7 @@ export const OtpModal: React.FC<OtpModalProps> = ({
           {/* ========================================================================= */}
           {/* VIEW 3: OTP INTERFACE ("Enter 6-Digit OTP")                                */}
           {/* ========================================================================= */}
-          {view === 'otp' && (
+          {!isSuccess && view === 'otp' && (
             <form onSubmit={handleVerifyOtp} className="space-y-4 text-left">
               {/* Phone display with edit action */}
               <div className="p-3 bg-stone-50 rounded-xl border border-stone-200 flex items-center justify-between">
@@ -573,12 +639,13 @@ export const OtpModal: React.FC<OtpModalProps> = ({
                 </div>
                 <button
                   type="button"
+                  disabled={isLoading}
                   onClick={() => {
                     setError(null);
                     setInfoNotice(null);
                     setView('signin');
                   }}
-                  className="text-xs font-bold text-amber-800 hover:text-amber-900 underline flex items-center gap-1"
+                  className="text-xs font-bold text-amber-800 hover:text-amber-900 underline flex items-center gap-1 disabled:opacity-50"
                 >
                   <Edit2 className="w-3 h-3" />
                   <span>Change</span>
@@ -604,10 +671,11 @@ export const OtpModal: React.FC<OtpModalProps> = ({
                       type="text"
                       inputMode="numeric"
                       maxLength={1}
+                      disabled={isLoading}
                       value={digit}
                       onChange={(e) => handleOtpChange(idx, e.target.value)}
                       onKeyDown={(e) => handleOtpKeyDown(idx, e)}
-                      className={`w-11 h-12 sm:w-12 sm:h-14 text-center font-bold text-lg sm:text-xl rounded-xl border transition-all ${
+                      className={`w-11 h-12 sm:w-12 sm:h-14 text-center font-bold text-lg sm:text-xl rounded-xl border transition-all disabled:opacity-60 ${
                         digit
                           ? 'border-amber-700 bg-amber-50/50 text-amber-950 ring-2 ring-amber-700/20'
                           : 'border-stone-200 bg-stone-50 text-stone-900 focus:border-amber-600 focus:bg-white'
@@ -630,12 +698,7 @@ export const OtpModal: React.FC<OtpModalProps> = ({
                 {isLoading ? (
                   <>
                     <RefreshCw className="w-4 h-4 animate-spin" />
-                    <span>Verifying OTP...</span>
-                  </>
-                ) : isSuccess ? (
-                  <>
-                    <CheckCircle2 className="w-4 h-4" />
-                    <span>Verified!</span>
+                    <span>{loadingMessage}</span>
                   </>
                 ) : (
                   <>
@@ -653,8 +716,9 @@ export const OtpModal: React.FC<OtpModalProps> = ({
                 ) : (
                   <button
                     type="button"
+                    disabled={isLoading}
                     onClick={handleResendOtp}
-                    className="font-bold text-amber-800 hover:underline"
+                    className="font-bold text-amber-800 hover:underline disabled:opacity-50"
                   >
                     Resend OTP
                   </button>

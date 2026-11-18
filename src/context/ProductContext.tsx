@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Product, Category, ProductOutletConfig } from '../types';
 import {
   getProducts,
@@ -37,7 +37,7 @@ interface ProductContextType {
   categories: Category[];
   isLoading: boolean;
   error: string | null;
-  refreshProducts: () => Promise<void>;
+  refreshProducts: (options?: { skipReviews?: boolean }) => Promise<void>;
   getProductBySlug: (slug: string) => Product | undefined;
   getProductById: (id: string | number) => Product | undefined;
   isAvailableInCurrentOutlet: (productId: string | number) => boolean;
@@ -86,39 +86,83 @@ export const ProductProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const fetchProductList = useCallback(async (isSilent = false) => {
-    if (!isSilent) {
-      setIsLoading(true);
-    }
-    setError(null);
-    try {
-      // Fetch products and categories in parallel from database
-      const [productsData, categoriesData] = await Promise.all([
-        getProducts(isAuthenticated, token || undefined),
-        getCategories(),
-      ]);
-      setProducts(productsData);
-      setDbCategories(categoriesData);
-    } catch (err: any) {
-      console.error('Failed to load products in ProductProvider:', err);
+  const lastSyncRef = useRef<number>(0);
+  const hasCategoriesRef = useRef<boolean>(false);
+
+  const fetchProductList = useCallback(
+    async (isSilent = false, options?: { skipReviews?: boolean }) => {
       if (!isSilent) {
-        setError('Could not load products. Please check your connection.');
+        setIsLoading(true);
       }
-    } finally {
-      if (!isSilent) {
-        setIsLoading(false);
+      setError(null);
+      try {
+        const includeReviews = !options?.skipReviews;
+        const [productsData, categoriesData] = await Promise.all([
+          getProducts(isAuthenticated, token || undefined, { includeReviews }),
+          includeReviews || !hasCategoriesRef.current ? getCategories() : Promise.resolve(null),
+        ]);
+
+        lastSyncRef.current = Date.now();
+        if (options?.skipReviews) {
+          setProducts((prev) => {
+            const prevMap = new Map(prev.map((p) => [String(p.id), p]));
+            return productsData.map((prod) => {
+              const old = prevMap.get(String(prod.id));
+              return old
+                ? {
+                    ...prod,
+                    reviewsList: old.reviewsList,
+                    reviewsCount: old.reviewsCount,
+                    rating: old.rating,
+                  }
+                : prod;
+            });
+          });
+        } else {
+          setProducts(productsData);
+        }
+        if (categoriesData) {
+          hasCategoriesRef.current = categoriesData.length > 0;
+          setDbCategories(categoriesData);
+        }
+      } catch (err: any) {
+        console.error('Failed to load products in ProductProvider:', err);
+        if (!isSilent) {
+          setError('Could not load products. Please check your connection.');
+        }
+      } finally {
+        if (!isSilent) {
+          setIsLoading(false);
+        }
       }
-    }
-  }, [isAuthenticated, token]);
+    },
+    [isAuthenticated, token]
+  );
+
+  const refreshProducts = useCallback(
+    (options?: { skipReviews?: boolean }) =>
+      fetchProductList(Boolean(options?.skipReviews), options),
+    [fetchProductList]
+  );
 
   useEffect(() => {
     fetchProductList();
   }, [fetchProductList]);
 
-  // Real-time synchronization for products & orders (auto-sync portion decrements and stock changes)
+  // Real-time synchronization for products & orders (egress-optimized: Realtime first + 3-min visible fallback)
   useEffect(() => {
-    // 1. Supabase Realtime channel subscription
     let channel: any = null;
+    let orderRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const scheduleStockRefresh = () => {
+      if (orderRefreshTimer) clearTimeout(orderRefreshTimer);
+      orderRefreshTimer = setTimeout(() => {
+        if (document.visibilityState === 'visible') {
+          fetchProductList(true, { skipReviews: true });
+        }
+      }, 2000);
+    };
+
     if (isSupabaseConfigured()) {
       channel = supabase
         .channel('public:inventory:realtime')
@@ -133,7 +177,14 @@ export const ProductProvider: React.FC<{ children: React.ReactNode }> = ({ child
                   const exists = prev.some((p) => String(p.id) === String(updatedProduct.id));
                   if (exists) {
                     return prev.map((p) =>
-                      String(p.id) === String(updatedProduct.id) ? updatedProduct : p
+                      String(p.id) === String(updatedProduct.id)
+                        ? {
+                            ...updatedProduct,
+                            reviewsList: p.reviewsList,
+                            reviewsCount: p.reviewsCount,
+                            rating: p.rating,
+                          }
+                        : p
                     );
                   }
                   return [...prev, updatedProduct];
@@ -157,32 +208,38 @@ export const ProductProvider: React.FC<{ children: React.ReactNode }> = ({ child
             }
           }
         )
-        // When any order is placed or updated in Supabase, auto-refresh products so portion counts update immediately
+        // Only refresh portions on new orders (INSERT), not on kitchen status updates
         .on(
           'postgres_changes',
-          { event: '*', schema: 'public', table: 'orders' },
+          { event: 'INSERT', schema: 'public', table: 'orders' },
           () => {
-            fetchProductList(true);
+            scheduleStockRefresh();
           }
         )
         .subscribe();
     }
 
-    // 2. Periodic background refresh (every 5 seconds) to ensure all customers and managers stay synchronized
+    // Low-frequency safety fallback poll (every 3 minutes, only when tab is visible)
     const interval = setInterval(() => {
-      fetchProductList(true);
-    }, 5000);
-
-    // 3. Immediately refresh whenever user returns or switches to this browser tab/window
-    const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
-        fetchProductList(true);
+        fetchProductList(true, { skipReviews: true });
+      }
+    }, 180000);
+
+    // Refresh on tab focus only if stale (> 60 seconds since last sync)
+    const handleVisibilityChange = () => {
+      if (
+        document.visibilityState === 'visible' &&
+        Date.now() - lastSyncRef.current > 60000
+      ) {
+        fetchProductList(true, { skipReviews: true });
       }
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
     window.addEventListener('focus', handleVisibilityChange);
 
     return () => {
+      if (orderRefreshTimer) clearTimeout(orderRefreshTimer);
       if (channel) {
         supabase.removeChannel(channel);
       }
@@ -460,7 +517,7 @@ export const ProductProvider: React.FC<{ children: React.ReactNode }> = ({ child
         categories,
         isLoading,
         error,
-        refreshProducts: fetchProductList,
+        refreshProducts,
         getProductBySlug,
         getProductById,
         isAvailableInCurrentOutlet,

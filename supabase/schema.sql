@@ -215,64 +215,44 @@ WHERE a.customer_id = b.customer_id
   AND a.full_address = b.full_address 
   AND a.created_at < b.created_at;
 
--- 7. ORDERS TABLE (Production Normalized Order Master)
+-- 7. ORDERS TABLE (Production Normalized Kitchen Dispatch & Order Ledger)
 CREATE TABLE IF NOT EXISTS public.orders (
   id TEXT PRIMARY KEY,                                                   -- Unique Order ID (e.g. order-abc1234)
-  order_number TEXT NOT NULL UNIQUE,                                     -- Human-readable Order ID (e.g. SWADCLK-00001)
-  order_id TEXT UNIQUE,                                                  -- Compatible alias for order_number
+  order_number TEXT NOT NULL UNIQUE,                                     -- Human-readable Order Number (e.g. SWADCLK-00001-I)
+  checkout_group_id UUID,                                                -- Parent Checkout Session Reference (checkout_groups.id)
   customer_id UUID REFERENCES public.customers(id) ON DELETE SET NULL,   -- Registered Customer Reference (nullable for guest)
-  customer_address_id UUID REFERENCES public.customer_addresses(id) ON DELETE SET NULL, -- Saved Address Reference
-  address_id UUID REFERENCES public.customer_addresses(id) ON DELETE SET NULL, -- Compatible alias for customer_address_id
   outlet_id TEXT NOT NULL REFERENCES public.outlets(id),                 -- Mandatory Outlet Reference
   order_type TEXT DEFAULT 'delivery',                                    -- delivery | pickup | prebook
   is_self_pickup BOOLEAN DEFAULT false,                                  -- True if customer self-pickup
 
   -- Order & Payment Statuses (order_status is the canonical status field)
   order_status VARCHAR(50) DEFAULT 'received',                           -- received | confirmed | preparing | ready | out_for_delivery | delivered | cancelled
-  payment_status VARCHAR(50) DEFAULT 'pending',                          -- pending | paid | failed | refunded | partially_refunded
-  payment_method VARCHAR(50) DEFAULT 'cod',                              -- online | cod
+  payment_status VARCHAR(50) DEFAULT 'pending',                          -- pending | partially_paid | paid | failed | refunded
 
-  -- Server-authoritative Pricing Fields
+  -- Server-authoritative Split Pricing Fields
   subtotal NUMERIC NOT NULL DEFAULT 0 CHECK (subtotal >= 0),             -- Sum of order item totals
   delivery_fee NUMERIC NOT NULL DEFAULT 0 CHECK (delivery_fee >= 0),     -- Applicable delivery fee
   packaging_fee NUMERIC NOT NULL DEFAULT 0 CHECK (packaging_fee >= 0),   -- Food packaging charge
   discount_amount NUMERIC NOT NULL DEFAULT 0 CHECK (discount_amount >= 0), -- Total discount amount
   tax_amount NUMERIC NOT NULL DEFAULT 0 CHECK (tax_amount >= 0),         -- 5% GST tax amount
   total_amount NUMERIC NOT NULL DEFAULT 0 CHECK (total_amount >= 0),     -- Final total payable amount
+  swad_coin_discount_amount NUMERIC NOT NULL DEFAULT 0,                  -- Swad Coin discount in INR (1 Coin = ₹1)
+  payment_plan VARCHAR(50) DEFAULT 'full',                               -- full | advance_25
+  advance_amount NUMERIC(10, 2) NOT NULL DEFAULT 0,                      -- Planned advance / upfront amount
+  paid_amount NUMERIC(10, 2) NOT NULL DEFAULT 0,                         -- Cumulative paid amount on this dispatch
+  balance_amount NUMERIC(10, 2) NOT NULL DEFAULT 0,                      -- Remaining balance due on this dispatch
 
-  -- Discount & Coupon Metadata
-  discount_type VARCHAR(50) DEFAULT 'NONE',                              -- WELCOME | COUPON | NONE
-  discount_code TEXT,                                                    -- Promo code used (e.g. WELCOME30, DESI50)
-  coupon_id TEXT,                                                        -- Coupon UUID/ID reference
-  coupon_discount_amount NUMERIC NOT NULL DEFAULT 0,                     -- Coupon discount in INR
-  discount_description TEXT,                                             -- Descriptive discount text
-  welcome_discount_applied BOOLEAN DEFAULT false,                        -- Welcome discount boolean flag
-  welcome_discount_amount NUMERIC NOT NULL DEFAULT 0,                    -- Welcome discount in INR
-  swad_coins_used INTEGER NOT NULL DEFAULT 0,                            -- Swad Coins redeemed on this order
-  swad_coin_discount_amount NUMERIC NOT NULL DEFAULT 0,                   -- Swad Coin discount in INR (1 Coin = ₹1)
+  -- Festive Pre-book Metadata
+  festive_event_id UUID,
+  festival_delivery_at DATE,
+  festival_name TEXT,
 
-  -- Historical Customer Snapshot (Permanent record)
-  customer_name TEXT,                                                    -- Customer name at time of order
-  customer_phone TEXT,                                                   -- Customer phone at time of order
-  customer_details JSONB DEFAULT '{}'::jsonb,                            -- Full customer info snapshot
-
-  -- Historical Delivery Address Snapshot (Permanent record)
-  delivery_address_snapshot JSONB DEFAULT '{}'::jsonb,                   -- Address object snapshot at checkout
-  delivery_pincode TEXT,                                                 -- Delivery PIN code
-  delivery_instructions TEXT,                                            -- Gate/cooking delivery notes
+  -- Per-Dispatch Delivery Schedule & ETA
   delivery_type VARCHAR(50) DEFAULT 'immediate',                         -- immediate | scheduled | pb-scheduled
   scheduled_at TIMESTAMPTZ,                                              -- Scheduled delivery timestamp (TIMESTAMPTZ)
   estimated_delivery_minutes INTEGER DEFAULT 35,
 
-  -- Payment Gateway Integration (Razorpay ready)
-  payment_gateway TEXT,                                                  -- razorpay | cashfree | paytm
-  payment_gateway_order_id TEXT,                                         -- Gateway Order ID (e.g. order_O12345)
-  payment_gateway_payment_id TEXT,                                       -- Gateway Payment ID (e.g. pay_P12345)
-  payment_gateway_signature TEXT,                                        -- Gateway Webhook / Callback Signature
-  paid_at TIMESTAMPTZ,                                                   -- Payment completion timestamp
-
   -- Operational Timestamps for Analytics & Live Tracking
-  placed_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()),
   confirmed_at TIMESTAMPTZ,
   preparing_at TIMESTAMPTZ,
   ready_at TIMESTAMPTZ,
@@ -281,7 +261,7 @@ CREATE TABLE IF NOT EXISTS public.orders (
   cancelled_at TIMESTAMPTZ,
   cancellation_reason TEXT,                                              -- Reason if cancelled
 
-  -- Optional denormalized items array for ultra-fast single-query caching
+  -- Denormalized items array for ultra-fast single-query kitchen rendering
   items JSONB DEFAULT '[]'::jsonb NOT NULL,
 
   created_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW()) NOT NULL,
@@ -296,22 +276,12 @@ ALTER TABLE IF EXISTS public.orders DROP COLUMN IF EXISTS gst;
 ALTER TABLE IF EXISTS public.orders DROP COLUMN IF EXISTS total;
 ALTER TABLE IF EXISTS public.orders DROP COLUMN IF EXISTS coupon_code;
 ALTER TABLE IF EXISTS public.orders DROP COLUMN IF EXISTS delivery_notes;
+ALTER TABLE IF EXISTS public.orders DROP COLUMN IF EXISTS placed_at;
+ALTER TABLE IF EXISTS public.orders DROP COLUMN IF EXISTS swad_coins_used;
 ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS order_number TEXT;
 ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS discount_amount NUMERIC NOT NULL DEFAULT 0;
 ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS tax_amount NUMERIC NOT NULL DEFAULT 0;
 ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS total_amount NUMERIC NOT NULL DEFAULT 0;
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS discount_type VARCHAR(50) DEFAULT 'NONE';
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS discount_code TEXT;
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS discount_description TEXT;
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS customer_name TEXT;
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS customer_phone TEXT;
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS delivery_instructions TEXT;
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS payment_gateway TEXT;
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS payment_gateway_order_id TEXT;
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS payment_gateway_payment_id TEXT;
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS payment_gateway_signature TEXT;
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ;
-ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS placed_at TIMESTAMPTZ DEFAULT TIMEZONE('utc'::text, NOW());
 ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS confirmed_at TIMESTAMPTZ;
 ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS preparing_at TIMESTAMPTZ;
 ALTER TABLE IF EXISTS public.orders ADD COLUMN IF NOT EXISTS ready_at TIMESTAMPTZ;
@@ -336,9 +306,10 @@ CREATE TABLE IF NOT EXISTS public.order_items (
 
 -- Indexes for lightning-fast queries
 CREATE INDEX IF NOT EXISTS idx_orders_order_number ON public.orders(order_number);
-CREATE INDEX IF NOT EXISTS idx_orders_order_id ON public.orders(order_id);
 CREATE INDEX IF NOT EXISTS idx_orders_customer_id ON public.orders(customer_id);
 CREATE INDEX IF NOT EXISTS idx_orders_outlet_id ON public.orders(outlet_id);
+CREATE INDEX IF NOT EXISTS idx_orders_outlet_created ON public.orders(outlet_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_orders_customer_created ON public.orders(customer_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_orders_order_status ON public.orders(order_status);
 CREATE INDEX IF NOT EXISTS idx_orders_payment_status ON public.orders(payment_status);
 CREATE INDEX IF NOT EXISTS idx_orders_created_at ON public.orders(created_at DESC);
@@ -352,22 +323,21 @@ CREATE INDEX IF NOT EXISTS idx_order_items_product_id ON public.order_items(prod
 -- Sequence for Auto-Incrementing Order IDs (e.g. SWADCLK-00001, SWADCLK-00002)
 CREATE SEQUENCE IF NOT EXISTS public.order_number_seq START WITH 1;
 
--- Function: Automatically format order_id as SWADCLK-00001 while preserving -I and -PB child suffixes
+-- Function: Automatically format order_number as SWADCLK-00001 while preserving -I and -PB child suffixes
 CREATE OR REPLACE FUNCTION public.generate_order_id()
 RETURNS TRIGGER AS $$
 DECLARE
   seq_val BIGINT;
 BEGIN
-  IF NEW.order_id IS NULL
-     OR BTRIM(NEW.order_id) = ''
-     OR NEW.order_id LIKE 'temp-%'
-     OR NEW.order_id LIKE 'SWADCLK-#%'
-     OR NEW.order_id !~ '^SWADCLK-[0-9]+(-I|-PB)?$'
+  IF NEW.order_number IS NULL
+     OR BTRIM(NEW.order_number) = ''
+     OR NEW.order_number LIKE 'temp-%'
+     OR NEW.order_number LIKE 'SWADCLK-#%'
+     OR NEW.order_number !~ '^SWADCLK-[0-9]+(-I|-PB)?$'
   THEN
     seq_val := nextval('public.order_number_seq');
-    NEW.order_id := 'SWADCLK-' || LPAD(seq_val::text, 5, '0');
+    NEW.order_number := 'SWADCLK-' || LPAD(seq_val::text, 5, '0');
   END IF;
-  NEW.order_number := NEW.order_id;
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;

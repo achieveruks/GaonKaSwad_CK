@@ -1,5 +1,5 @@
 import { supabase, isSupabaseConfigured } from './supabase';
-import { Product, Outlet, OutletAbout, DeliveryZone, Order, OrderItem, CleanOrderItem, Category, DashboardStats, Profile, UserRole, Customer, CustomerAddress, Coupon, CouponRedemption, CouponValidationResult, FestiveEvent, OrderPaymentTransaction } from '../types';
+import { Product, Outlet, OutletAbout, DeliveryZone, Order, OrderItem, CleanOrderItem, Category, DashboardStats, Profile, UserRole, Customer, CustomerAddress, Coupon, CouponRedemption, CouponValidationResult, FestiveEvent, OrderPaymentTransaction, CheckoutFormData } from '../types';
 import { generateOTP, formatOtpString, hashOTP, isBetaMode } from './otpUtils';
 
 // ============================================================================
@@ -261,22 +261,31 @@ export function mapAboutToDbAbout(a: Partial<OutletAbout>): any {
 // SUPABASE PRODUCTS API
 // ============================================================================
 
-export async function fetchSupabaseProducts(includeInactive = false): Promise<Product[]> {
+export async function fetchSupabaseProducts(
+  includeInactive = false,
+  options?: { includeReviews?: boolean }
+): Promise<Product[]> {
   if (!isSupabaseConfigured()) throw new Error('Supabase not configured');
 
+  const includeReviews = options?.includeReviews !== false;
   let query = supabase.from('products').select('*').order('created_at', { ascending: false });
   if (!includeInactive) {
     query = query.eq('active', true);
   }
 
-  const [{ data: productsData, error: prodErr }, { data: reviewsData }] = await Promise.all([
+  const [{ data: productsData, error: prodErr }, reviewsRes] = await Promise.all([
     query,
-    supabase
-      .from('product_reviews')
-      .select('id, product_id, rating, review_text, customer_display_name, is_verified_purchase, is_published, reviewed_at, created_at')
-      .eq('is_published', true)
-      .order('reviewed_at', { ascending: false }),
+    includeReviews
+      ? supabase
+          .from('product_reviews')
+          .select(
+            'id, product_id, rating, review_text, customer_display_name, is_verified_purchase, is_published, reviewed_at, created_at'
+          )
+          .eq('is_published', true)
+          .order('reviewed_at', { ascending: false })
+      : Promise.resolve({ data: null as any[] | null }),
   ]);
+  const reviewsData = reviewsRes?.data;
 
   if (prodErr) throw prodErr;
   if (!productsData || productsData.length === 0) return [];
@@ -760,7 +769,12 @@ export async function batchUpdateSupabaseOutletProducts(
 export async function fetchSupabaseOutlets(includeInactive = false): Promise<Outlet[]> {
   if (!isSupabaseConfigured()) throw new Error('Supabase not configured');
 
-  let query = supabase.from('outlets').select('*').order('name', { ascending: true });
+  let query = supabase
+    .from('outlets')
+    .select(
+      'id, name, city, state, address, fssai_lic_id, phone, email, latitude, longitude, is_active, minimum_order_value, free_delivery_threshold, packaging_fee, avg_cooking_time, operating_hours, hero_fire_line, hero_header, hero_description, trust_badge_rating, trust_badge_rating_sub, trust_badge_usp, trust_badge_usp_sub, assigned_product_ids, created_at, updated_at'
+    )
+    .order('name', { ascending: true });
   if (!includeInactive) {
     query = query.eq('is_active', true);
   }
@@ -842,7 +856,10 @@ export async function deleteSupabaseOutlet(id: string): Promise<boolean> {
 export async function fetchSupabaseZones(includeInactive = false): Promise<DeliveryZone[]> {
   if (!isSupabaseConfigured()) throw new Error('Supabase not configured');
 
-  let query = supabase.from('delivery_zones').select('*').order('created_at', { ascending: true });
+  let query = supabase
+    .from('delivery_zones')
+    .select('id, name, outlet_id, pin_codes, delivery_fee, estimated_delivery_time, is_active, created_at, updated_at')
+    .order('created_at', { ascending: true });
   if (!includeInactive) {
     query = query.eq('is_active', true);
   }
@@ -1405,7 +1422,7 @@ export async function getNextSequentialOrderId(): Promise<string> {
   try {
     const { data, error } = await supabase
       .from('orders')
-      .select('order_id, order_number')
+      .select('order_number')
       .order('created_at', { ascending: false })
       .limit(100);
 
@@ -1415,7 +1432,7 @@ export async function getNextSequentialOrderId(): Promise<string> {
 
     let maxNum = 0;
     for (const row of data) {
-      const idToCheck = row.order_number || row.order_id;
+      const idToCheck = row.order_number;
       if (idToCheck) {
         const match = idToCheck.match(/SWADCLK-#?0*(\d+)/i);
         if (match && match[1]) {
@@ -1622,7 +1639,7 @@ export async function fetchSupabaseCategories(): Promise<Category[]> {
   try {
     const { data, error } = await supabase
       .from('categories')
-      .select('*')
+      .select('id, name, slug, tagline, image, icon_name, sort_order, is_active, created_at, updated_at')
       .order('sort_order', { ascending: true });
 
     if (error) {
@@ -1683,24 +1700,100 @@ export function resolveDbOrderOutlet(row: any, allOutlets: Outlet[] = []): { out
   };
 }
 
-export function mapDbOrderToOrder(row: any): Order {
+async function insertWithSchemaResilience(table: string, payload: Record<string, any>) {
+  let workingPayload = { ...payload };
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const res = await supabase.from(table).insert(workingPayload).select().single();
+    if (!res.error) return res;
+    const msg = res.error.message || '';
+    const match = msg.match(/Could not find the '([^']+)' column/i) || msg.match(/column "([^"]+)" of relation "[^"]+" does not exist/i);
+    if (match && match[1] && Object.prototype.hasOwnProperty.call(workingPayload, match[1])) {
+      delete workingPayload[match[1]];
+      continue;
+    }
+    return res;
+  }
+  return supabase.from(table).insert(workingPayload).select().single();
+}
+
+function buildSlimCustomerDetailsSnapshot(raw?: Record<string, any> | null) {
+  if (!raw || typeof raw !== 'object') return {};
+  const slim: Record<string, any> = {};
+  if (raw.email) slim.email = String(raw.email).trim();
+  if (raw.includeCutlery !== undefined) slim.includeCutlery = Boolean(raw.includeCutlery);
+  if (raw.scheduledDate) slim.scheduledDate = raw.scheduledDate;
+  if (raw.scheduledTimeSlot) slim.scheduledTimeSlot = raw.scheduledTimeSlot;
+  if (raw.scheduledSlotLabel) slim.scheduledSlotLabel = raw.scheduledSlotLabel;
+  if (raw.scheduledSlotCategory) slim.scheduledSlotCategory = raw.scheduledSlotCategory;
+  return slim;
+}
+
+function buildRefundDetailsFromTxRow(txRow: any) {
+  if (!txRow) return undefined;
+  const rawNotes = typeof txRow.notes === 'string' ? txRow.notes : '';
+  const extractTag = (prefix: string) => {
+    const match = rawNotes
+      .split(' | ')
+      .find((part: string) => part.trim().toLowerCase().startsWith(prefix.toLowerCase()));
+    return match ? match.trim().slice(prefix.length).trim() : undefined;
+  };
+  const destination = extractTag('To:');
+  const processedBy = extractTag('Processed by:');
+  const cleanNotes = extractTag('Notes:');
+
+  return {
+    transactionId: txRow.id || undefined,
+    amount: Number(txRow.amount || 0),
+    paymentMethod: txRow.payment_method || 'upi',
+    reference: txRow.gateway_payment_id || undefined,
+    refundedAt: txRow.paid_at || txRow.created_at || undefined,
+    destination: destination || undefined,
+    processedBy: processedBy || undefined,
+    notes: cleanNotes || (destination || processedBy ? undefined : rawNotes || undefined),
+  };
+}
+
+export function mapDbOrderToOrder(row: any, cgRow?: any, refundTxRow?: any): Order {
+  const cg = cgRow || (row.checkout_groups && !Array.isArray(row.checkout_groups) ? row.checkout_groups : null) || {};
+  const rawCustDetails =
+    (cg.customer_details && typeof cg.customer_details === 'object' && Object.keys(cg.customer_details).length > 0
+      ? cg.customer_details
+      : null) ||
+    (row.customer_details && typeof row.customer_details === 'object' && Object.keys(row.customer_details).length > 0
+      ? row.customer_details
+      : null);
+
+  const rawAddressSnapshot =
+    (cg.delivery_address_snapshot && typeof cg.delivery_address_snapshot === 'object' && Object.keys(cg.delivery_address_snapshot).length > 0
+      ? cg.delivery_address_snapshot
+      : null) ||
+    (row.delivery_address_snapshot && typeof row.delivery_address_snapshot === 'object' && Object.keys(row.delivery_address_snapshot).length > 0
+      ? row.delivery_address_snapshot
+      : null);
+
+  const resolvedCustomerName = cg.customer_name || row.customer_name || rawCustDetails?.fullName || 'Customer';
+  const resolvedCustomerPhone = cg.customer_phone || row.customer_phone || rawCustDetails?.phone || '';
+  const resolvedPincode = cg.delivery_pincode || row.delivery_pincode || rawCustDetails?.pincode || rawAddressSnapshot?.pincode || '';
+  const resolvedInstructions = cg.delivery_instructions || row.delivery_instructions || rawCustDetails?.deliveryNotes || undefined;
+  const resolvedAddressId = cg.customer_address_id || row.address_id || row.customer_address_id || undefined;
+  const resolvedCouponCode = cg.coupon_code_snapshot || row.discount_code || undefined;
+  const resolvedPaymentMethod = cg.payment_method || row.payment_method || rawCustDetails?.paymentMethod || 'cod';
+
   const isPickup = row.order_type === 'pickup' || !!row.is_self_pickup;
   const isPrebook = row.order_type === 'prebook' || Boolean(row.festive_event_id);
   const deliveryType: 'immediate' | 'scheduled' | 'pb-scheduled' =
-    isPrebook ||
-    row.delivery_type === 'pb-scheduled' ||
-    row.customer_details?.deliveryType === 'pb-scheduled'
+    isPrebook || row.delivery_type === 'pb-scheduled'
       ? 'pb-scheduled'
       : isPickup
         ? 'immediate'
         : row.delivery_type === 'scheduled' ||
-            row.customer_details?.deliveryType === 'scheduled'
+            (!row.delivery_type && rawCustDetails?.deliveryType === 'scheduled')
           ? 'scheduled'
           : 'immediate';
 
   const scheduledAt =
     row.scheduled_at ||
-    row.customer_details?.scheduledAt ||
+    rawCustDetails?.scheduledAt ||
     undefined;
 
   const items = Array.isArray(row.items) ? row.items.map(deserializeOrderItem) : [];
@@ -1730,10 +1823,31 @@ export function mapDbOrderToOrder(row: any): Order {
 
   const resolvedOutlet = resolveDbOrderOutlet(row);
 
-  const rawDbOrderId = String(row.order_id || row.order_number || row.id || '');
-  const cleanDbOrderId = rawDbOrderId.replace(/SWADCLK-#/g, 'SWADCLK-');
-  const rawDbOrderNum = String(row.order_number || row.order_id || cleanDbOrderId);
-  const cleanDbOrderNum = rawDbOrderNum.replace(/SWADCLK-#/g, 'SWADCLK-');
+  const rawDbOrderNum = String(row.order_number || row.order_id || row.id || '');
+  const cleanDbOrderId = rawDbOrderNum.replace(/SWADCLK-#/g, 'SWADCLK-');
+  const cleanDbOrderNum = cleanDbOrderId;
+
+  const mergedCustomerDetails: CheckoutFormData = {
+    fullName: resolvedCustomerName,
+    phone: resolvedCustomerPhone,
+    email: rawCustDetails?.email || row.customer_email || '',
+    address: isPickup ? '' : (rawCustDetails?.address || rawAddressSnapshot?.fullAddress || ''),
+    landmark: isPickup ? '' : (rawCustDetails?.landmark || rawAddressSnapshot?.landmark || ''),
+    city: isPickup ? '' : (rawCustDetails?.city || rawAddressSnapshot?.city || 'Bhubaneswar'),
+    state: isPickup ? '' : (rawCustDetails?.state || rawAddressSnapshot?.state || 'Odisha'),
+    pincode: isPickup ? '' : resolvedPincode,
+    deliveryType,
+    scheduledAt,
+    scheduledDate: rawCustDetails?.scheduledDate,
+    scheduledTimeSlot: rawCustDetails?.scheduledTimeSlot,
+    scheduledSlotCategory: rawCustDetails?.scheduledSlotCategory,
+    scheduledSlotLabel: rawCustDetails?.scheduledSlotLabel,
+    paymentMethod: resolvedPaymentMethod as CheckoutFormData['paymentMethod'],
+    deliveryNotes: resolvedInstructions,
+    includeCutlery: rawCustDetails?.includeCutlery !== undefined ? !!rawCustDetails.includeCutlery : true,
+    orderType: isPickup ? 'pickup' : 'delivery',
+    isSelfPickup: isPickup,
+  };
 
   return {
     id: row.id || cleanDbOrderId,
@@ -1741,14 +1855,14 @@ export function mapDbOrderToOrder(row: any): Order {
     orderNumber: cleanDbOrderNum,
     checkoutGroupId: row.checkout_group_id || undefined,
     checkout_group_id: row.checkout_group_id || undefined,
-    checkoutReference: row.checkout_reference || undefined,
+    checkoutReference: cg.checkout_reference || row.checkout_reference || undefined,
     outletId: resolvedOutlet.outletId,
     outletName: resolvedOutlet.outletName,
     kitchenAddress: resolvedOutlet.kitchenAddress,
-    customerId: row.customer_id || undefined,
-    addressId: row.address_id || row.customer_address_id || undefined,
+    customerId: row.customer_id || cg.customer_id || undefined,
+    addressId: isPickup ? undefined : resolvedAddressId,
     isSelfPickup: isPickup,
-    isGuestCheckout: !row.customer_id,
+    isGuestCheckout: !(row.customer_id || cg.customer_id),
     orderType: (row.order_type || (isPickup ? 'pickup' : 'delivery')) as any,
     order_type: row.order_type || (isPickup ? 'pickup' : 'delivery'),
     paymentPlan: (row.payment_plan || 'full') as any,
@@ -1768,49 +1882,31 @@ export function mapDbOrderToOrder(row: any): Order {
     deliveryType,
     delivery_type: deliveryType,
     scheduledAt,
-    deliveryPinCode: row.delivery_pincode || row.customer_details?.pincode || '',
+    deliveryPinCode: resolvedPincode,
+    deliveryNotes: resolvedInstructions,
     createdAt: row.created_at,
     items,
     subtotal: Number(row.subtotal || 0),
     discount: Number(row.discount_amount || 0),
-    welcomeDiscountAmount: Number(row.welcome_discount_amount || 0),
-    isWelcomeDiscountApplied: !!row.welcome_discount_applied,
     deliveryFee: Number(row.delivery_fee || 0),
     packagingFee: Number(row.packaging_fee || 0),
     gst: Number(row.tax_amount || 0),
     total: Number(row.total_amount || 0),
-    couponCode: row.discount_code || undefined,
-    couponId: row.coupon_id || undefined,
+    couponCode: resolvedCouponCode,
+    couponId: cg.coupon_id || row.coupon_id || undefined,
     couponDiscountAmount: Number(row.coupon_discount_amount || row.discount_amount || 0),
-    customerDetails: row.customer_details || {
-      fullName: row.customer_name || 'Customer',
-      phone: row.customer_phone || '',
-      email: row.customer_email || '',
-      address: isPickup ? '' : (row.delivery_address_snapshot?.fullAddress || ''),
-      city: isPickup ? '' : (row.delivery_address_snapshot?.city || 'Bhubaneswar'),
-      state: isPickup ? '' : (row.delivery_address_snapshot?.state || 'Odisha'),
-      pincode: isPickup ? '' : (row.delivery_pincode || ''),
-      deliveryType,
-      scheduledAt,
-      scheduledDate: row.customer_details?.scheduledDate,
-      scheduledTimeSlot: row.customer_details?.scheduledTimeSlot,
-      scheduledSlotCategory: row.customer_details?.scheduledSlotCategory,
-      scheduledSlotLabel: row.customer_details?.scheduledSlotLabel,
-      paymentMethod: row.payment_method || 'cod',
-      deliveryNotes: row.delivery_instructions || undefined,
-      includeCutlery: true,
-    },
-    deliveryAddressSnapshot: isPickup ? undefined : (row.delivery_address_snapshot || undefined),
-    paymentMethod: row.payment_method || row.customer_details?.paymentMethod || 'cod',
-    payment_method: row.payment_method || row.customer_details?.paymentMethod || 'cod',
+    customerDetails: mergedCustomerDetails,
+    deliveryAddressSnapshot: isPickup ? undefined : (rawAddressSnapshot || undefined),
+    paymentMethod: resolvedPaymentMethod,
+    payment_method: resolvedPaymentMethod,
     paymentStatus: row.payment_status || undefined,
     payment_status: row.payment_status || undefined,
-    swadCoinsUsed: Number(row.swad_coins_used || 0),
+    swadCoinsUsed: Math.round(Number(row.swad_coin_discount_amount ?? row.swad_coins_used ?? 0)),
     swadCoinDiscountAmount: Number(row.swad_coin_discount_amount || 0),
     isRated: typeof row.is_rated === 'boolean' ? row.is_rated : undefined,
     status: displayStatus as Order['status'],
     orderStatus: rawStatus,
-    placedAt: row.placed_at || row.created_at,
+    placedAt: row.created_at || row.placed_at,
     confirmedAt: row.confirmed_at || undefined,
     preparingAt: row.preparing_at || undefined,
     readyAt: row.ready_at || undefined,
@@ -1818,38 +1914,78 @@ export function mapDbOrderToOrder(row: any): Order {
     deliveredAt: row.delivered_at || undefined,
     cancelledAt: row.cancelled_at || undefined,
     cancellationReason: row.cancellation_reason || undefined,
+    refundDetails: buildRefundDetailsFromTxRow(refundTxRow),
     estimatedDeliveryMinutes: row.estimated_delivery_minutes || (isPickup ? 25 : 35),
   };
 }
 
-async function hydrateCheckoutReferences(orders: Order[]): Promise<Order[]> {
-  if (!isSupabaseConfigured() || !orders || orders.length === 0) return orders;
-  const groupIds = Array.from(new Set(orders.map((o) => o.checkoutGroupId).filter(Boolean))) as string[];
-  if (groupIds.length === 0) return orders;
-  try {
-    const { data: cgRows } = await supabase
-      .from('checkout_groups')
-      .select('id, checkout_reference')
-      .in('id', groupIds);
-    if (Array.isArray(cgRows) && cgRows.length > 0) {
-      const cgMap = new Map<string, string>();
-      cgRows.forEach((g: any) => {
-        if (g?.id && g?.checkout_reference) {
-          cgMap.set(String(g.id), String(g.checkout_reference));
-        }
-      });
-      return orders.map((o) => {
-        const ref = o.checkoutGroupId ? cgMap.get(String(o.checkoutGroupId)) : undefined;
-        return ref ? { ...o, checkoutReference: ref } : o;
-      });
+async function hydrateAndMapSupabaseOrders(rawRows: any[]): Promise<Order[]> {
+  if (!rawRows || rawRows.length === 0) return [];
+  if (!isSupabaseConfigured()) return rawRows.map((r) => mapDbOrderToOrder(r));
+
+  const groupIds = Array.from(new Set(rawRows.map((r) => r.checkout_group_id).filter(Boolean))) as string[];
+  const cgMap = new Map<string, any>();
+
+  if (groupIds.length > 0) {
+    try {
+      const { data: cgRows } = await supabase
+        .from('checkout_groups')
+        .select(
+          'id, checkout_reference, customer_id, customer_address_id, coupon_id, coupon_code_snapshot, payment_method, payment_status, customer_name, customer_phone, customer_details, delivery_address_snapshot, delivery_pincode, delivery_instructions'
+        )
+        .in('id', groupIds);
+      if (Array.isArray(cgRows)) {
+        cgRows.forEach((g: any) => {
+          if (g?.id) cgMap.set(String(g.id), g);
+        });
+      }
+    } catch {
+      // Gracefully skip if checkout_groups query fails
     }
-  } catch {
-    // Gracefully skip if checkout_groups migration is pending
   }
-  return orders;
+
+  const cancelledOrderIds = rawRows
+    .filter(
+      (r) =>
+        String(r.order_status || '').toLowerCase() === 'cancelled' ||
+        r.payment_status === 'refunded'
+    )
+    .map((r) => r.id)
+    .filter(Boolean) as string[];
+  const refundTxMap = new Map<string, any>();
+
+  if (cancelledOrderIds.length > 0) {
+    try {
+      const { data: refRows } = await supabase
+        .from('order_payment_transactions')
+        .select('id, order_id, amount, payment_method, gateway_payment_id, notes, paid_at, created_at')
+        .in('order_id', cancelledOrderIds)
+        .eq('transaction_type', 'refund')
+        .order('created_at', { ascending: false });
+      if (Array.isArray(refRows)) {
+        refRows.forEach((tx: any) => {
+          if (tx?.order_id && !refundTxMap.has(String(tx.order_id))) {
+            refundTxMap.set(String(tx.order_id), tx);
+          }
+        });
+      }
+    } catch {
+      // Gracefully skip if refund tx lookup fails
+    }
+  }
+
+  return rawRows.map((row) => {
+    const cg = row.checkout_group_id ? cgMap.get(String(row.checkout_group_id)) : undefined;
+    const refundTx = refundTxMap.get(String(row.id));
+    return mapDbOrderToOrder(row, cg, refundTx);
+  });
 }
 
-export async function fetchSupabaseOrders(outletId?: string, customerId?: string): Promise<Order[]> {
+export async function fetchSupabaseOrders(
+  outletId?: string,
+  customerId?: string,
+  options?: { activeOrRecentDays?: number; limit?: number }
+): Promise<Order[]> {
   if (!isSupabaseConfigured()) return [];
 
   try {
@@ -1860,6 +1996,17 @@ export async function fetchSupabaseOrders(outletId?: string, customerId?: string
     if (customerId) {
       query = query.eq('customer_id', customerId);
     }
+    if (options?.activeOrRecentDays && options.activeOrRecentDays > 0) {
+      const cutoffIso = new Date(
+        Date.now() - options.activeOrRecentDays * 24 * 60 * 60 * 1000
+      ).toISOString();
+      query = query.or(
+        `order_status.in.(received,confirmed,preparing,ready,out_for_delivery),created_at.gte.${cutoffIso}`
+      );
+    }
+    if (options?.limit && options.limit > 0) {
+      query = query.limit(options.limit);
+    }
 
     const { data, error } = await query;
     if (error) {
@@ -1867,7 +2014,7 @@ export async function fetchSupabaseOrders(outletId?: string, customerId?: string
       return [];
     }
     if (!data || data.length === 0) return [];
-    return await hydrateCheckoutReferences(data.map(mapDbOrderToOrder));
+    return await hydrateAndMapSupabaseOrders(data);
   } catch (err) {
     console.warn('fetchSupabaseOrders exception:', err);
     return [];
@@ -1877,14 +2024,62 @@ export async function fetchSupabaseOrders(outletId?: string, customerId?: string
 export async function fetchSupabaseOrdersByPhone(phone: string): Promise<{ orders: Order[] }> {
   if (!isSupabaseConfigured()) return { orders: [] };
   const cleanPhone = phone.replace(/\D/g, '').slice(-10);
+  if (!cleanPhone) return { orders: [] };
+
   try {
-    const { data, error } = await supabase
-      .from('orders')
-      .select('*')
-      .ilike('customer_phone', `%${cleanPhone}%`)
-      .order('created_at', { ascending: false });
-    if (error || !data) return { orders: [] };
-    const hydrated = await hydrateCheckoutReferences(data.map(mapDbOrderToOrder));
+    const matchedRowsMap = new Map<string, any>();
+    const groupMap = new Map<string, any>();
+
+    // 1. Primary post-migration lookup: find checkout_groups by customer_phone + registered customer_id
+    const [{ data: cgMatches, error: cgErr }, { data: custMatches }] = await Promise.all([
+      supabase.from('checkout_groups').select('*').ilike('customer_phone', `%${cleanPhone}%`),
+      supabase.from('customers').select('id').ilike('phone', `%${cleanPhone}%`),
+    ]);
+
+    const groupIds = !cgErr && Array.isArray(cgMatches)
+      ? cgMatches.map((g: any) => {
+          groupMap.set(String(g.id), g);
+          return g.id;
+        }).filter(Boolean)
+      : [];
+
+    const custIds = Array.isArray(custMatches) ? custMatches.map((c: any) => c.id).filter(Boolean) : [];
+
+    if (groupIds.length > 0) {
+      const { data: ordByGroup } = await supabase
+        .from('orders')
+        .select('*')
+        .in('checkout_group_id', groupIds)
+        .order('created_at', { ascending: false });
+      (ordByGroup || []).forEach((r: any) => matchedRowsMap.set(String(r.id), r));
+    }
+
+    if (custIds.length > 0) {
+      const { data: ordByCust } = await supabase
+        .from('orders')
+        .select('*')
+        .in('customer_id', custIds)
+        .order('created_at', { ascending: false });
+      (ordByCust || []).forEach((r: any) => matchedRowsMap.set(String(r.id), r));
+    }
+
+    // 2. Fallback ONLY if pre-migration orders.customer_phone column still exists
+    if (cgErr || matchedRowsMap.size === 0) {
+      const { data: legacyRows, error: legacyErr } = await supabase
+        .from('orders')
+        .select('*')
+        .ilike('customer_phone', `%${cleanPhone}%`)
+        .order('created_at', { ascending: false });
+      if (!legacyErr && Array.isArray(legacyRows)) {
+        legacyRows.forEach((r: any) => matchedRowsMap.set(String(r.id), r));
+      }
+    }
+
+    const combinedRows = Array.from(matchedRowsMap.values()).sort(
+      (a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
+    );
+    if (combinedRows.length === 0) return { orders: [] };
+    const hydrated = await hydrateAndMapSupabaseOrders(combinedRows);
     return { orders: hydrated };
   } catch (err) {
     console.warn('fetchSupabaseOrdersByPhone error:', err);
@@ -1901,13 +2096,12 @@ export async function fetchSupabaseOrderById(orderId: string): Promise<Order | n
     const { data, error } = await supabase
       .from('orders')
       .select('*')
-      .or(`order_id.eq.${cleanId},order_number.eq.${cleanId},id.eq.${cleanId},order_id.eq.${orderId},order_number.eq.${orderId}`)
+      .or(`order_number.eq.${cleanId},id.eq.${cleanId},order_number.eq.${orderId}`)
       .maybeSingle();
 
     if (error || !data) return null;
-    const mapped = mapDbOrderToOrder(data);
-    const hydrated = await hydrateCheckoutReferences([mapped]);
-    return hydrated[0] || mapped;
+    const hydrated = await hydrateAndMapSupabaseOrders([data]);
+    return hydrated[0] || mapDbOrderToOrder(data);
   } catch {
     return null;
   }
@@ -1959,7 +2153,7 @@ export async function updateSupabaseOrderStatus(
     const { error } = await supabase
       .from('orders')
       .update(updateFields)
-      .or(`order_id.eq.${cleanId},order_number.eq.${cleanId},id.eq.${cleanId},order_id.eq.${orderId},order_number.eq.${orderId}`);
+      .or(`order_number.eq.${cleanId},id.eq.${cleanId},order_number.eq.${orderId}`);
 
     if (!error && norm === 'cancelled') {
       try {
@@ -1986,7 +2180,7 @@ export async function deleteSupabaseOrder(orderId: string): Promise<boolean> {
     const { error } = await supabase
       .from('orders')
       .delete()
-      .or(`order_id.eq.${orderId},id.eq.${orderId}`);
+      .or(`order_number.eq.${orderId},id.eq.${orderId}`);
 
     return !error;
   } catch {
@@ -2035,6 +2229,8 @@ export async function createSupabaseOrder(
     (orderData.deliveryAddressSnapshot as any)?.deliveryNotes ||
     null;
 
+  const resolvedPincode = orderData.deliveryPinCode || orderData.customerDetails?.pincode || '';
+
   const isPbScheduled =
     isPrebookDirect ||
     Boolean(orderData.festiveEventId) ||
@@ -2065,17 +2261,64 @@ export async function createSupabaseOrder(
       : null;
 
   const normalizedOrderType = isPrebookDirect ? 'prebook' : (isSelfPickup ? 'pickup' : 'delivery');
+  const paymentMethod = orderData.customerDetails?.paymentMethod || 'cod';
+  const paymentStatus = orderData.paymentStatus || (orderData.paymentPlan === 'advance_25' ? 'partially_paid' : 'pending');
 
+  // 1. Ensure parent checkout_groups row exists with moved customer, address & discount snapshots
+  let resolvedCheckoutGroupId: string | null = orderData.checkoutGroupId || null;
+  let insertedGroupRow: any = null;
+  const slimCustomerDetails = buildSlimCustomerDetailsSnapshot(orderData.customerDetails);
+  if (!resolvedCheckoutGroupId) {
+    const cgPayload = {
+      checkout_reference: baseRef,
+      customer_id: isUUID(orderData.customerId) ? orderData.customerId : null,
+      customer_address_id: isSelfPickup ? null : (isUUID(orderData.addressId) ? orderData.addressId : null),
+      outlet_id: safeOutletId,
+      coupon_id: isUUID(orderData.couponId) ? orderData.couponId : null,
+      coupon_code_snapshot: orderData.couponCode || null,
+      subtotal: Number(orderData.subtotal || 0),
+      discount_amount: Number(orderData.discount || 0),
+      swad_coin_discount_amount: Number(orderData.swadCoinDiscountAmount || 0),
+      packaging_fee: Number(orderData.packagingFee || 0),
+      delivery_charge: Number(orderData.deliveryFee || 0),
+      tax_amount: Number(orderData.gst || 0),
+      grand_total: Number(orderData.total || 0),
+      order_mode: isPrebookDirect ? 'prebook' : 'normal',
+      prebook_payment_plan: isPrebookDirect ? (orderData.paymentPlan || 'full') : null,
+      amount_due_now: Number(orderData.advanceAmount ?? orderData.total ?? 0),
+      amount_paid: Number(orderData.paidAmount ?? orderData.advanceAmount ?? 0),
+      balance_due: Number(orderData.balanceAmount || 0),
+      payment_status: paymentStatus,
+      payment_method: paymentMethod,
+      customer_name: supaCustomerName,
+      customer_phone: supaCustomerPhone,
+      customer_details: slimCustomerDetails,
+      delivery_address_snapshot: isSelfPickup ? null : (orderData.deliveryAddressSnapshot || null),
+      delivery_pincode: resolvedPincode,
+      delivery_instructions: supaDeliveryInstructions,
+      idempotency_key: `direct-${id}`,
+      created_at: now,
+      updated_at: now,
+    };
+
+    try {
+      const { data: cgRow, error: cgErr } = await insertWithSchemaResilience('checkout_groups', cgPayload);
+      if (!cgErr && cgRow?.id) {
+        resolvedCheckoutGroupId = cgRow.id;
+        insertedGroupRow = cgRow;
+      }
+    } catch (cgErr) {
+      console.warn('createSupabaseOrder checkout_groups notice:', cgErr);
+    }
+  }
+
+  // 2. Insert slimmed dispatch row into public.orders (moved & redundant cols removed cleanly)
   const payload: any = {
     id,
-    order_id: orderId,
     order_number: orderId,
-    checkout_group_id: orderData.checkoutGroupId || null,
+    checkout_group_id: resolvedCheckoutGroupId,
     outlet_id: safeOutletId,
     customer_id: isUUID(orderData.customerId) ? orderData.customerId : null,
-    address_id: isSelfPickup ? null : (isUUID(orderData.addressId) ? orderData.addressId : null),
-    customer_name: supaCustomerName,
-    customer_phone: supaCustomerPhone,
     order_type: normalizedOrderType,
     is_self_pickup: isSelfPickup,
     payment_plan: orderData.paymentPlan || 'full',
@@ -2092,18 +2335,11 @@ export async function createSupabaseOrder(
     discount_amount: Number(orderData.discount || 0),
     tax_amount: Number(orderData.gst || 0),
     total_amount: Number(orderData.total || 0),
-    discount_type: (orderData.discount && Number(orderData.discount) > 0) ? 'coupon' : 'NONE',
-    discount_code: orderData.couponCode || null,
-    discount_description: null,
-    welcome_discount_applied: !!orderData.isWelcomeDiscountApplied,
-    welcome_discount_amount: Number(orderData.welcomeDiscountAmount || 0),
-    payment_method: orderData.customerDetails?.paymentMethod || 'cod',
-    payment_status: orderData.paymentStatus || (orderData.paymentPlan === 'advance_25' ? 'partially_paid' : 'pending'),
+    swad_coin_discount_amount: Number(orderData.swadCoinDiscountAmount || 0),
+    payment_status: paymentStatus,
     delivery_type: deliveryType,
     scheduled_at: scheduledAt,
-    delivery_instructions: supaDeliveryInstructions,
     order_status: (orderData.orderStatus || orderData.status || 'received').toLowerCase().replace(/\s+/g, '_'),
-    placed_at: now,
     confirmed_at: null,
     preparing_at: null,
     ready_at: null,
@@ -2111,29 +2347,25 @@ export async function createSupabaseOrder(
     delivered_at: null,
     cancelled_at: null,
     cancellation_reason: null,
-    customer_details: orderData.customerDetails || {},
-    delivery_address_snapshot: isSelfPickup ? null : (orderData.deliveryAddressSnapshot || null),
-    delivery_pincode: orderData.deliveryPinCode || orderData.customerDetails?.pincode || '',
     estimated_delivery_minutes: Number(orderData.estimatedDeliveryMinutes || (isSelfPickup ? 25 : 35)),
     created_at: now,
     updated_at: now,
   };
 
-  const { data, error } = await supabase.from('orders').insert(payload).select().single();
+  const { data, error } = await insertWithSchemaResilience('orders', payload);
 
   if (error) {
     console.warn('createSupabaseOrder direct insert notice:', error.message);
   }
 
   if (data) {
-    const rawOid = String(data.order_id || data.order_number || '');
+    const rawOid = String(data.order_number || data.order_id || '');
     if (rawOid !== orderId) {
       try {
         await supabase
           .from('orders')
-          .update({ order_id: orderId, order_number: orderId })
+          .update({ order_number: orderId })
           .eq('id', data.id);
-        data.order_id = orderId;
         data.order_number = orderId;
       } catch (cleanErr) {
         console.warn('Direct order post-insert alignment notice:', cleanErr);
@@ -2176,6 +2408,27 @@ export async function createSupabaseOrder(
         console.warn('createSupabaseOrder order_items insert notice:', itemsInsertErr);
       }
     }
+    // Record gateway payment audit on order_payment_transactions when paid online / upfront
+    const paidDirect = Number(orderData.paidAmount ?? orderData.advanceAmount ?? 0);
+    if (paymentMethod !== 'cod' || paidDirect > 0) {
+      try {
+        await insertWithSchemaResilience('order_payment_transactions', {
+          order_id: data.id,
+          checkout_group_id: resolvedCheckoutGroupId,
+          transaction_type: isPrebookDirect ? (orderData.paymentPlan === 'advance_25' ? 'advance' : 'full') : 'initial',
+          amount: paidDirect,
+          payment_method: paymentMethod,
+          payment_gateway: paymentMethod !== 'cod' ? 'demo_gateway' : 'cod',
+          status: paymentStatus === 'paid' || paymentStatus === 'partially_paid' ? 'success' : 'pending',
+          gateway_order_id: baseRef,
+          gateway_payment_id: paymentMethod !== 'cod' ? `DEMO-${baseRef}` : null,
+          paid_at: paymentStatus === 'paid' || paymentStatus === 'partially_paid' ? now : null,
+          created_at: now,
+        });
+      } catch (txErr) {
+        console.warn('createSupabaseOrder payment tx notice:', txErr);
+      }
+    }
   }
 
   // Note: The Supabase PostgreSQL database trigger 'trg_decrement_portions_on_order'
@@ -2183,26 +2436,39 @@ export async function createSupabaseOrder(
   // Do not perform an additional manual decrement here to prevent double deduction.
 
   if (data) {
-    return mapDbOrderToOrder(data);
+    return mapDbOrderToOrder(data, insertedGroupRow || {
+      customer_address_id: isSelfPickup ? null : orderData.addressId,
+      coupon_code_snapshot: orderData.couponCode || null,
+      payment_method: paymentMethod,
+      customer_name: supaCustomerName,
+      customer_phone: supaCustomerPhone,
+      customer_details: slimCustomerDetails,
+      delivery_address_snapshot: isSelfPickup ? null : (orderData.deliveryAddressSnapshot || null),
+      delivery_pincode: resolvedPincode,
+      delivery_instructions: supaDeliveryInstructions,
+      checkout_reference: baseRef,
+    });
   }
 
   return {
     ...orderData,
     id,
     orderId,
+    checkoutGroupId: resolvedCheckoutGroupId || undefined,
+    checkoutReference: baseRef,
     outletId: safeOutletId,
     isSelfPickup,
     orderType: isSelfPickup ? 'pickup' : 'delivery',
     items: safeItems,
     subtotal: payload.subtotal,
     discount: payload.discount_amount,
-    welcomeDiscountAmount: payload.welcome_discount_amount,
-    isWelcomeDiscountApplied: payload.welcome_discount_applied,
+    welcomeDiscountAmount: Number(orderData.welcomeDiscountAmount || 0),
+    isWelcomeDiscountApplied: !!orderData.isWelcomeDiscountApplied,
     deliveryFee: payload.delivery_fee,
     packagingFee: payload.packaging_fee,
     gst: payload.tax_amount,
     total: payload.total_amount,
-    status: payload.status,
+    status: (orderData.status || 'Received') as Order['status'],
     createdAt: now,
   } as Order;
 }
@@ -3550,12 +3816,15 @@ export function mapDbPaymentTxToPaymentTx(row: any): OrderPaymentTransaction {
   return {
     id: row.id,
     orderId: row.order_id,
+    checkoutGroupId: row.checkout_group_id || undefined,
     transactionType: row.transaction_type,
     amount: Number(row.amount || 0),
     paymentMethod: row.payment_method || 'online',
+    paymentGateway: row.payment_gateway || undefined,
     status: row.status || 'success',
+    gatewayOrderId: row.gateway_order_id || undefined,
     gatewayPaymentId: row.gateway_payment_id || undefined,
-    gatewayReference: row.gateway_reference || undefined,
+    gatewaySignature: row.gateway_signature || undefined,
     notes: row.notes || undefined,
     paidAt: row.paid_at,
     createdAt: row.created_at,
@@ -3588,19 +3857,22 @@ export async function recordSupabasePaymentTransaction(data: Partial<OrderPaymen
 
   const now = new Date().toISOString();
   const payload = {
-    order_id: data.orderId,
+    order_id: data.orderId ?? null,
+    checkout_group_id: data.checkoutGroupId ?? null,
     transaction_type: data.transactionType || 'advance',
     amount: Number(data.amount || 0),
     payment_method: data.paymentMethod || 'online',
+    payment_gateway: data.paymentGateway || null,
     status: data.status || 'success',
+    gateway_order_id: data.gatewayOrderId || null,
     gateway_payment_id: data.gatewayPaymentId || null,
-    gateway_reference: data.gatewayReference || null,
+    gateway_signature: data.gatewaySignature || null,
     notes: data.notes || null,
     paid_at: data.paidAt || now,
     created_at: now,
   };
 
-  const { data: res, error } = await supabase.from('order_payment_transactions').insert(payload).select().single();
+  const { data: res, error } = await insertWithSchemaResilience('order_payment_transactions', payload);
   if (error) throw error;
   return mapDbPaymentTxToPaymentTx(res);
 }

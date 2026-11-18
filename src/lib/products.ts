@@ -61,11 +61,15 @@ export async function getCategories(): Promise<Category[]> {
 /**
  * Fetch all products from Supabase PostgreSQL (with fallback to API)
  */
-export async function getProducts(includeInactive = false, token?: string): Promise<Product[]> {
+export async function getProducts(
+  includeInactive = false,
+  token?: string,
+  options?: { includeReviews?: boolean }
+): Promise<Product[]> {
   // 1. Try Supabase PostgreSQL first
   if (isSupabaseConfigured()) {
     try {
-      const supaProducts = await fetchSupabaseProducts(includeInactive);
+      const supaProducts = await fetchSupabaseProducts(includeInactive, options);
       if (Array.isArray(supaProducts) && supaProducts.length > 0) {
         return supaProducts;
       }

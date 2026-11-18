@@ -261,12 +261,16 @@ export const ManagerOrderDetailsModal: React.FC<ManagerOrderDetailsModalProps> =
               <div>
                 <span className="text-[10px] text-stone-500 font-semibold block">PAYMENT</span>
                 <span className="font-bold text-stone-800">
-                  {(order.customerDetails?.paymentMethod as string) !== 'cod' ? 'Online Paid' : 'Cash on Delivery (COD)'}
+                  {order.paymentStatus === 'refunded'
+                    ? 'Refunded'
+                    : (order.customerDetails?.paymentMethod as string) !== 'cod'
+                      ? 'Online Paid'
+                      : 'Cash on Delivery (COD)'}
                 </span>
               </div>
               <div>
                 <span className="text-[10px] text-stone-500 font-semibold block">DELIVERY TYPE</span>
-                {isPrebook || order.deliveryType === 'pb-scheduled' || order.customerDetails?.deliveryType === 'pb-scheduled' ? (
+                {isPrebook || order.deliveryType === 'pb-scheduled' || (order as any).delivery_type === 'pb-scheduled' ? (
                   <>
                     <span className="font-bold text-amber-950">Pre-book Scheduled</span>
                     <span className="text-[10px] text-amber-900 font-semibold block mt-0.5 leading-tight tabular-nums">
@@ -514,16 +518,37 @@ export const ManagerOrderDetailsModal: React.FC<ManagerOrderDetailsModalProps> =
               <span>Grand Total:</span>
               <span className="font-mono text-base text-amber-900">₹{order.total || 0}</span>
             </div>
-            {(isPrebook || balanceAmount > 0) && (
+            {(isPrebook || balanceAmount > 0 || order.paymentStatus === 'refunded' || order.refundDetails) && (
               <div className="pt-2 border-t border-stone-200/70 space-y-1 text-xs tabular-nums">
-                <div className="flex justify-between text-emerald-800 font-semibold">
-                  <span>Paid / Advance Collected:</span>
-                  <span className="font-mono">₹{paidAmount.toFixed(0)}</span>
-                </div>
-                <div className={`flex justify-between font-bold ${balanceAmount > 0 ? 'text-amber-900' : 'text-emerald-800'}`}>
-                  <span>Balance Due:</span>
-                  <span className="font-mono">₹{balanceAmount.toFixed(0)}</span>
-                </div>
+                {order.refundDetails ? (
+                  <>
+                    <div className="flex justify-between text-purple-900 font-bold">
+                      <span>
+                        Advance Refunded (
+                        {String(order.refundDetails.paymentMethod || '').replace('_', ' ').toUpperCase()}
+                        ):
+                      </span>
+                      <span className="font-mono">₹{Number(order.refundDetails.amount || 0).toFixed(0)}</span>
+                    </div>
+                    {order.refundDetails.reference && (
+                      <div className="flex justify-between text-stone-600 text-[11px]">
+                        <span>Refund Transaction Ref:</span>
+                        <span className="font-mono font-semibold">{order.refundDetails.reference}</span>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <div className="flex justify-between text-emerald-800 font-semibold">
+                      <span>Paid / Advance Collected:</span>
+                      <span className="font-mono">₹{paidAmount.toFixed(0)}</span>
+                    </div>
+                    <div className={`flex justify-between font-bold ${balanceAmount > 0 ? 'text-amber-900' : 'text-emerald-800'}`}>
+                      <span>Balance Due:</span>
+                      <span className="font-mono">₹{balanceAmount.toFixed(0)}</span>
+                    </div>
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -579,7 +604,7 @@ export const ManagerOrderDetailsModal: React.FC<ManagerOrderDetailsModalProps> =
               </div>
 
               {order.cancelledAt && (
-                <div className="col-span-full bg-rose-50 border border-rose-200 rounded-lg p-2.5 text-xs text-rose-900 mt-1">
+                <div className="col-span-full bg-rose-50 border border-rose-200 rounded-lg p-2.5 text-xs text-rose-900 mt-1 space-y-1">
                   <div className="flex justify-between font-bold">
                     <span>Cancelled At:</span>
                     <span className="font-mono">{formatDateTime(order.cancelledAt)}</span>
@@ -588,6 +613,35 @@ export const ManagerOrderDetailsModal: React.FC<ManagerOrderDetailsModalProps> =
                     <p className="text-[11px] text-rose-700 mt-0.5">
                       Reason: {order.cancellationReason}
                     </p>
+                  )}
+                  {order.refundDetails && (
+                    <div className="pt-1.5 mt-1 border-t border-rose-200 text-[11px] text-purple-950 space-y-0.5 tabular-nums">
+                      <div className="flex justify-between font-bold">
+                        <span>Advance Refund Recorded:</span>
+                        <span className="font-mono">
+                          ₹{Number(order.refundDetails.amount || 0).toFixed(0)} via{' '}
+                          {String(order.refundDetails.paymentMethod || '').replace('_', ' ').toUpperCase()}
+                        </span>
+                      </div>
+                      {order.refundDetails.reference && (
+                        <div className="flex justify-between text-stone-700">
+                          <span>Transaction Ref:</span>
+                          <span className="font-mono">{order.refundDetails.reference}</span>
+                        </div>
+                      )}
+                      {order.refundDetails.refundedAt && (
+                        <div className="flex justify-between text-stone-600">
+                          <span>Refunded At:</span>
+                          <span className="font-mono">{formatDateTime(order.refundDetails.refundedAt)}</span>
+                        </div>
+                      )}
+                      {order.refundDetails.processedBy && (
+                        <div className="flex justify-between text-stone-600">
+                          <span>Processed By:</span>
+                          <span>{order.refundDetails.processedBy}</span>
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
               )}
