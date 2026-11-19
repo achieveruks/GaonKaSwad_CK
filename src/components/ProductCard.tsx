@@ -130,16 +130,16 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, viewMode = 'g
                 <span className="px-2 py-0.5 bg-stone-800/95 text-stone-300 font-bold text-[10px] uppercase tracking-wider rounded shadow-2xs border border-stone-600">
                   NOT AT OUTLET
                 </span>
-              ) : !isInStockHere ? (
+              ) : isSoldOut ? (
                 <span className="px-2 py-0.5 bg-stone-900/90 text-amber-300 font-bold text-[10px] uppercase tracking-wider rounded shadow-2xs border border-amber-400/40">
-                  OUT OF STOCK
+                  {portionsLeft === 0 ? 'SOLD OUT' : 'OUT OF STOCK'}
                 </span>
-              ) : product.availabilityMode === 'prebook_only' ? (
+              ) : product.availabilityMode === 'prebook_only' && !bookingClosed ? (
                 <span className="px-2 py-0.5 bg-gradient-to-r from-amber-700 to-amber-900 text-amber-200 font-bold text-[10px] uppercase tracking-wider rounded shadow-2xs flex items-center gap-1 border border-amber-500/50">
                   <Sparkles className="w-2.5 h-2.5 fill-amber-300 text-amber-300" />
                   PRE-BOOK ONLY
                 </span>
-              ) : product.festiveProduct ? (
+              ) : product.festiveProduct || product.availabilityMode === 'prebook_only' ? (
                 <span className="px-2 py-0.5 bg-amber-700 text-amber-100 font-bold text-[10px] uppercase tracking-wider rounded shadow-2xs flex items-center gap-1 border border-amber-600">
                   <Sparkles className="w-2.5 h-2.5 fill-amber-300 text-amber-300" />
                   UTSAV SPECIAL
@@ -220,7 +220,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, viewMode = 'g
             </h3>
             <div className="text-right shrink-0">
               <span className="text-amber-800 font-bold text-sm block">₹{product.price}</span>
-              {product.availabilityMode === 'prebook_only' && (
+              {product.availabilityMode === 'prebook_only' && !bookingClosed && (
                 <span className="text-[9px] font-bold text-amber-900 bg-amber-50 px-1 py-0.2 rounded border border-amber-200 block">
                   25% Adv: ₹{Math.round(product.price * 0.25)}
                 </span>
@@ -341,8 +341,8 @@ export const ProductCard: React.FC<ProductCardProps> = ({ product, viewMode = 'g
             </button>
           )}
 
-          {/* Portion indicator below Add button */}
-          {isServedHere && !isSoldOut && portionsLeft !== null && portionsLeft !== undefined && (
+          {/* Portion indicator below Add button (hidden when sold out or booking window is closed/not started) */}
+          {isServedHere && !isSoldOut && !isBookingBlocked && portionsLeft !== null && portionsLeft !== undefined && (
             <div className="mt-1 flex items-center justify-end gap-1">
               {portionsLeft <= 5 ? (
                 <span className="inline-flex items-center gap-0.5 text-[10px] font-bold text-amber-700 bg-amber-50/80 px-1 py-0.2 rounded">

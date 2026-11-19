@@ -1394,8 +1394,8 @@ class AppStorage {
       }
     }
 
-    // Generate auto-incrementing Order ID (e.g. SWADCLK-00016, SWADCLK-00017, ...)
-    let nextSeq = 16;
+    // Generate auto-incrementing Order ID (e.g. SWADCLK-00031, SWADCLK-00032, ...)
+    let nextSeq = 31;
     for (const o of this.orders) {
       if (o.orderId) {
         const match = o.orderId.match(/SWADCLK-#?(\d+)/i);

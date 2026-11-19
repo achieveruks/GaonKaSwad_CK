@@ -13,10 +13,11 @@ import {
   Sparkle,
 } from 'lucide-react';
 import {
-  fetchSwadCoinBalance,
-  fetchPendingRewards,
+  fetchSwadCoinBalanceWithStatus,
+  fetchPendingRewardsWithStatus,
   SwadCoinRewardItem,
 } from '../../lib/swadCoinService';
+import { useCustomer } from '../../context/CustomerContext';
 import { SwadSurpriseModal } from './SwadSurpriseModal';
 
 interface SwadCoinBalanceCardProps {
@@ -30,23 +31,29 @@ export const SwadCoinBalanceCard: React.FC<SwadCoinBalanceCardProps> = ({
   customerId,
   onBalanceUpdate,
 }) => {
+  const { openOtpModal } = useCustomer();
   const [balance, setBalance] = useState<number>(0);
   const [pendingRewards, setPendingRewards] = useState<SwadCoinRewardItem[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
+  const [needsSessionVerification, setNeedsSessionVerification] = useState<boolean>(false);
   const [showInfo, setShowInfo] = useState<boolean>(false);
   const [isSurpriseModalOpen, setIsSurpriseModalOpen] = useState<boolean>(false);
 
   const loadData = useCallback(async (quiet = false) => {
     if (!quiet) setIsLoading(true);
     try {
-      const [b, rewards] = await Promise.all([
-        fetchSwadCoinBalance(customerPhone, customerId),
-        fetchPendingRewards(customerPhone, customerId),
+      const [balanceRes, rewardsRes] = await Promise.all([
+        fetchSwadCoinBalanceWithStatus(customerPhone, customerId),
+        fetchPendingRewardsWithStatus(customerPhone, customerId),
       ]);
-      setBalance(b);
-      setPendingRewards(rewards);
-      if (onBalanceUpdate) onBalanceUpdate(b);
+      const isUnauthorized = balanceRes.unauthorized || rewardsRes.unauthorized;
+      setNeedsSessionVerification(isUnauthorized);
+      setBalance(balanceRes.balance);
+      setPendingRewards(rewardsRes.rewards);
+      if (!isUnauthorized && onBalanceUpdate) {
+        onBalanceUpdate(balanceRes.balance);
+      }
     } catch (err) {
       console.warn('Error loading Swad Coin data:', err);
     } finally {
@@ -122,6 +129,13 @@ export const SwadCoinBalanceCard: React.FC<SwadCoinBalanceCardProps> = ({
               <div className="flex items-baseline gap-2.5 mt-1">
                 {isLoading ? (
                   <div className="h-10 w-32 bg-white/10 animate-pulse rounded-xl" />
+                ) : needsSessionVerification ? (
+                  <div className="flex items-center gap-2 text-amber-200">
+                    <AlertCircle className="w-5 h-5 text-amber-400 shrink-0" />
+                    <span className="text-base sm:text-lg font-bold">
+                      Session sync required
+                    </span>
+                  </div>
                 ) : (
                   <>
                     <span className="text-3xl sm:text-4xl font-black font-heading text-amber-300 tracking-tight">
@@ -135,15 +149,41 @@ export const SwadCoinBalanceCard: React.FC<SwadCoinBalanceCardProps> = ({
               </div>
             </div>
 
-            <div className="sm:text-right">
-              <span className="inline-block px-3 py-1 bg-emerald-500/20 border border-emerald-400/30 text-emerald-300 text-xs font-bold rounded-xl shadow-2xs">
-                ≈ ₹{balance} Savings Value
-              </span>
-              <p className="text-[11px] text-amber-200/70 mt-1">
-                1 Coin = ₹1 Cash Discount
-              </p>
-            </div>
+            {needsSessionVerification ? (
+              <div className="sm:text-right">
+                <button
+                  type="button"
+                  onClick={() =>
+                    openOtpModal(customerPhone || '', 'signin', () => {
+                      setNeedsSessionVerification(false);
+                      loadData(true);
+                    })
+                  }
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-stone-950 text-xs font-black shadow-md transition-colors cursor-pointer"
+                >
+                  <ShieldCheck className="w-4 h-4" />
+                  <span>Verify &amp; Sync Wallet</span>
+                </button>
+              </div>
+            ) : (
+              <div className="sm:text-right">
+                <span className="inline-block px-3 py-1 bg-emerald-500/20 border border-emerald-400/30 text-emerald-300 text-xs font-bold rounded-xl shadow-2xs">
+                  ≈ ₹{balance} Savings Value
+                </span>
+                <p className="text-[11px] text-amber-200/70 mt-1">
+                  1 Coin = ₹1 Cash Discount
+                </p>
+              </div>
+            )}
           </div>
+
+          {needsSessionVerification && !isLoading && (
+            <div className="p-3 rounded-2xl bg-amber-500/15 border border-amber-400/30 text-xs text-amber-100/90 flex items-center justify-between gap-3">
+              <span>
+                Verify your mobile number once to unlock your Swad Coins balance &amp; surprise cards here.
+              </span>
+            </div>
+          )}
 
           {/* Value Chips: Adjusted with flexible width so full text displays */}
           <div className="flex items-center gap-2 text-[11px] text-amber-100/90">

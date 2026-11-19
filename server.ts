@@ -18,6 +18,7 @@ import {
   registerStaffProfileResolver,
   AUTH_COOKIE_NAME,
   AUTH_COOKIE_OPTIONS,
+  getAuthCookieOptions,
   AuthenticatedRequest,
 } from './server/auth';
 import { generateOTP, formatOtpString, hashOTPSync, isBetaMode } from './src/lib/otpUtils';
@@ -121,7 +122,7 @@ app.post('/api/auth/login', authLoginLimiter, (req, res) => {
     const token = createStaffToken({ email, role: 'owner' });
 
     // Set JWT in secure HttpOnly cookie
-    res.cookie(AUTH_COOKIE_NAME, token, AUTH_COOKIE_OPTIONS);
+    res.cookie(AUTH_COOKIE_NAME, token, getAuthCookieOptions(req));
 
     return res.json({
       success: true,
@@ -168,12 +169,11 @@ app.get('/api/auth/verify', (req, res) => {
 
 // 3. Auth: Logout
 app.post('/api/auth/logout', (req, res) => {
-  res.clearCookie(AUTH_COOKIE_NAME, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
-    path: '/',
-  });
+  const { maxAge: _maxAge, ...clearOpts } = getAuthCookieOptions(req);
+  res.clearCookie(AUTH_COOKIE_NAME, clearOpts);
+  if (clearOpts.sameSite === 'none') {
+    res.clearCookie(AUTH_COOKIE_NAME, { ...clearOpts, sameSite: 'lax' });
+  }
   return res.json({ success: true, message: 'Logged out successfully.' });
 });
 
@@ -591,7 +591,7 @@ app.post(['/api/auth/verify-otp', '/api/otp/verify'], otpRateLimiter, async (req
       phone: mappedCustomer.phone,
       name: mappedCustomer.fullName,
     });
-    res.cookie(AUTH_COOKIE_NAME, customerToken, AUTH_COOKIE_OPTIONS);
+    res.cookie(AUTH_COOKIE_NAME, customerToken, getAuthCookieOptions(req));
 
     return res.json({
       success: true,
@@ -1621,8 +1621,9 @@ app.get('/api/stats', requireOwnerAuth, async (req, res) => {
 });
 
 // 4. Products: List All (Optional: ?outletId=... & ?includeInactive=true)
-app.get('/api/products', (req, res) => {
+app.get('/api/products', async (req, res) => {
   try {
+    await syncClosedFestiveProductsToNormal();
     const includeInactiveParam = req.query.includeInactive === 'true';
     const outletId = typeof req.query.outletId === 'string' ? req.query.outletId : undefined;
     let includeInactive = false;
@@ -3845,7 +3846,7 @@ async function getNextServerOrderId(): Promise<string> {
         .limit(50),
     ]);
 
-    let maxNum = 15;
+    let maxNum = 30;
     const scanRef = (ref?: string | null) => {
       if (!ref) return;
       const match = String(ref).match(/SWADCLK-#?0*(\d+)/i);
@@ -3878,10 +3879,10 @@ async function getNextServerOrderId(): Promise<string> {
       }
     } catch {}
 
-    const nextSeq = Math.max(maxNum + 1, 16);
+    const nextSeq = Math.max(maxNum + 1, 31);
     return `SWADCLK-${String(nextSeq).padStart(5, '0')}`;
   } catch {
-    return 'SWADCLK-00016';
+    return 'SWADCLK-00031';
   }
 }
 
@@ -6023,6 +6024,7 @@ function computeProductionSummaryForEvent(
   });
 
   const bookedCountMap: Record<string, number> = {};
+  const bookedItemMetaMap: Record<string, any> = {};
   for (const order of confirmedOrders) {
     const items = Array.isArray(order.items) ? order.items : [];
     for (const item of items) {
@@ -6030,6 +6032,9 @@ function computeProductionSummaryForEvent(
       if (!pId) continue;
       const qty = Number(item.quantity || 1);
       bookedCountMap[pId] = (bookedCountMap[pId] || 0) + qty;
+      if (!bookedItemMetaMap[pId]) {
+        bookedItemMetaMap[pId] = item;
+      }
     }
   }
 
@@ -6037,8 +6042,10 @@ function computeProductionSummaryForEvent(
   let totalExtraBuffer = 0;
   let specialPackagingUnits = 0;
 
+  const seenProductIds = new Set<string>();
   const itemsSummary = outletFestiveProducts.map((p: any) => {
     const pId = String(p.id);
+    seenProductIds.add(pId);
     const booked = bookedCountMap[pId] || 0;
     totalBookedUnits += booked;
 
@@ -6082,6 +6089,33 @@ function computeProductionSummaryForEvent(
       inStock: inStockAtOutlet,
     };
   });
+
+  // Preserve already-booked prebook items in production summary even if product transitioned to normal (festive_event_id = null)
+  for (const [pId, booked] of Object.entries(bookedCountMap)) {
+    if (seenProductIds.has(pId) || booked <= 0) continue;
+    const meta = bookedItemMetaMap[pId] || {};
+    totalBookedUnits += booked;
+    const hasSpecialPkg = meta.specialPackaging !== false;
+    if (hasSpecialPkg) {
+      specialPackagingUnits += booked;
+    }
+    itemsSummary.push({
+      productId: pId,
+      productName: meta.name || meta.productName || meta.product?.name || 'Festive Dish',
+      hindiName: meta.hindiName || meta.product?.hindiName,
+      image: meta.image || meta.product?.image || '',
+      price: Number(meta.unitPrice || meta.price || 0),
+      availabilityMode: 'normal',
+      confirmedBookings: booked,
+      extraPlanned: 0,
+      totalPreparation: booked,
+      normalStockAvailable: 0,
+      specialPackaging: hasSpecialPkg,
+      maxBookingQuantity: null,
+      active: true,
+      inStock: false,
+    });
+  }
 
   return {
     festiveEventId: eventId,
@@ -6357,7 +6391,7 @@ app.post('/api/orders/:id/cancel-with-refund', requireOwnerAuth, async (req: Aut
           idempotentReplay: true,
           order: currentOrderRow ? mapDbOrderRow(currentOrderRow, replayCgRow, existingTx) : currentOrderRow,
           transaction: existingTx,
-          message: 'Cancellation and advance refund already recorded.',
+          message: 'Cancellation and refund already recorded.',
         });
       }
     }
@@ -6406,15 +6440,26 @@ app.post('/api/orders/:id/cancel-with-refund', requireOwnerAuth, async (req: Aut
       orderRow.order_type === 'prebook' ||
       orderRow.delivery_type === 'pb-scheduled' ||
       Boolean(orderRow.festive_event_id);
-    const currentPaid = Number(orderRow.paid_amount ?? orderRow.advance_amount ?? 0);
+    const rawPayStatus = String(orderRow.payment_status || '').toLowerCase().trim();
+    const isPaidOrPartialStatus = ['paid', 'partially_paid', 'partial', 'advance_paid'].includes(rawPayStatus);
+    const explicitPaid = Number(orderRow.paid_amount ?? orderRow.advance_amount ?? 0);
+    const totalOrderAmt = Number(orderRow.total_amount || 0);
+    const currentPaid =
+      explicitPaid > 0
+        ? explicitPaid
+        : isPaidOrPartialStatus
+          ? isPrebook && orderRow.payment_plan === 'advance_25'
+            ? Number(orderRow.advance_amount || 0)
+            : totalOrderAmt
+          : 0;
     const now = new Date().toISOString();
 
     let txRow: any = null;
     let nextPaidAmount = currentPaid;
     let nextPaymentStatus = orderRow.payment_status || 'pending';
 
-    // 2. If Pre-book order with paid advance/amount > 0, enforce neat pre-record refund validation
-    if (isPrebook && currentPaid > 0) {
+    // 2. If Pre-book or Instant order has paid / partial amount > 0, enforce structured refund ledger recording
+    if (currentPaid > 0) {
       const normalizedMethod = String(refundMethod || '').toLowerCase().trim();
       if (!ALLOWED_REFUND_METHODS.has(normalizedMethod)) {
         return res.status(400).json({
@@ -6498,16 +6543,18 @@ app.post('/api/orders/:id/cancel-with-refund', requireOwnerAuth, async (req: Aut
 
       txRow = insertedTx;
 
+      const refundAllocationType = isPrebook ? 'prebook_refund' : 'refund';
+
       try {
         await serverSupabase.from('payment_allocations').insert({
           payment_transaction_id: insertedTx.id,
           order_id: orderRow.id,
           allocated_amount: Number(parsedRefundAmount.toFixed(2)),
-          allocation_type: 'prebook_refund',
+          allocation_type: refundAllocationType,
           created_at: now,
         });
       } catch (allocErr) {
-        console.warn('Prebook refund allocation insert notice:', allocErr);
+        console.warn('Refund allocation insert notice:', allocErr);
       }
 
       productStorage.recordPaymentTransaction({
@@ -6529,7 +6576,7 @@ app.post('/api/orders/:id/cancel-with-refund', requireOwnerAuth, async (req: Aut
         paymentTransactionId: insertedTx.id,
         orderId: orderRow.id,
         allocatedAmount: Number(parsedRefundAmount.toFixed(2)),
-        allocationType: 'prebook_refund',
+        allocationType: refundAllocationType,
       });
 
       nextPaidAmount = Math.max(0, Number((currentPaid - parsedRefundAmount).toFixed(2)));
@@ -6642,7 +6689,9 @@ app.post('/api/orders/:id/cancel-with-refund', requireOwnerAuth, async (req: Aut
       transaction: txRow,
       swadCoinsRefunded,
       message: txRow
-        ? `Order cancelled and advance refund of ₹${txRow.amount} recorded.`
+        ? isPrebook
+          ? `Order cancelled and advance refund of ₹${txRow.amount} recorded.`
+          : `Order cancelled and refund of ₹${txRow.amount} recorded.`
         : 'Order cancelled successfully.',
     });
   } catch (err: any) {
@@ -6690,9 +6739,173 @@ function formatFestiveEventResponse(row: any) {
   };
 }
 
+let lastClosedFestiveSyncAt = 0;
+
+/**
+ * Idempotently transitions prebook_only products linked to closed/completed festive events
+ * into Normal Listing (availability_mode='normal', festive_event_id=null) with 0 portions (Sold Out),
+ * preserving festive_product=true so dishes remain visible under Utsav Specials until reopened.
+ * Safe to run repeatedly because already-converted ('normal') products are untouched.
+ */
+async function syncClosedFestiveProductsToNormal(force = false): Promise<{
+  updatedCount: number;
+  updatedProductIds: string[];
+}> {
+  const nowMs = Date.now();
+  if (!force && nowMs - lastClosedFestiveSyncAt < 15000) {
+    return { updatedCount: 0, updatedProductIds: [] };
+  }
+  lastClosedFestiveSyncAt = nowMs;
+
+  const updatedProductIds: string[] = [];
+  const nowIso = new Date(nowMs).toISOString();
+
+  try {
+    const { data: evRows, error: evErr } = await serverSupabase
+      .from('festive_events')
+      .select('id, status, booking_end_at');
+
+    if (evErr) {
+      console.warn('syncClosedFestiveProductsToNormal festive_events query error:', evErr);
+    }
+
+    if (!evErr && Array.isArray(evRows)) {
+      const closedEventIds = evRows
+        .filter((ev: any) => {
+          if (ev.status === 'completed') return true;
+          if (ev.status === 'active' && ev.booking_end_at) {
+            const endTime = new Date(ev.booking_end_at).getTime();
+            return !isNaN(endTime) && endTime < nowMs;
+          }
+          return false;
+        })
+        .map((ev: any) => String(ev.id));
+
+      if (closedEventIds.length > 0) {
+        const { data: targetProds, error: prodErr } = await serverSupabase
+          .from('products')
+          .select('id, outlets, availability_mode, festive_event_id')
+          .eq('availability_mode', 'prebook_only')
+          .in('festive_event_id', closedEventIds);
+
+        if (prodErr) {
+          console.warn('syncClosedFestiveProductsToNormal products query error:', prodErr);
+        }
+
+        if (!prodErr && Array.isArray(targetProds) && targetProds.length > 0) {
+          for (const prod of targetProds) {
+            const nextOutlets = Array.isArray(prod.outlets)
+              ? prod.outlets.map((o: any) => ({
+                  ...o,
+                  inStock: false,
+                  portionsLeft: 0,
+                }))
+              : [];
+
+            const { error: updErr } = await serverSupabase
+              .from('products')
+              .update({
+                availability_mode: 'normal',
+                festive_event_id: null,
+                festive_product: true,
+                max_booking_quantity: null,
+                outlets: nextOutlets,
+                updated_at: nowIso,
+              })
+              .eq('id', prod.id)
+              .eq('availability_mode', 'prebook_only');
+
+            if (updErr) {
+              console.warn('syncClosedFestiveProductsToNormal product update error:', prod.id, updErr);
+            } else {
+              updatedProductIds.push(String(prod.id));
+              try {
+                productStorage.updateProduct(prod.id, {
+                  availabilityMode: 'normal',
+                  festiveEventId: null,
+                  festiveProduct: true,
+                  maxBookingQuantity: null,
+                  inStock: false,
+                  outlets: nextOutlets,
+                });
+              } catch {}
+            }
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('syncClosedFestiveProductsToNormal Supabase notice:', err);
+  }
+
+  // Also keep in-memory fallback storage consistent
+  try {
+    const localEvents = productStorage.getFestiveEvents();
+    const closedLocalIds = new Set(
+      localEvents
+        .filter((ev: any) => {
+          if (ev.status === 'completed') return true;
+          if (ev.status === 'active' && ev.bookingEndAt) {
+            const endTime = new Date(ev.bookingEndAt).getTime();
+            return !isNaN(endTime) && endTime < nowMs;
+          }
+          return false;
+        })
+        .map((ev: any) => String(ev.id))
+    );
+
+    if (closedLocalIds.size > 0) {
+      const localProds = productStorage.getAllProducts(true);
+      for (const prod of localProds) {
+        if (
+          prod.availabilityMode === 'prebook_only' &&
+          prod.festiveEventId &&
+          closedLocalIds.has(String(prod.festiveEventId))
+        ) {
+          const nextOutlets = Array.isArray(prod.outlets)
+            ? prod.outlets.map((o: any) => ({
+                ...o,
+                inStock: false,
+                portionsLeft: 0,
+              }))
+            : [];
+          productStorage.updateProduct(prod.id, {
+            availabilityMode: 'normal',
+            festiveEventId: null,
+            festiveProduct: true,
+            maxBookingQuantity: null,
+            inStock: false,
+            outlets: nextOutlets,
+          });
+          if (!updatedProductIds.includes(String(prod.id))) {
+            updatedProductIds.push(String(prod.id));
+          }
+        }
+      }
+    }
+  } catch {}
+
+  return {
+    updatedCount: updatedProductIds.length,
+    updatedProductIds,
+  };
+}
+
+// Festive Events: Idempotent sync for pre-book dishes whose event deadline has closed
+app.post('/api/festive-events/sync-closed-products', async (_req, res) => {
+  try {
+    const result = await syncClosedFestiveProductsToNormal(true);
+    return res.json({ success: true, ...result });
+  } catch (err: any) {
+    console.error('Sync closed festive products error:', err);
+    return res.status(500).json({ success: false, error: 'Failed to sync closed festive products' });
+  }
+});
+
 // Festive Events: List all (Public / Outlet-scoped)
 app.get('/api/festive-events', async (req, res) => {
   try {
+    await syncClosedFestiveProductsToNormal();
     const outletId = req.query.outletId as string | undefined;
     const active = req.query.active === 'true' || req.query.status === 'active';
 
@@ -6726,6 +6939,7 @@ app.get('/api/festive-events', async (req, res) => {
 // Festive Events: Live Overview (Protected - Owner Multi-Outlet, Manager Strictly Outlet-Scoped)
 app.get('/api/festive-events/overview', requireOwnerAuth, async (req: AuthenticatedRequest, res) => {
   try {
+    await syncClosedFestiveProductsToNormal();
     const requestedOutletId = req.query.outletId as string | undefined;
     const access = await resolveStaffOutletAccess(req, requestedOutletId || null);
     if (!access.allowed) {

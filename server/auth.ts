@@ -20,6 +20,37 @@ export const AUTH_COOKIE_OPTIONS = {
   path: '/',
 };
 
+export function isHttpsRequest(req?: Request): boolean {
+  if (!req) return process.env.NODE_ENV === 'production';
+  const forwardedProto = String(req.headers?.['x-forwarded-proto'] || '')
+    .split(',')[0]
+    .trim()
+    .toLowerCase();
+  return Boolean(req.secure || forwardedProto === 'https' || req.protocol === 'https');
+}
+
+export function getAuthCookieOptions(req?: Request) {
+  const isHttps = isHttpsRequest(req);
+  const rawHost = String(req?.headers?.['x-forwarded-host'] || req?.headers?.host || '').toLowerCase();
+  const originOrReferer = String(req?.headers?.origin || req?.headers?.referer || '').toLowerCase();
+  const isFirstPartySwadClick =
+    rawHost === 'swadclick.com' ||
+    rawHost.endsWith('.swadclick.com') ||
+    originOrReferer.includes('://swadclick.com') ||
+    originOrReferer.includes('://www.swadclick.com');
+  const isLocalHttp = !isHttps && (rawHost.includes('localhost') || rawHost.includes('127.0.0.1'));
+  // Keep SameSite=Lax on first-party swadclick.com and local HTTP; use SameSite=None on HTTPS iframe previews
+  const useSameSiteNone = isHttps && !isLocalHttp && !isFirstPartySwadClick;
+
+  return {
+    httpOnly: true,
+    secure: isHttps || process.env.NODE_ENV === 'production',
+    sameSite: (useSameSiteNone ? 'none' : 'lax') as 'none' | 'lax',
+    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days in milliseconds
+    path: '/',
+  };
+}
+
 export interface TokenPayload {
   id?: string;
   email?: string;
@@ -112,15 +143,18 @@ export function createSessionToken(email: string, role: 'owner' | 'manager' = 'o
  * Extracts authentication token from HttpOnly cookie or Authorization header
  */
 export function extractAuthToken(req: Request): string | null {
-  // 1. Primary: Secure HttpOnly cookie
-  if (req.cookies && req.cookies[AUTH_COOKIE_NAME]) {
-    return req.cookies[AUTH_COOKIE_NAME];
-  }
-
-  // 2. Fallback: Authorization header (Bearer <token>)
+  // 1. Explicit Authorization header (Bearer <token>) - essential in cross-site iframes where cookies are blocked
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith('Bearer ')) {
-    return authHeader.split(' ')[1];
+    const bearerToken = authHeader.slice(7).trim();
+    if (bearerToken && bearerToken !== 'null' && bearerToken !== 'undefined') {
+      return bearerToken;
+    }
+  }
+
+  // 2. Primary first-party session: Secure HttpOnly cookie
+  if (req.cookies && req.cookies[AUTH_COOKIE_NAME]) {
+    return req.cookies[AUTH_COOKIE_NAME];
   }
 
   return null;

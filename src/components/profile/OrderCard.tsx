@@ -185,18 +185,28 @@ export const OrderCard: React.FC<OrderCardProps> = ({
   const parentRef =
     order.checkoutReference ||
     (order.checkoutGroupId && /(-I|-PB|_PB)$/i.test(rawId) ? rawId.replace(/(-I|-PB|_PB)$/i, '') : '');
-  const paidAmt = Number(
-    order.paidAmount ??
-      (order as any).paid_amount ??
-      (isPrebook && order.paymentPlan === 'advance_25'
-        ? order.advanceAmount || 0
-        : order.total || 0)
-  );
+  const rawPayStatus = String(
+    order.paymentStatus ?? (order as any).payment_status ?? ''
+  )
+    .toLowerCase()
+    .trim();
+  const isPaidOrPartialStatus = ['paid', 'partially_paid', 'partial', 'advance_paid'].includes(rawPayStatus);
+  const explicitPaid = Number(order.paidAmount ?? (order as any).paid_amount ?? 0);
+  const totalOrderAmt = Number(order.total || 0);
+  const paidAmt =
+    explicitPaid > 0
+      ? explicitPaid
+      : isPaidOrPartialStatus
+        ? isPrebook && order.paymentPlan === 'advance_25'
+          ? Number(order.advanceAmount || 0)
+          : totalOrderAmt
+        : 0;
   const balanceAmt = Number(
     order.balanceAmount ??
       (order as any).balance_amount ??
-      Math.max(0, Number(order.total || 0) - paidAmt)
+      Math.max(0, totalOrderAmt - paidAmt)
   );
+  const isRefunded = rawPayStatus === 'refunded' || Boolean(order.refundDetails);
   const festivalDeliveryDisplay = order.festivalDeliveryAt
     ? new Date(order.festivalDeliveryAt).toLocaleDateString('en-IN', {
         day: 'numeric',
@@ -322,19 +332,38 @@ export const OrderCard: React.FC<OrderCardProps> = ({
 
       {/* Footer: Total Paid (2 lines) on left, View Details and Reorder to its right-hand side */}
       <div className="pt-3 border-t border-stone-100 flex flex-nowrap items-center justify-between gap-3">
-        {/* Total / Paid / Balance in tabular numerals */}
+        {/* Total / Paid / Balance / Refunded in tabular numerals */}
         <div className="flex flex-col justify-center shrink-0 tabular-nums">
           <span className="text-[10px] text-stone-400 uppercase tracking-wider font-semibold leading-tight whitespace-nowrap">
-            {balanceAmt > 0 ? 'Paid / Balance:' : 'Total Paid:'}
+            {isCancelled && isRefunded
+              ? 'Refunded:'
+              : balanceAmt > 0
+                ? 'Paid / Balance:'
+                : 'Total Paid:'}
           </span>
           <div className="flex items-baseline gap-2 whitespace-nowrap">
-            <span className="text-base font-extrabold text-stone-900 font-serif leading-tight">
-              ₹{Number(balanceAmt > 0 ? paidAmt : order.total || 0).toFixed(0)}
-            </span>
-            {balanceAmt > 0 && (
-              <span className="text-xs font-bold text-amber-900">
-                · Due ₹{balanceAmt.toFixed(0)}
-              </span>
+            {isCancelled && isRefunded ? (
+              <>
+                <span className="text-base font-extrabold text-purple-900 font-serif leading-tight">
+                  ₹{Number(order.refundDetails?.amount ?? paidAmt ?? order.total ?? 0).toFixed(0)}
+                </span>
+                {order.refundDetails?.paymentMethod && (
+                  <span className="text-xs font-semibold text-purple-700">
+                    via {String(order.refundDetails.paymentMethod).replace('_', ' ').toUpperCase()}
+                  </span>
+                )}
+              </>
+            ) : (
+              <>
+                <span className="text-base font-extrabold text-stone-900 font-serif leading-tight">
+                  ₹{Number(balanceAmt > 0 ? paidAmt : order.total || 0).toFixed(0)}
+                </span>
+                {balanceAmt > 0 && (
+                  <span className="text-xs font-bold text-amber-900">
+                    · Due ₹{balanceAmt.toFixed(0)}
+                  </span>
+                )}
+              </>
             )}
           </div>
         </div>

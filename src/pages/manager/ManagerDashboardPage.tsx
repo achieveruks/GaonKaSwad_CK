@@ -33,7 +33,6 @@ import {
   CheckCircle2,
   XCircle,
   LogOut,
-  ExternalLink,
   Plus,
   Search,
   Check,
@@ -52,6 +51,7 @@ import {
   Layers,
   ShoppingBag,
   KeyRound,
+  Menu,
 } from 'lucide-react';
 
 import { ManagerOrdersTab } from './ManagerOrdersTab';
@@ -80,6 +80,7 @@ export const ManagerDashboardPage: React.FC = () => {
 
   // Active Tab: 'orders' (Received orders & live kitchen queue), 'kitchen' (Menu & branch settings), 'delivery-zones', or 'utsav'
   const [activeTab, setActiveTab] = useState<'orders' | 'kitchen' | 'delivery-zones' | 'utsav'>('orders');
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const [outlets, setOutlets] = useState<Outlet[]>([]);
   const [zones, setZones] = useState<DeliveryZone[]>([]);
@@ -802,40 +803,40 @@ export const ManagerDashboardPage: React.FC = () => {
       {/* Top Navbar */}
       <header className="bg-stone-900 text-white border-b border-stone-800 sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
+          <div className="flex items-center justify-between gap-3 h-16">
             {/* Brand Logo & Manager Badge */}
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-lg bg-amber-800 flex items-center justify-center text-white font-black text-sm shadow-2xs">
+            <div className="flex items-center gap-2.5 shrink-0 min-w-0">
+              <div className="w-8 h-8 rounded-lg bg-amber-800 flex items-center justify-center text-white font-black text-sm shadow-2xs shrink-0">
                 S
               </div>
-              <div>
-                <div className="flex items-center gap-1.5">
-                  <span className="font-extrabold text-sm tracking-tight text-white font-heading">
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5 flex-nowrap">
+                  <span className="font-extrabold text-sm tracking-tight text-white font-heading whitespace-nowrap">
                     Swad Click
                   </span>
-                  <span className="text-[10px] font-bold px-1.5 py-0.2 rounded uppercase border bg-blue-950 text-blue-400 border-blue-800">
+                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded uppercase border bg-blue-950 text-blue-400 border-blue-800 whitespace-nowrap shrink-0">
                     Outlet Manager
                   </span>
                 </div>
-                <p className="text-[10px] text-stone-400">
+                <p className="text-[10px] text-stone-400 truncate max-w-[190px]">
                   {currentOutlet ? `Kitchen: ${currentOutlet.name}` : 'Kitchen Branch Portal'}
                 </p>
               </div>
             </div>
 
-            {/* Manager Navigation Options: "Kitchen Orders", "Menu & Kitchen", and "Delivery Zones & PINs" */}
-            <nav className="flex items-center gap-1.5 overflow-x-auto">
+            {/* Desktop Navigation Options (xl+): Single-row segmented bar without scrollbar */}
+            <nav className="hidden xl:flex items-center gap-1 bg-stone-800/70 p-1 rounded-xl border border-stone-800 shrink-0">
               <button
                 type="button"
                 id="manager-nav-orders"
                 onClick={() => setActiveTab('orders')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
                   activeTab === 'orders'
                     ? 'bg-amber-800 text-white shadow-2xs'
                     : 'text-stone-300 hover:text-white hover:bg-stone-800'
                 }`}
               >
-                <ShoppingBag className="w-3.5 h-3.5" />
+                <ShoppingBag className="w-3.5 h-3.5 shrink-0" />
                 <span>Kitchen Orders</span>
               </button>
 
@@ -843,13 +844,13 @@ export const ManagerDashboardPage: React.FC = () => {
                 type="button"
                 id="manager-nav-dashboard"
                 onClick={() => setActiveTab('kitchen')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
                   activeTab === 'kitchen'
                     ? 'bg-amber-800 text-white shadow-2xs'
                     : 'text-stone-300 hover:text-white hover:bg-stone-800'
                 }`}
               >
-                <Store className="w-3.5 h-3.5" />
+                <UtensilsCrossed className="w-3.5 h-3.5 shrink-0" />
                 <span>Menu & Kitchen</span>
               </button>
 
@@ -857,13 +858,13 @@ export const ManagerDashboardPage: React.FC = () => {
                 type="button"
                 id="manager-nav-delivery-zones"
                 onClick={() => setActiveTab('delivery-zones')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
                   activeTab === 'delivery-zones'
                     ? 'bg-amber-800 text-white shadow-2xs'
                     : 'text-stone-300 hover:text-white hover:bg-stone-800'
                 }`}
               >
-                <MapPin className="w-3.5 h-3.5" />
+                <MapPin className="w-3.5 h-3.5 shrink-0" />
                 <span>Delivery Zones & PINs</span>
               </button>
 
@@ -871,56 +872,236 @@ export const ManagerDashboardPage: React.FC = () => {
                 type="button"
                 id="manager-nav-utsav"
                 onClick={() => setActiveTab('utsav')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
                   activeTab === 'utsav'
                     ? 'bg-amber-800 text-white shadow-2xs'
                     : 'text-stone-300 hover:text-white hover:bg-stone-800'
                 }`}
               >
-                <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
                 <span>Utsav Production</span>
               </button>
             </nav>
 
-            {/* Right Controls: View Live Storefront and Logout */}
-            <div className="flex items-center gap-2 sm:gap-3">
+            {/* Right Controls (Tablet & Desktop): View Live Storefront, User, Password & Logout */}
+            <div className="hidden md:flex items-center gap-2 shrink-0">
               <button
                 type="button"
                 onClick={goToHome}
-                className="hidden sm:flex items-center gap-1 text-xs text-stone-300 hover:text-white bg-stone-800 hover:bg-stone-700 px-2.5 py-1.5 rounded-lg border border-stone-700 transition-colors cursor-pointer"
-                title="View customer-facing storefront"
+                className="flex items-center justify-center text-xs text-stone-300 hover:text-white bg-stone-800 hover:bg-stone-700 px-2.5 py-1.5 rounded-lg border border-stone-700 transition-colors cursor-pointer shrink-0"
+                title="View Live Storefront"
+                aria-label="View Live Storefront"
               >
-                <ExternalLink className="w-3 h-3 text-stone-400" />
-                <span>Live Storefront</span>
+                <Store className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
               </button>
 
-              <div className="h-4 w-px bg-stone-800 hidden sm:block" />
+              <div className="h-4 w-px bg-stone-800" />
 
               <div className="flex items-center gap-2 text-xs text-stone-300">
-                <span className="text-[11px] font-medium text-stone-200 hidden md:inline truncate max-w-[140px]">
-                  {ownerUser?.name || ownerUser?.email || 'manager@swadclick.com'}
-                </span>
+                <div
+                  className="flex flex-col text-right min-w-0 max-w-[120px] 2xl:max-w-[150px]"
+                  title={ownerUser?.email || ownerUser?.name || ''}
+                >
+                  <span className="text-[11px] font-medium text-stone-200 truncate">
+                    {ownerUser?.name || ownerUser?.email || 'manager@swadclick.com'}
+                  </span>
+                  <span className="text-[9px] text-stone-400 flex items-center justify-end gap-1 whitespace-nowrap">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
+                    <span>Supabase Auth</span>
+                  </span>
+                </div>
                 <button
                   type="button"
                   onClick={() => setIsChangePasswordOpen(true)}
-                  className="flex items-center gap-1 text-xs text-stone-300 hover:text-white bg-stone-800 hover:bg-stone-700 px-2.5 py-1.5 rounded-lg border border-stone-700 transition-colors cursor-pointer"
+                  className="flex items-center gap-1.5 text-xs text-stone-300 hover:text-white bg-stone-800 hover:bg-stone-700 px-2.5 py-1.5 rounded-lg border border-stone-700 transition-colors cursor-pointer whitespace-nowrap"
                   title="Change your account password"
+                  aria-label="Change Password"
                 >
-                  <KeyRound className="w-3.5 h-3.5 text-amber-400" />
-                  <span className="hidden sm:inline">Change Password</span>
+                  <KeyRound className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                  <span className="xl:hidden">Change Password</span>
                 </button>
                 <button
                   type="button"
                   id="manager-logout-btn"
                   onClick={handleLogout}
-                  className="flex items-center gap-1 text-xs text-rose-400 hover:text-rose-300 hover:bg-rose-950/40 px-2.5 py-1.5 rounded-lg border border-rose-900/50 transition-colors cursor-pointer"
+                  className="flex items-center gap-1 text-xs text-rose-400 hover:text-rose-300 hover:bg-rose-950/40 px-2.5 py-1.5 rounded-lg border border-rose-900/50 transition-colors cursor-pointer whitespace-nowrap"
                 >
-                  <LogOut className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Logout</span>
+                  <LogOut className="w-3.5 h-3.5 shrink-0" />
+                  <span>Logout</span>
                 </button>
               </div>
             </div>
+
+            {/* Mobile Menu Toggle (< md) */}
+            <div className="flex md:hidden items-center shrink-0">
+              <button
+                type="button"
+                onClick={() => setMobileMenuOpen((prev) => !prev)}
+                className="p-2 text-stone-300 hover:text-white hover:bg-stone-800 rounded-lg transition-colors cursor-pointer"
+                aria-label="Toggle navigation menu"
+              >
+                {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+              </button>
+            </div>
           </div>
+
+          {/* Tablet / Compact Desktop Secondary Nav Strip (md..xl): No scrollbar */}
+          <nav className="hidden md:flex xl:hidden items-center gap-1.5 py-2 border-t border-stone-800/80 flex-wrap">
+            <button
+              type="button"
+              onClick={() => setActiveTab('orders')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
+                activeTab === 'orders'
+                  ? 'bg-amber-800 text-white shadow-2xs'
+                  : 'text-stone-300 hover:text-white hover:bg-stone-800'
+              }`}
+            >
+              <ShoppingBag className="w-3.5 h-3.5 shrink-0" />
+              <span>Kitchen Orders</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('kitchen')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
+                activeTab === 'kitchen'
+                  ? 'bg-amber-800 text-white shadow-2xs'
+                  : 'text-stone-300 hover:text-white hover:bg-stone-800'
+              }`}
+            >
+              <UtensilsCrossed className="w-3.5 h-3.5 shrink-0" />
+              <span>Menu & Kitchen</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('delivery-zones')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
+                activeTab === 'delivery-zones'
+                  ? 'bg-amber-800 text-white shadow-2xs'
+                  : 'text-stone-300 hover:text-white hover:bg-stone-800'
+              }`}
+            >
+              <MapPin className="w-3.5 h-3.5 shrink-0" />
+              <span>Delivery Zones & PINs</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('utsav')}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer whitespace-nowrap ${
+                activeTab === 'utsav'
+                  ? 'bg-amber-800 text-white shadow-2xs'
+                  : 'text-stone-300 hover:text-white hover:bg-stone-800'
+              }`}
+            >
+              <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              <span>Utsav Production</span>
+            </button>
+          </nav>
+
+          {/* Mobile Dropdown Menu (< md) */}
+          {mobileMenuOpen && (
+            <div className="md:hidden py-3 border-t border-stone-800 space-y-1.5">
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveTab('orders');
+                  setMobileMenuOpen(false);
+                }}
+                className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold cursor-pointer ${
+                  activeTab === 'orders' ? 'bg-amber-800 text-white' : 'text-stone-300 hover:bg-stone-800'
+                }`}
+              >
+                <ShoppingBag className="w-4 h-4 shrink-0" />
+                <span>Kitchen Orders</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveTab('kitchen');
+                  setMobileMenuOpen(false);
+                }}
+                className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold cursor-pointer ${
+                  activeTab === 'kitchen' ? 'bg-amber-800 text-white' : 'text-stone-300 hover:bg-stone-800'
+                }`}
+              >
+                <UtensilsCrossed className="w-4 h-4 shrink-0" />
+                <span>Menu & Kitchen</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveTab('delivery-zones');
+                  setMobileMenuOpen(false);
+                }}
+                className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold cursor-pointer ${
+                  activeTab === 'delivery-zones' ? 'bg-amber-800 text-white' : 'text-stone-300 hover:bg-stone-800'
+                }`}
+              >
+                <MapPin className="w-4 h-4 shrink-0" />
+                <span>Delivery Zones & PINs</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveTab('utsav');
+                  setMobileMenuOpen(false);
+                }}
+                className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold cursor-pointer ${
+                  activeTab === 'utsav' ? 'bg-amber-800 text-white' : 'text-stone-300 hover:bg-stone-800'
+                }`}
+              >
+                <Sparkles className="w-4 h-4 text-amber-400 shrink-0" />
+                <span>Utsav Production</span>
+              </button>
+
+              <div className="pt-2 mt-2 border-t border-stone-800 space-y-1.5">
+                <div className="px-3 py-1 text-[11px] text-stone-400 truncate">
+                  Signed in as {ownerUser?.name || ownerUser?.email || 'manager@swadclick.com'}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    goToHome();
+                    setMobileMenuOpen(false);
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-stone-300 hover:bg-stone-800 cursor-pointer"
+                >
+                  <Store className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span>View Live Storefront</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsChangePasswordOpen(true);
+                    setMobileMenuOpen(false);
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-stone-300 hover:bg-stone-800 cursor-pointer"
+                >
+                  <KeyRound className="w-4 h-4 text-amber-400 shrink-0" />
+                  <span>Change Password</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    handleLogout();
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold text-rose-400 hover:bg-rose-950/40 cursor-pointer"
+                >
+                  <LogOut className="w-4 h-4 shrink-0" />
+                  <span>Logout</span>
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </header>
 

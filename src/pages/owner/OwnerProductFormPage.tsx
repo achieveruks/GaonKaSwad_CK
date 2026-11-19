@@ -5,7 +5,7 @@ import { useNavigation } from '../../context/NavigationContext';
 import { useAuth } from '../../context/AuthContext';
 import { Product, Outlet, ProductOutletConfig, FestiveEvent } from '../../types';
 import { getOutlets } from '../../lib/locationService';
-import { getFestiveEvents } from '../../lib/festiveService';
+import { getFestiveEvents, syncClosedFestiveProducts } from '../../lib/festiveService';
 import { getCulinaryHighlights, CATEGORY_CULINARY_DEFAULTS, normalizeCategorySlug } from '../../utils/culinaryHighlights';
 import {
   ArrowLeft,
@@ -51,7 +51,7 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
   mode,
   productId,
 }) => {
-  const { allProducts, addProduct, editProduct, categories, isLoading: productsLoading } = useProducts();
+  const { allProducts, addProduct, editProduct, refreshProducts, categories, isLoading: productsLoading } = useProducts();
   const { goToOwnerProducts } = useNavigation();
   const { token } = useAuth();
 
@@ -106,9 +106,11 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [externalUpdateDetected, setExternalUpdateDetected] = useState(false);
+  const [autoTransitionNotice, setAutoTransitionNotice] = useState<string | null>(null);
 
   const hydratedTargetKeyRef = useRef<string | null>(null);
   const hydratedSnapshotRef = useRef<string | null>(null);
+  const closedSyncTriggeredRef = useRef<string | null>(null);
   const targetKey = mode === 'edit' ? `edit:${String(productId || '')}` : 'new';
 
   // Fetch Outlets
@@ -127,18 +129,28 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
     fetchAllOutlets();
   }, [token]);
 
-  // Fetch Festive Events for Dropdown
+  // Fetch Festive Events for Dropdown & sync any closed pre-book dishes cleanly
   useEffect(() => {
+    let active = true;
     const fetchFestiveEvents = async () => {
       try {
+        const syncRes = await syncClosedFestiveProducts();
+        if (active && syncRes.updatedCount > 0) {
+          await refreshProducts({ skipReviews: true });
+        }
         const evs = await getFestiveEvents(undefined, false, token || undefined);
-        setAvailableFestiveEvents(evs);
+        if (active) {
+          setAvailableFestiveEvents(evs);
+        }
       } catch (err) {
         console.warn('Failed to load festive events in product form:', err);
       }
     };
     fetchFestiveEvents();
-  }, [token]);
+    return () => {
+      active = false;
+    };
+  }, [token, refreshProducts]);
 
   // Auto-generate slug when creating a new product (unless manually customized)
   const handleNameChange = (val: string) => {
@@ -233,9 +245,71 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
   useEffect(() => {
     hydratedTargetKeyRef.current = null;
     hydratedSnapshotRef.current = null;
+    closedSyncTriggeredRef.current = null;
     setHasUnsavedChanges(false);
     setExternalUpdateDetected(false);
+    setAutoTransitionNotice(null);
   }, [targetKey]);
+
+  // Auto-transition product on edit page if pre-booking has closed for its linked festive event
+  useEffect(() => {
+    if (mode !== 'edit' || !productId || availableFestiveEvents.length === 0 || availableOutlets.length === 0) return;
+    if (closedSyncTriggeredRef.current === targetKey) return;
+    const found = allProducts.find((p) => String(p.id) === String(productId));
+    if (!found || found.availabilityMode !== 'prebook_only' || !found.festiveEventId) return;
+
+    const linkedEv = availableFestiveEvents.find((e) => String(e.id) === String(found.festiveEventId));
+    if (!linkedEv) return;
+
+    const nowMs = Date.now();
+    const isClosed =
+      linkedEv.status === 'completed' ||
+      (linkedEv.status === 'active' &&
+        Boolean(linkedEv.bookingEndAt) &&
+        new Date(linkedEv.bookingEndAt).getTime() < nowMs);
+    if (!isClosed) return;
+
+    closedSyncTriggeredRef.current = targetKey;
+    let active = true;
+
+    (async () => {
+      const syncRes = await syncClosedFestiveProducts();
+      if (!active) return;
+
+      if (syncRes.updatedCount > 0) {
+        await refreshProducts({ skipReviews: true });
+      }
+
+      if (!hasUnsavedChanges) {
+        setFestiveEventId('');
+        setAvailabilityMode('normal');
+        setMaxBookingQuantity('');
+        setFestiveProduct(true);
+        setOutletConfigs((prev) => {
+          const next = { ...prev };
+          for (const oid of Object.keys(next)) {
+            if (next[oid]?.isAssigned) {
+              next[oid] = { ...next[oid], portionsLeft: 0, inStock: false };
+            }
+          }
+          return next;
+        });
+        hydratedSnapshotRef.current = JSON.stringify({
+          price: found.price,
+          active: found.active,
+          outlets: (found.outlets || []).map((o) => ({ ...o, portionsLeft: 0, inStock: false })),
+        });
+        setExternalUpdateDetected(false);
+        setAutoTransitionNotice(
+          `Pre-booking for "${linkedEv.name}" has closed. Switched to Normal Listing with 0 portions (Sold Out) — set portions on the Festival Date when ready.`
+        );
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
+  }, [mode, productId, targetKey, allProducts, availableFestiveEvents, availableOutlets, hasUnsavedChanges, refreshProducts]);
 
   // Populate data once per product/new target; never overwrite unsaved edits on background sync
   useEffect(() => {
@@ -513,6 +587,16 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
           <div>
             <p className="font-bold">Success!</p>
             <p className="text-[11px] text-emerald-700 mt-0.5">{successMessage}</p>
+          </div>
+        </div>
+      )}
+
+      {autoTransitionNotice && (
+        <div className="p-3.5 bg-amber-50 border border-amber-300 rounded-xl flex items-start gap-2.5 text-amber-950 text-xs">
+          <Sparkles className="w-4 h-4 shrink-0 text-amber-700 mt-0.5" />
+          <div>
+            <p className="font-bold">Festive Pre-Booking Window Closed — Auto-Transitioned</p>
+            <p className="text-[11px] text-amber-900 mt-0.5">{autoTransitionNotice}</p>
           </div>
         </div>
       )}
@@ -804,6 +888,8 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
                                     updateOutletField(outlet.id, 'portionsLeft', count);
                                     if (count === 0) {
                                       updateOutletField(outlet.id, 'inStock', false);
+                                    } else if (count !== null && count > 0 && cfg.portionsLeft === 0 && !cfg.inStock) {
+                                      updateOutletField(outlet.id, 'inStock', true);
                                     }
                                   }}
                                   className="w-12 text-center text-xs font-extrabold text-stone-900 bg-stone-50 border border-stone-200 rounded px-1 py-0.5 focus:bg-white focus:outline-none focus:ring-1 focus:ring-amber-500"
@@ -1100,10 +1186,25 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
                     value={festiveEventId}
                     onChange={(e) => {
                       const val = e.target.value;
+                      const wasPrebook = availabilityMode === 'prebook_only';
                       setFestiveEventId(val);
                       if (val) {
                         setFestiveProduct(true);
                         setSpecialPackaging(true);
+                      } else {
+                        setAvailabilityMode('normal');
+                        setMaxBookingQuantity('');
+                        if (wasPrebook) {
+                          setOutletConfigs((prev) => {
+                            const next = { ...prev };
+                            for (const oid of Object.keys(next)) {
+                              if (next[oid]?.isAssigned) {
+                                next[oid] = { ...next[oid], portionsLeft: 0, inStock: false };
+                              }
+                            }
+                            return next;
+                          });
+                        }
                       }
                     }}
                     className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-xs text-gray-900 font-medium focus:outline-none focus:border-amber-700 focus:bg-white cursor-pointer"
@@ -1115,6 +1216,11 @@ export const OwnerProductFormPage: React.FC<OwnerProductFormPageProps> = ({
                       </option>
                     ))}
                   </select>
+                  {!festiveEventId && (
+                    <p className="text-[10px] text-stone-500 mt-1 leading-relaxed">
+                      Normal Listing active. Set outlet portions to <strong>0</strong> to hold as <strong>Sold Out</strong> until Festival Day, then increase portions for instant orders. Keep <strong>Mark as Festive Dish</strong> checked below if it should still appear in Utsav Specials.
+                    </p>
+                  )}
                 </div>
 
                 {/* Availability Mode */}

@@ -22,6 +22,7 @@ import {
   fetchActiveFestiveEventsForOutlet,
 } from '../lib/supabaseService';
 import { getAboutByOutletId } from '../lib/aboutService';
+import { syncClosedFestiveProducts } from '../lib/festiveService';
 import { OutletAbout, Coupon, FestiveEvent } from '../types';
 import {
   Flame,
@@ -47,7 +48,7 @@ import { motion, AnimatePresence } from 'motion/react';
 export const HomePage: React.FC = () => {
   const { goToShop, goToProduct, goToCategories, goToAbout } = useNavigation();
   const { addToCart } = useCart();
-  const { activeProducts, outletProducts, bestsellerProducts, chefSignatures, categories } = useProducts();
+  const { activeProducts, outletProducts, bestsellerProducts, chefSignatures, categories, refreshProducts } = useProducts();
   const { currentZone, currentOutlet, selectedLocation, outlets } = useLocation();
 
   const deliveryTime =
@@ -145,8 +146,19 @@ export const HomePage: React.FC = () => {
     // 2b. Fetch active festive events enabled for this outlet
     fetchActiveFestiveEventsForOutlet(outletId)
       .then((events) => {
-        if (isMounted) {
-          setFestiveEvents(Array.isArray(events) ? events : []);
+        if (!isMounted) return;
+        const list = Array.isArray(events) ? events : [];
+        setFestiveEvents(list);
+        const nowMs = Date.now();
+        const hasClosedActiveEvent = list.some(
+          (ev) => ev.status === 'active' && ev.bookingEndAt && new Date(ev.bookingEndAt).getTime() < nowMs
+        );
+        if (hasClosedActiveEvent) {
+          syncClosedFestiveProducts().then((res) => {
+            if (isMounted && res.updatedCount > 0) {
+              refreshProducts({ skipReviews: true });
+            }
+          });
         }
       })
       .catch((err) => {
@@ -468,6 +480,7 @@ export const HomePage: React.FC = () => {
                     const endMs = ev.bookingEndAt ? new Date(ev.bookingEndAt).getTime() : Infinity;
                     const isOpen = ev.status === 'active' && nowMs >= startMs && nowMs <= endMs;
                     const notStarted = nowMs < startMs;
+                    const isClosed = !isOpen && !notStarted;
                     const festDateFormatted = ev.festivalDate
                       ? new Date(ev.festivalDate).toLocaleDateString('en-IN', {
                           day: 'numeric',
@@ -537,10 +550,17 @@ export const HomePage: React.FC = () => {
                                 Festival: {festDateFormatted}
                               </span>
                             )}
-                            <span className="inline-flex items-center gap-1 text-amber-900">
-                              <PackageCheck className="w-3 h-3 text-amber-700" />
-                              25% Advance Available
-                            </span>
+                            {isClosed ? (
+                              <span className="inline-flex items-center gap-1 text-amber-900 font-semibold">
+                                <Sparkles className="w-3 h-3 text-amber-700 shrink-0" />
+                                If you missed pre-book, order on Festival date
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 text-amber-900">
+                                <PackageCheck className="w-3 h-3 text-amber-700" />
+                                25% Advance Available
+                              </span>
+                            )}
                           </div>
                         </div>
                         <ArrowRight className="w-4 h-4 text-amber-800 shrink-0 group-hover:translate-x-0.5 transition-transform" />

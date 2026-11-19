@@ -281,4 +281,31 @@ export async function updateFestiveProductStock(
   return json;
 }
 
+/**
+ * Idempotently sync pre-book dishes whose festive event deadline has passed
+ * into Normal Listing with 0 portions (Sold Out) while keeping festiveProduct flag intact.
+ */
+export async function syncClosedFestiveProducts(): Promise<{
+  success: boolean;
+  updatedCount: number;
+  updatedProductIds: string[];
+}> {
+  try {
+    const res = await fetch(`${API_BASE}/festive-events/sync-closed-products`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    if (res.ok) {
+      const json = await res.json();
+      return {
+        success: !!json.success,
+        updatedCount: Number(json.updatedCount || 0),
+        updatedProductIds: Array.isArray(json.updatedProductIds) ? json.updatedProductIds : [],
+      };
+    }
+  } catch (err) {
+    console.warn('Closed festive product sync notice:', err);
+  }
+  return { success: false, updatedCount: 0, updatedProductIds: [] };
+}
 

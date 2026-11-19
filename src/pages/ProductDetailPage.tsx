@@ -200,6 +200,19 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
 
   const maxAvailableQuantity = portionsLeft !== null && portionsLeft !== undefined ? portionsLeft : 99;
 
+  const isPrebookOnly = product.availabilityMode === 'prebook_only';
+  const nowMs = Date.now();
+  const bookingNotOpenYet = Boolean(
+    isPrebookOnly && festiveEvent?.bookingStartAt && new Date(festiveEvent.bookingStartAt).getTime() > nowMs
+  );
+  const bookingClosed = Boolean(
+    isPrebookOnly &&
+      festiveEvent &&
+      (festiveEvent.status !== 'active' ||
+        (festiveEvent.bookingEndAt && new Date(festiveEvent.bookingEndAt).getTime() < nowMs))
+  );
+  const canOrderNow = isItemInStock && isAvailableAtOutlet && !bookingNotOpenYet && !bookingClosed;
+
   // Calculate pricing
   const basePrice = selectedVariant ? selectedVariant.price : product.price;
   const originalBasePrice = selectedVariant
@@ -229,7 +242,7 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
       setIsLocationModalOpen(true);
       return;
     }
-    if (!isItemInStock || !isAvailableAtOutlet) return;
+    if (!canOrderNow) return;
     const added = addToCart(product, quantity, selectedVariant, selectedSpiceLevel, selectedAddons);
     if (added) {
       setIsCartDrawerOpen(true);
@@ -241,7 +254,7 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
       setIsLocationModalOpen(true);
       return;
     }
-    if (!isItemInStock || !isAvailableAtOutlet) {
+    if (!canOrderNow) {
       showToast('Item Unavailable', 'This dish is currently unavailable at the selected outlet.', 'error');
       return;
     }
@@ -540,7 +553,7 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
                 </span>
               </div>
             </div>
-          ) : portionsLeft !== null && portionsLeft !== undefined ? (
+          ) : !bookingNotOpenYet && !bookingClosed && portionsLeft !== null && portionsLeft !== undefined ? (
             <div
               className={`p-3 rounded-xl flex items-start gap-2.5 text-xs ${
                 portionsLeft <= 5
@@ -581,7 +594,7 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <span className="inline-flex items-center gap-1.5 font-bold text-amber-900">
                   <Sparkles className="w-4 h-4 text-amber-600 fill-amber-400" />
-                  {festiveEvent ? festiveEvent.name : 'Utsav Specials Pre-Book Delicacy'}
+                  {festiveEvent ? festiveEvent.name : 'Utsav Specials Delicacy'}
                 </span>
                 {product.specialPackaging !== false && (
                   <span className="inline-flex items-center gap-1 bg-white border border-amber-200 text-amber-900 px-2 py-0.5 rounded-md text-[11px] font-semibold">
@@ -594,10 +607,24 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
                 {festiveEvent?.festivalDate && (
                   <span className="inline-flex items-center gap-1 font-medium">
                     <Calendar className="w-3.5 h-3.5 text-amber-700" />
-                    Festival Delivery: <strong>{new Date(festiveEvent.festivalDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</strong>
+                    Festival Date: <strong>{new Date(festiveEvent.festivalDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</strong>
                   </span>
                 )}
-                <span>Pay <strong>25% Advance (₹{Math.round(currentUnitPrice * 0.25)})</strong> or 100% Upfront at checkout — even alongside instant items.</span>
+                {isPrebookOnly ? (
+                  bookingClosed ? (
+                    <span className="font-semibold text-amber-900">
+                      Pre-booking closed — If you missed pre-book, order on Festival date.
+                    </span>
+                  ) : (
+                    <span>
+                      Pay <strong>25% Advance (₹{Math.round(currentUnitPrice * 0.25)})</strong> or 100% Upfront at checkout — even alongside instant items.
+                    </span>
+                  )
+                ) : (
+                  <span className="font-medium text-amber-900">
+                    Available for standard instant festive ordering whenever portions are in stock.
+                  </span>
+                )}
               </div>
             </div>
           )}
@@ -636,7 +663,7 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
                 </span>
               ) : (
                 <span className="text-xs font-semibold text-rose-800 bg-rose-50 px-2 py-0.5 rounded-md border border-rose-200 inline-block">
-                  Out of Stock
+                  {portionsLeft === 0 ? 'Sold Out' : 'Out of Stock'}
                 </span>
               )}
             </div>
@@ -779,22 +806,6 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
               />
             </div>
 
-            {(() => {
-              const isPrebookOnly = product.availabilityMode === 'prebook_only';
-              const nowMs = Date.now();
-              const bookingNotOpenYet = Boolean(
-                isPrebookOnly && festiveEvent?.bookingStartAt && new Date(festiveEvent.bookingStartAt).getTime() > nowMs
-              );
-              const bookingClosed = Boolean(
-                isPrebookOnly &&
-                  festiveEvent &&
-                  (festiveEvent.status !== 'active' ||
-                    (festiveEvent.bookingEndAt && new Date(festiveEvent.bookingEndAt).getTime() < nowMs))
-              );
-              const canOrderNow = isItemInStock && isAvailableAtOutlet && !bookingNotOpenYet && !bookingClosed;
-
-              return (
-                <>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
                     <button
                       type="button"
@@ -814,7 +825,9 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
                         {!isAvailableAtOutlet && selectedLocation
                           ? 'Unavailable at Outlet'
                           : !isItemInStock
-                          ? 'Currently Out of Stock'
+                          ? portionsLeft === 0
+                            ? 'Sold Out'
+                            : 'Currently Out of Stock'
                           : bookingNotOpenYet && festiveEvent?.bookingStartAt
                           ? `Opens ${new Date(festiveEvent.bookingStartAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}`
                           : bookingClosed
@@ -844,7 +857,9 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
                         {!isAvailableAtOutlet && selectedLocation
                           ? 'Unavailable'
                           : !isItemInStock
-                          ? 'Out of Stock'
+                          ? portionsLeft === 0
+                            ? 'Sold Out'
+                            : 'Out of Stock'
                           : bookingNotOpenYet || bookingClosed
                           ? 'Unavailable'
                           : isPrebookOnly
@@ -880,9 +895,6 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({ slug }) =>
                       {isPrebookOnly ? 'Festive Batch' : 'Hot & Fresh'}
                     </span>
                   </div>
-                </>
-              );
-            })()}
           </div>
         </div>
       </div>

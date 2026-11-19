@@ -52,17 +52,26 @@ export const ManagerOrderDetailsModal: React.FC<ManagerOrderDetailsModalProps> =
   const parentRef =
     order.checkoutReference ||
     (order.checkoutGroupId && /(-I|-PB|_PB)$/i.test(rawOrderId) ? rawOrderId.replace(/(-I|-PB|_PB)$/i, '') : '');
-  const paidAmount = Number(
-    order.paidAmount ??
-      (order as any).paid_amount ??
-      (isPrebook && order.paymentPlan === 'advance_25'
-        ? order.advanceAmount || 0
-        : order.total || 0)
-  );
+  const rawPayStatus = String(
+    order.paymentStatus ?? (order as any).payment_status ?? ''
+  )
+    .toLowerCase()
+    .trim();
+  const isPaidOrPartialStatus = ['paid', 'partially_paid', 'partial', 'advance_paid'].includes(rawPayStatus);
+  const explicitPaid = Number(order.paidAmount ?? (order as any).paid_amount ?? 0);
+  const totalOrderAmt = Number(order.total || 0);
+  const paidAmount =
+    explicitPaid > 0
+      ? explicitPaid
+      : isPaidOrPartialStatus
+        ? isPrebook && order.paymentPlan === 'advance_25'
+          ? Number(order.advanceAmount || 0)
+          : totalOrderAmt
+        : 0;
   const balanceAmount = Number(
     order.balanceAmount ??
       (order as any).balance_amount ??
-      Math.max(0, Number(order.total || 0) - paidAmount)
+      Math.max(0, totalOrderAmt - paidAmount)
   );
   const rawStatus = ((order as any).order_status || order.orderStatus || order.status || 'received').toLowerCase().trim();
   const displayStatus =
@@ -524,7 +533,7 @@ export const ManagerOrderDetailsModal: React.FC<ManagerOrderDetailsModalProps> =
                   <>
                     <div className="flex justify-between text-purple-900 font-bold">
                       <span>
-                        Advance Refunded (
+                        {isPrebook ? 'Advance Refunded' : 'Refunded'} (
                         {String(order.refundDetails.paymentMethod || '').replace('_', ' ').toUpperCase()}
                         ):
                       </span>
@@ -617,7 +626,7 @@ export const ManagerOrderDetailsModal: React.FC<ManagerOrderDetailsModalProps> =
                   {order.refundDetails && (
                     <div className="pt-1.5 mt-1 border-t border-rose-200 text-[11px] text-purple-950 space-y-0.5 tabular-nums">
                       <div className="flex justify-between font-bold">
-                        <span>Advance Refund Recorded:</span>
+                        <span>{isPrebook ? 'Advance Refund Recorded:' : 'Refund Recorded:'}</span>
                         <span className="font-mono">
                           ₹{Number(order.refundDetails.amount || 0).toFixed(0)} via{' '}
                           {String(order.refundDetails.paymentMethod || '').replace('_', ' ').toUpperCase()}

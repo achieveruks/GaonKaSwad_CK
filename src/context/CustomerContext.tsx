@@ -13,6 +13,7 @@ import {
   mapDbCustomerToCustomer,
 } from '../lib/supabaseService';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
+import { setStoredCustomerToken, getCustomerAuthHeaders } from '../lib/swadCoinService';
 
 interface CustomerContextType {
   customer: Customer | null;
@@ -320,7 +321,7 @@ export const CustomerProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       // 2. Server API query with cache-busting timestamp (Customer identity resolved strictly via session cookie)
       const res = await fetch(`/api/customers/addresses?_t=${Date.now()}`, {
         credentials: 'same-origin',
-        headers: { 'Cache-Control': 'no-cache' },
+        headers: getCustomerAuthHeaders({ 'Cache-Control': 'no-cache' }),
       });
       const data = await res.json();
       if (data.success && Array.isArray(data.addresses)) {
@@ -379,7 +380,8 @@ export const CustomerProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       try {
         const res = await fetch('/api/customers/addresses', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          headers: getCustomerAuthHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({
             customerId: custId,
             phone,
@@ -430,7 +432,8 @@ export const CustomerProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       try {
         const res = await fetch(`/api/customers/addresses/${encodeURIComponent(addressId)}`, {
           method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          headers: getCustomerAuthHeaders({ 'Content-Type': 'application/json' }),
           body: JSON.stringify({ address: addressData }),
         });
         const data = await res.json();
@@ -474,6 +477,8 @@ export const CustomerProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       try {
         const res = await fetch(`/api/customers/addresses/${encodeURIComponent(addressId)}`, {
           method: 'DELETE',
+          credentials: 'same-origin',
+          headers: getCustomerAuthHeaders(),
         });
         const data = await res.json();
         if (data.success) {
@@ -661,6 +666,7 @@ export const CustomerProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       try {
         const res = await fetch('/api/auth/verify-otp', {
           method: 'POST',
+          credentials: 'same-origin',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ phone: normPhone, otp: cleanOtp, ...extraData }),
         });
@@ -679,6 +685,9 @@ export const CustomerProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         if (res.ok) {
           const data = await res.json();
           if (data.success) {
+            if (data.token) {
+              setStoredCustomerToken(data.token);
+            }
             verifiedSuccess = true;
             verifiedCustomer = data.customer;
             defaultAddr = data.defaultAddress || null;
@@ -870,7 +879,8 @@ export const CustomerProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     try {
       const res = await fetch('/api/customers/profile', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        headers: getCustomerAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(data),
       });
       const resData = await res.json();
@@ -913,13 +923,14 @@ export const CustomerProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setSavedAddresses([]);
     setIsWelcomeDiscountEligible(true);
     localStorage.removeItem(STORAGE_KEY_CUSTOMER);
+    setStoredCustomerToken(null);
     try {
       localStorage.removeItem('swadclick_cust_address_v1');
       localStorage.removeItem('swadclick_cust_all_addresses_v1');
     } catch {}
 
     // Clear server-side HttpOnly cookie session
-    fetch('/api/auth/logout', { method: 'POST' }).catch((err) => {
+    fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' }).catch((err) => {
       console.warn('Server session logout warning:', err);
     });
   };
@@ -938,6 +949,7 @@ export const CustomerProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
       const res = await fetch(`/api/reviews/eligibility?${queryParams.toString()}`, {
         credentials: 'same-origin',
+        headers: getCustomerAuthHeaders(),
       });
       const data = await res.json();
       return {
@@ -963,7 +975,8 @@ export const CustomerProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     try {
       const res = await fetch('/api/reviews', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        headers: getCustomerAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           ...data,
           customerId: data.customerId || customer?.id,

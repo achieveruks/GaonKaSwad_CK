@@ -490,11 +490,21 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
   const getOrderPaymentLedger = (order: Order) => {
     const isPrebook = isPrebookOrder(order);
     const total = Number(order.total || 0);
-    const paid = Number(
-      order.paidAmount ??
-        (order as any).paid_amount ??
-        (isPrebook && order.paymentPlan === 'advance_25' ? order.advanceAmount || 0 : total)
-    );
+    const rawPayStatus = String(
+      order.paymentStatus ?? (order as any).payment_status ?? ''
+    )
+      .toLowerCase()
+      .trim();
+    const isPaidOrPartialStatus = ['paid', 'partially_paid', 'partial', 'advance_paid'].includes(rawPayStatus);
+    const explicitPaid = Number(order.paidAmount ?? (order as any).paid_amount ?? 0);
+    const paid =
+      explicitPaid > 0
+        ? explicitPaid
+        : isPaidOrPartialStatus
+          ? isPrebook && order.paymentPlan === 'advance_25'
+            ? Number(order.advanceAmount || 0)
+            : total
+          : 0;
     const balance = Number(
       order.balanceAmount ?? (order as any).balance_amount ?? Math.max(0, total - paid)
     );
@@ -613,8 +623,8 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
       throw new Error(
         data?.error ||
           (res.status === 401 || res.status === 403
-            ? 'Unauthorized. Please sign in with your staff/owner account to record advance refunds.'
-            : 'Failed to cancel order and record advance refund.')
+            ? 'Unauthorized. Please sign in with your staff/owner account to record refunds.'
+            : 'Failed to cancel order and record refund.')
       );
     }
 
@@ -773,7 +783,7 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
         </div>
 
         {/* Quick Order Status Metrics Bar with Total Order Value Box */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2.5 mt-5">
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-[1.8fr_repeat(7,minmax(0,1fr))] gap-2 mt-5">
           {/* Box 0: Total Order Value / Wallet for orders showing in the list */}
           {!isWalletOpen ? (
             /* Closed State (Default): Centered Wallet Icon with "Open Wallet" label */
@@ -783,13 +793,13 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
                 setIsWalletOpen(true);
                 setActiveFilter('all');
               }}
-              className="p-3 rounded-xl border text-center transition-all cursor-pointer bg-stone-900 hover:bg-stone-850 text-white border-stone-800 shadow-2xs flex flex-col items-center justify-center gap-1 min-h-[76px] group select-none"
+              className="px-4 py-3 rounded-xl border text-center transition-all cursor-pointer bg-stone-900 hover:bg-stone-850 text-white border-stone-800 shadow-2xs flex flex-col items-center justify-center gap-1 min-h-[76px] group select-none"
               title="Click to open wallet and view total order value"
             >
               <div className="w-7 h-7 rounded-full bg-stone-800 border border-stone-700 flex items-center justify-center text-amber-400 group-hover:scale-110 group-hover:bg-amber-950/80 transition-all shadow-2xs">
                 <Wallet className="w-3.5 h-3.5" />
               </div>
-              <span className="text-[11px] font-black text-amber-300 tracking-wide">
+              <span className="text-[11px] font-black text-amber-300 tracking-wide whitespace-nowrap">
                 Open Wallet
               </span>
             </button>
@@ -797,159 +807,161 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
             /* Open State: Visible amount + details with a close button in bottom-right corner */
             <div
               onClick={() => setActiveFilter('all')}
-              className={`relative p-3 rounded-xl border text-left transition-all cursor-pointer min-h-[76px] flex flex-col justify-between ${
+              className={`relative px-3.5 py-2.5 rounded-xl border text-left transition-all cursor-pointer min-h-[76px] flex flex-col justify-between ${
                 activeFilter === 'all'
                   ? 'bg-stone-900 text-white border-stone-950 shadow-md ring-2 ring-amber-400'
                   : 'bg-stone-900/95 hover:bg-stone-900 text-white border-stone-800 shadow-2xs'
               }`}
               title="Total Order Value (Click filter, or click icon to close wallet)"
             >
-              <div>
-                <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-black uppercase tracking-wider block text-amber-400 flex items-center gap-1">
-                    <Wallet className="w-3 h-3 text-amber-400" />
-                    <span>Order Value</span>
-                  </span>
-                  <IndianRupee className="w-3.5 h-3.5 text-amber-400 opacity-90" />
-                </div>
-                <span className="text-xl font-black block mt-0.5 font-mono tracking-tight text-white pr-6 truncate">
-                  ₹{(totalFilteredOrderValue || 0).toLocaleString('en-IN')}
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[10px] font-black uppercase tracking-wider text-amber-400 flex items-center gap-1 whitespace-nowrap">
+                  <Wallet className="w-3 h-3 text-amber-400 shrink-0" />
+                  <span>Order Value</span>
                 </span>
-                <span className="text-[10px] font-medium block text-stone-300">
-                  {filteredOrders.length} {filteredOrders.length === 1 ? 'Order' : 'Orders'} in List
-                </span>
+                <IndianRupee className="w-3.5 h-3.5 text-amber-400 opacity-90 shrink-0" />
               </div>
 
-              {/* Close Wallet Button in bottom-right corner inside the box */}
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setIsWalletOpen(false);
-                }}
-                className="absolute bottom-2 right-2 p-1 rounded-md bg-stone-800 hover:bg-black text-amber-300 hover:text-white border border-stone-700 transition-all cursor-pointer shadow-2xs group"
-                title="Close wallet (hide amount)"
-              >
-                <EyeOff className="w-3 h-3 group-hover:scale-110 transition-transform" />
-              </button>
+              <span className="text-lg sm:text-xl font-black block mt-0.5 font-mono tabular-nums tracking-tight text-white whitespace-nowrap">
+                ₹{(totalFilteredOrderValue || 0).toLocaleString('en-IN')}
+              </span>
+
+              <div className="flex items-center justify-between gap-2 mt-0.5">
+                <span className="text-[10px] font-medium text-stone-300 whitespace-nowrap">
+                  {filteredOrders.length} {filteredOrders.length === 1 ? 'Order' : 'Orders'} in List
+                </span>
+
+                {/* Close Wallet Button */}
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setIsWalletOpen(false);
+                  }}
+                  className="p-1 rounded-md bg-stone-800 hover:bg-black text-amber-300 hover:text-white border border-stone-700 transition-all cursor-pointer shadow-2xs group shrink-0"
+                  title="Close wallet (hide amount)"
+                >
+                  <EyeOff className="w-3 h-3 group-hover:scale-110 transition-transform" />
+                </button>
+              </div>
             </div>
           )}
 
           <button
             type="button"
             onClick={() => setActiveFilter('received')}
-            className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+            className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
               activeFilter === 'received'
                 ? 'bg-amber-500 text-white border-amber-600 shadow-md ring-2 ring-amber-300'
                 : 'bg-amber-50/70 hover:bg-amber-100/70 border-amber-200 text-amber-950'
             }`}
           >
             <div className="flex items-center justify-between">
-              <span className="text-[10px] font-extrabold uppercase tracking-wider block opacity-90">
+              <span className="text-[10px] font-extrabold uppercase tracking-wider block opacity-90 leading-tight">
                 1. Received
               </span>
               {counts.received > 0 && (
-                <span className={`w-2 h-2 rounded-full ${activeFilter === 'received' ? 'bg-white' : 'bg-amber-500'} animate-ping`} />
+                <span className={`w-2 h-2 rounded-full shrink-0 ${activeFilter === 'received' ? 'bg-white' : 'bg-amber-500'} animate-ping`} />
               )}
             </div>
-            <span className="text-xl font-black block mt-1">{counts.received}</span>
-            <span className="text-[10px] font-medium block opacity-80">Pending Action</span>
+            <span className="text-xl font-black block mt-1 tabular-nums">{counts.received}</span>
+            <span className="text-[10px] font-medium block opacity-80 leading-tight">Pending Action</span>
           </button>
 
           <button
             type="button"
             onClick={() => setActiveFilter('confirmed')}
-            className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+            className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
               activeFilter === 'confirmed'
                 ? 'bg-blue-600 text-white border-blue-700 shadow-md ring-2 ring-blue-300'
                 : 'bg-blue-50/60 hover:bg-blue-100/60 border-blue-200 text-blue-950'
             }`}
           >
-            <span className="text-[10px] font-extrabold uppercase tracking-wider block opacity-90">
+            <span className="text-[10px] font-extrabold uppercase tracking-wider block opacity-90 leading-tight">
               2. Confirmed
             </span>
-            <span className="text-xl font-black block mt-1">{counts.confirmed}</span>
-            <span className="text-[10px] font-medium block opacity-80">Accepted</span>
+            <span className="text-xl font-black block mt-1 tabular-nums">{counts.confirmed}</span>
+            <span className="text-[10px] font-medium block opacity-80 leading-tight">Accepted</span>
           </button>
 
           <button
             type="button"
             onClick={() => setActiveFilter('preparing')}
-            className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+            className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
               activeFilter === 'preparing'
                 ? 'bg-amber-600 text-white border-amber-700 shadow-md ring-2 ring-amber-300'
                 : 'bg-orange-50/60 hover:bg-orange-100/60 border-orange-200 text-orange-950'
             }`}
           >
-            <span className="text-[10px] font-extrabold uppercase tracking-wider block opacity-90">
+            <span className="text-[10px] font-extrabold uppercase tracking-wider block opacity-90 leading-tight">
               3. Preparing
             </span>
-            <span className="text-xl font-black block mt-1">{counts.preparing}</span>
-            <span className="text-[10px] font-medium block opacity-80">In Kitchen</span>
+            <span className="text-xl font-black block mt-1 tabular-nums">{counts.preparing}</span>
+            <span className="text-[10px] font-medium block opacity-80 leading-tight">In Kitchen</span>
           </button>
 
           <button
             type="button"
             onClick={() => setActiveFilter('ready')}
-            className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+            className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
               activeFilter === 'ready'
                 ? 'bg-purple-600 text-white border-purple-700 shadow-md ring-2 ring-purple-300'
                 : 'bg-purple-50/60 hover:bg-purple-100/60 border-purple-200 text-purple-950'
             }`}
           >
-            <span className="text-[10px] font-extrabold uppercase tracking-wider block opacity-90">
+            <span className="text-[10px] font-extrabold uppercase tracking-wider block opacity-90 leading-tight">
               4. Ready / Packed
             </span>
-            <span className="text-xl font-black block mt-1">{counts.ready}</span>
-            <span className="text-[10px] font-medium block opacity-80">Ready for Handover</span>
+            <span className="text-xl font-black block mt-1 tabular-nums">{counts.ready}</span>
+            <span className="text-[10px] font-medium block opacity-80 leading-tight">Ready for Handover</span>
           </button>
 
           <button
             type="button"
             onClick={() => setActiveFilter('out_for_delivery')}
-            className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+            className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
               activeFilter === 'out_for_delivery'
                 ? 'bg-cyan-700 text-white border-cyan-800 shadow-md ring-2 ring-cyan-300'
                 : 'bg-cyan-50/60 hover:bg-cyan-100/60 border-cyan-200 text-cyan-950'
             }`}
           >
-            <span className="text-[10px] font-extrabold uppercase tracking-wider block opacity-90">
+            <span className="text-[10px] font-extrabold uppercase tracking-wider block opacity-90 leading-tight">
               5. Out for Delivery
             </span>
-            <span className="text-xl font-black block mt-1">{counts.out_for_delivery}</span>
-            <span className="text-[10px] font-medium block opacity-80">On the Way</span>
+            <span className="text-xl font-black block mt-1 tabular-nums">{counts.out_for_delivery}</span>
+            <span className="text-[10px] font-medium block opacity-80 leading-tight">On the Way</span>
           </button>
 
           <button
             type="button"
             onClick={() => setActiveFilter('delivered')}
-            className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+            className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
               activeFilter === 'delivered'
                 ? 'bg-emerald-600 text-white border-emerald-700 shadow-md ring-2 ring-emerald-300'
                 : 'bg-emerald-50/60 hover:bg-emerald-100/60 border-emerald-200 text-emerald-950'
             }`}
           >
-            <span className="text-[10px] font-extrabold uppercase tracking-wider block opacity-90">
+            <span className="text-[10px] font-extrabold uppercase tracking-wider block opacity-90 leading-tight">
               6. Delivered
             </span>
-            <span className="text-xl font-black block mt-1">{counts.delivered}</span>
-            <span className="text-[10px] font-medium block opacity-80">Completed</span>
+            <span className="text-xl font-black block mt-1 tabular-nums">{counts.delivered}</span>
+            <span className="text-[10px] font-medium block opacity-80 leading-tight">Completed</span>
           </button>
 
           <button
             type="button"
             onClick={() => setActiveFilter('cancelled')}
-            className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+            className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
               activeFilter === 'cancelled'
                 ? 'bg-rose-700 text-white border-rose-800 shadow-md ring-2 ring-rose-300'
                 : 'bg-rose-50/60 hover:bg-rose-100/60 border-rose-200 text-rose-950'
             }`}
           >
-            <span className="text-[10px] font-extrabold uppercase tracking-wider block opacity-90">
+            <span className="text-[10px] font-extrabold uppercase tracking-wider block opacity-90 leading-tight">
               Cancelled
             </span>
-            <span className="text-xl font-black block mt-1">{counts.cancelled}</span>
-            <span className="text-[10px] font-medium block opacity-80">Discarded</span>
+            <span className="text-xl font-black block mt-1 tabular-nums">{counts.cancelled}</span>
+            <span className="text-[10px] font-medium block opacity-80 leading-tight">Discarded</span>
           </button>
         </div>
       </div>
@@ -2027,7 +2039,8 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
                           {order.refundDetails && (
                             <div className="pt-1 border-t border-rose-200/70 flex flex-wrap items-center justify-between gap-2 text-[11px] text-purple-950 font-semibold tabular-nums">
                               <span>
-                                Advance Refunded: ₹{Number(order.refundDetails.amount || 0).toFixed(0)} via{' '}
+                                {ledger.isPrebook ? 'Advance Refunded' : 'Refunded'}: ₹
+                                {Number(order.refundDetails.amount || 0).toFixed(0)} via{' '}
                                 {String(order.refundDetails.paymentMethod || '').replace('_', ' ').toUpperCase()}
                                 {order.refundDetails.reference ? ` · Ref: ${order.refundDetails.reference}` : ''}
                               </span>
@@ -2186,7 +2199,7 @@ export const ManagerOrdersTab: React.FC<ManagerOrdersTabProps> = ({
         </div>
       )}
 
-      {/* Cancel Order & Pre-book Advance Refund Modal */}
+      {/* Cancel Order & Refund Modal */}
       {cancelTargetOrder && (
         <CancelOrderModal
           order={cancelTargetOrder}

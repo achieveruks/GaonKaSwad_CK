@@ -6,6 +6,7 @@ import { ProductCard } from '../components/ProductCard';
 import { FilterSidebar } from '../components/FilterSidebar';
 import { FilterState, Product, FestiveEvent } from '../types';
 import { fetchActiveFestiveEventsForOutlet } from '../lib/supabaseService';
+import { syncClosedFestiveProducts } from '../lib/festiveService';
 import {
   Search,
   SlidersHorizontal,
@@ -23,7 +24,7 @@ import { motion, AnimatePresence } from 'motion/react';
 
 export const ShopPage: React.FC = () => {
   const { currentRoute, goToShop } = useNavigation();
-  const { outletProducts, categories } = useProducts();
+  const { outletProducts, categories, refreshProducts } = useProducts();
   const { selectedLocation } = useLocation();
   const [festiveEvents, setFestiveEvents] = useState<FestiveEvent[]>([]);
 
@@ -60,12 +61,25 @@ export const ShopPage: React.FC = () => {
   useEffect(() => {
     let active = true;
     fetchActiveFestiveEventsForOutlet(selectedLocation?.outletId).then((events) => {
-      if (active) setFestiveEvents(events || []);
+      if (!active) return;
+      const list = events || [];
+      setFestiveEvents(list);
+      const nowMs = Date.now();
+      const hasClosedActiveEvent = list.some(
+        (ev) => ev.status === 'active' && ev.bookingEndAt && new Date(ev.bookingEndAt).getTime() < nowMs
+      );
+      if (hasClosedActiveEvent) {
+        syncClosedFestiveProducts().then((res) => {
+          if (active && res.updatedCount > 0) {
+            refreshProducts({ skipReviews: true });
+          }
+        });
+      }
     });
     return () => {
       active = false;
     };
-  }, [selectedLocation?.outletId]);
+  }, [selectedLocation?.outletId, refreshProducts]);
 
   const festiveEventById = useMemo(() => {
     const map = new Map<string, FestiveEvent>();
@@ -233,7 +247,19 @@ export const ShopPage: React.FC = () => {
             </h1>
             <p className="text-xs text-gray-300">
               {isUtsavCategory
-                ? 'Pre-book exclusive limited edition festival dishes with 25% advance or 100% upfront. Freshly prepared for celebratory festival delivery.'
+                ? (() => {
+                    if (!activeHeroEvent) {
+                      return 'Handcrafted festival delicacies freshly prepared for celebratory delivery.';
+                    }
+                    const nowMs = Date.now();
+                    const startMs = activeHeroEvent.bookingStartAt ? new Date(activeHeroEvent.bookingStartAt).getTime() : 0;
+                    const endMs = activeHeroEvent.bookingEndAt ? new Date(activeHeroEvent.bookingEndAt).getTime() : Infinity;
+                    const isClosed =
+                      activeHeroEvent.status !== 'active' || (nowMs >= startMs && nowMs > endMs);
+                    return isClosed
+                      ? 'Pre-booking has closed for this festival. If you missed pre-book, order fresh dishes on the Festival date!'
+                      : 'Pre-book exclusive limited edition festival dishes with 25% advance or 100% upfront. Freshly prepared for celebratory festival delivery.';
+                  })()
                 : activeCategoryObj
                 ? activeCategoryObj.tagline
                 : 'Browse slow-cooked handi curries, dum biryanis, clay-oven kebabs, and artisanal desserts.'}

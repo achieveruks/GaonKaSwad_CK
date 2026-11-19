@@ -56,17 +56,26 @@ export const OrderDetailsModal: React.FC<OrderDetailsModalProps> = ({
   const parentRef =
     order.checkoutReference ||
     (order.checkoutGroupId && /(-I|-PB|_PB)$/i.test(rawOrderId) ? rawOrderId.replace(/(-I|-PB|_PB)$/i, '') : '');
-  const paidAmount = Number(
-    order.paidAmount ??
-      (order as any).paid_amount ??
-      (isPrebook && order.paymentPlan === 'advance_25'
-        ? order.advanceAmount || 0
-        : order.total || 0)
-  );
+  const rawCustomerPayStatus = String(
+    order.paymentStatus ?? (order as any).payment_status ?? ''
+  )
+    .toLowerCase()
+    .trim();
+  const isPaidOrPartialStatus = ['paid', 'partially_paid', 'partial', 'advance_paid'].includes(rawCustomerPayStatus);
+  const explicitPaid = Number(order.paidAmount ?? (order as any).paid_amount ?? 0);
+  const totalOrderAmt = Number(order.total || 0);
+  const paidAmount =
+    explicitPaid > 0
+      ? explicitPaid
+      : isPaidOrPartialStatus
+        ? isPrebook && order.paymentPlan === 'advance_25'
+          ? Number(order.advanceAmount || 0)
+          : totalOrderAmt
+        : 0;
   const balanceAmount = Number(
     order.balanceAmount ??
       (order as any).balance_amount ??
-      Math.max(0, Number(order.total || 0) - paidAmount)
+      Math.max(0, totalOrderAmt - paidAmount)
   );
 
   // Format Helper for Indian Date & Time (e.g. 28 Aug 2026 • 4:58 pm)
@@ -619,7 +628,8 @@ export const OrderDetailsModal: React.FC<OrderDetailsModalProps> = ({
                 {order.refundDetails ? (
                   <div className="flex justify-between text-purple-900 font-bold">
                     <span>
-                      Advance Refunded ({String(order.refundDetails.paymentMethod || '').replace('_', ' ').toUpperCase()})
+                      {isPrebook ? 'Advance Refunded' : 'Refunded'} (
+                      {String(order.refundDetails.paymentMethod || '').replace('_', ' ').toUpperCase()})
                     </span>
                     <span>₹{Number(order.refundDetails.amount || 0).toFixed(0)}</span>
                   </div>
@@ -669,6 +679,9 @@ export const OrderDetailsModal: React.FC<OrderDetailsModalProps> = ({
 
             if (rawPayStatus === 'refunded') {
               statusLabel = 'REFUNDED';
+              statusBadge = 'bg-purple-100 text-purple-800';
+            } else if (isCancelledStr && order.refundDetails) {
+              statusLabel = 'PARTIALLY REFUNDED';
               statusBadge = 'bg-purple-100 text-purple-800';
             } else if (rawPayStatus === 'failed') {
               statusLabel = 'FAILED';
@@ -722,15 +735,22 @@ export const OrderDetailsModal: React.FC<OrderDetailsModalProps> = ({
                   </div>
                 </div>
                 {order.refundDetails && (
-                  <div className="pt-2 border-t border-stone-200/80 text-[11px] text-purple-950 flex flex-wrap items-center justify-between gap-2 tabular-nums">
-                    <span className="font-semibold">
-                      Advance Refunded: ₹{Number(order.refundDetails.amount || 0).toFixed(0)} via{' '}
-                      {String(order.refundDetails.paymentMethod || '').replace('_', ' ').toUpperCase()}
-                    </span>
-                    {order.refundDetails.reference && (
-                      <span className="font-mono text-stone-600">
-                        Ref: {order.refundDetails.reference}
+                  <div className="pt-2 border-t border-stone-200/80 text-[11px] text-purple-950 space-y-1 tabular-nums">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-semibold">
+                        {isPrebook ? 'Advance Refunded' : 'Refunded'}: ₹{Number(order.refundDetails.amount || 0).toFixed(0)} via{' '}
+                        {String(order.refundDetails.paymentMethod || '').replace('_', ' ').toUpperCase()}
                       </span>
+                      {order.refundDetails.reference && (
+                        <span className="font-mono text-stone-600">
+                          Ref: {order.refundDetails.reference}
+                        </span>
+                      )}
+                    </div>
+                    {order.refundDetails.refundedAt && (
+                      <div className="text-[10px] text-stone-500">
+                        Refunded on {formatDateTime(order.refundDetails.refundedAt)}
+                      </div>
                     )}
                   </div>
                 )}

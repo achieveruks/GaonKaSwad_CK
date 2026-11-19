@@ -104,15 +104,28 @@ export const CancelOrderModal: React.FC<CancelOrderModalProps> = ({
     Boolean(order.festiveEventId || (order as any).festive_event_id);
 
   const totalAmount = Number(order.total || 0);
-  const paidAmount = Number(
-    order.paidAmount ??
-      (order as any).paid_amount ??
-      (isPrebook && order.paymentPlan === 'advance_25' ? order.advanceAmount || 0 : totalAmount)
-  );
+  const rawPayStatus = String(
+    order.paymentStatus ?? (order as any).payment_status ?? ''
+  )
+    .toLowerCase()
+    .trim();
+  const isPaidOrPartialStatus = ['paid', 'partially_paid', 'partial', 'advance_paid'].includes(rawPayStatus);
+  const explicitPaid = Number(order.paidAmount ?? (order as any).paid_amount ?? 0);
+  const paidAmount =
+    explicitPaid > 0
+      ? explicitPaid
+      : isPaidOrPartialStatus
+        ? isPrebook && order.paymentPlan === 'advance_25'
+          ? Number(order.advanceAmount || 0)
+          : totalAmount
+        : 0;
   const balanceAmount = Number(
     order.balanceAmount ?? (order as any).balance_amount ?? Math.max(0, totalAmount - paidAmount)
   );
-  const needsAdvanceRefund = isPrebook && paidAmount > 0 && typeof onConfirmCancelWithRefund === 'function';
+  const needsRefund =
+    paidAmount > 0 &&
+    (isPaidOrPartialStatus || isPrebook || explicitPaid > 0) &&
+    typeof onConfirmCancelWithRefund === 'function';
 
   const [selectedReason, setSelectedReason] = useState<string>(
     isPrebook ? PRESET_REASONS[0] : PRESET_REASONS[1]
@@ -170,13 +183,13 @@ export const CancelOrderModal: React.FC<CancelOrderModalProps> = ({
       return;
     }
 
-    if (needsAdvanceRefund) {
+    if (needsRefund) {
       if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
         setSubmitError('Please enter a valid refund amount greater than ₹0.');
         return;
       }
       if (parsedAmount > paidAmount) {
-        setSubmitError(`Refund amount cannot exceed advance paid of ₹${paidAmount}.`);
+        setSubmitError(`Refund amount cannot exceed paid amount of ₹${paidAmount}.`);
         return;
       }
       const cleanRef = refundReference.trim();
@@ -233,7 +246,7 @@ export const CancelOrderModal: React.FC<CancelOrderModalProps> = ({
     >
       <div
         className={`bg-white rounded-2xl border border-stone-200 shadow-2xl w-full max-h-[92vh] flex flex-col overflow-hidden ${
-          needsAdvanceRefund ? 'max-w-xl' : 'max-w-md'
+          needsRefund ? 'max-w-xl' : 'max-w-md'
         }`}
         onClick={(e) => e.stopPropagation()}
       >
@@ -245,7 +258,11 @@ export const CancelOrderModal: React.FC<CancelOrderModalProps> = ({
             </div>
             <div>
               <h3 className="font-extrabold text-stone-900 text-sm">
-                {needsAdvanceRefund ? 'Cancel Pre-book & Record Advance Refund' : 'Cancel Order'}
+                {needsRefund
+                  ? isPrebook
+                    ? 'Cancel Pre-book & Record Advance Refund'
+                    : 'Cancel Order & Record Refund'
+                  : 'Cancel Order'}
               </h3>
               <p className="text-[11px] text-stone-600 font-mono">
                 {formatDisplayOrderId(targetOrderId)}
@@ -277,7 +294,7 @@ export const CancelOrderModal: React.FC<CancelOrderModalProps> = ({
               </div>
             )}
 
-            {needsAdvanceRefund && (
+            {needsRefund && (
               <div className="bg-amber-50/80 border border-amber-200 rounded-xl px-4 py-3 grid grid-cols-3 gap-2 tabular-nums">
                 <div>
                   <span className="text-[10px] font-semibold text-stone-500 block">Order Total</span>
@@ -286,15 +303,19 @@ export const CancelOrderModal: React.FC<CancelOrderModalProps> = ({
                   </span>
                 </div>
                 <div>
-                  <span className="text-[10px] font-semibold text-amber-800 block">Advance Paid</span>
+                  <span className="text-[10px] font-semibold text-amber-800 block">
+                    {isPrebook ? 'Advance Paid' : 'Amount Paid'}
+                  </span>
                   <span className="font-mono font-extrabold text-amber-950 text-sm">
                     ₹{paidAmount.toFixed(0)}
                   </span>
                 </div>
                 <div className="text-right">
-                  <span className="text-[10px] font-semibold text-stone-500 block">Balance Voided</span>
+                  <span className="text-[10px] font-semibold text-stone-500 block">
+                    {balanceAmount > 0 ? 'Balance Voided' : 'Refundable Cap'}
+                  </span>
                   <span className="font-mono font-bold text-stone-700 text-sm">
-                    ₹{balanceAmount.toFixed(0)} → ₹0
+                    {balanceAmount > 0 ? `₹${balanceAmount.toFixed(0)} → ₹0` : `₹${paidAmount.toFixed(0)}`}
                   </span>
                 </div>
               </div>
@@ -303,7 +324,7 @@ export const CancelOrderModal: React.FC<CancelOrderModalProps> = ({
             {/* Step 1: Cancellation Reason */}
             <div className="space-y-2">
               <label className="block font-bold text-stone-800">
-                {needsAdvanceRefund ? '1. Cancellation Reason' : 'Select Cancellation Reason'}
+                {needsRefund ? '1. Cancellation Reason' : 'Select Cancellation Reason'}
               </label>
               <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
                 {PRESET_REASONS.map((reason) => (
@@ -350,8 +371,8 @@ export const CancelOrderModal: React.FC<CancelOrderModalProps> = ({
               )}
             </div>
 
-            {/* Step 2: Structured Refund Payout Configuration (PB orders with paid > 0) */}
-            {needsAdvanceRefund && (
+            {/* Step 2: Structured Refund Payout Configuration (paid / partially paid orders) */}
+            {needsRefund && (
               <div className="pt-4 border-t border-stone-200 space-y-4">
                 <div className="flex items-center justify-between">
                   <span className="font-bold text-stone-900">
@@ -414,7 +435,9 @@ export const CancelOrderModal: React.FC<CancelOrderModalProps> = ({
                     </div>
                     <p className="text-[11px] mt-1 font-medium tabular-nums text-stone-500">
                       {retainedAmount <= 0
-                        ? 'Full advance return (100%)'
+                        ? isPrebook
+                          ? 'Full advance return (100%)'
+                          : 'Full refund (100%)'
                         : `Partial refund · ₹${retainedAmount.toFixed(0)} retained`}
                     </p>
                   </div>
@@ -524,10 +547,10 @@ export const CancelOrderModal: React.FC<CancelOrderModalProps> = ({
               className="px-4 py-2 rounded-xl text-xs font-bold bg-rose-700 hover:bg-rose-800 text-white transition-colors disabled:opacity-60 flex items-center gap-1.5 shadow-sm cursor-pointer"
             >
               {isSubmitting
-                ? needsAdvanceRefund
+                ? needsRefund
                   ? 'Recording Refund & Cancelling...'
                   : 'Cancelling...'
-                : needsAdvanceRefund
+                : needsRefund
                   ? `Refund ₹${Number.isFinite(parsedAmount) && parsedAmount > 0 ? parsedAmount.toFixed(0) : paidAmount.toFixed(0)} & Cancel Order`
                   : 'Confirm Order Cancellation'}
             </button>

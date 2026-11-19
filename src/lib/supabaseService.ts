@@ -1417,7 +1417,7 @@ export function normalizeOrderId(orderId?: string | null): string {
 
 export async function getNextSequentialOrderId(): Promise<string> {
   if (!isSupabaseConfigured()) {
-    return `SWADCLK-00016`;
+    return `SWADCLK-00031`;
   }
   try {
     const { data, error } = await supabase
@@ -1427,7 +1427,7 @@ export async function getNextSequentialOrderId(): Promise<string> {
       .limit(100);
 
     if (error || !data || data.length === 0) {
-      return `SWADCLK-00016`;
+      return `SWADCLK-00031`;
     }
 
     let maxNum = 0;
@@ -1443,10 +1443,10 @@ export async function getNextSequentialOrderId(): Promise<string> {
         }
       }
     }
-    const nextSeq = Math.max(maxNum + 1, 16);
+    const nextSeq = Math.max(maxNum + 1, 31);
     return `SWADCLK-${String(nextSeq).padStart(5, '0')}`;
   } catch {
-    return `SWADCLK-00016`;
+    return `SWADCLK-00031`;
   }
 }
 

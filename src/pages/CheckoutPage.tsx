@@ -991,6 +991,9 @@ export const CheckoutPage: React.FC = () => {
       if (!evId) continue;
       const ev = festiveEventById[evId];
       if (!ev) continue;
+      if (ev.status && ev.status !== 'active') {
+        return `Pre-booking for ${ev.name} has closed.`;
+      }
       if (ev.bookingStartAt && new Date(ev.bookingStartAt).getTime() > now) {
         return `Pre-booking for ${ev.name} opens on ${new Date(ev.bookingStartAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}.`;
       }
@@ -1766,7 +1769,7 @@ export const CheckoutPage: React.FC = () => {
       try {
         baseOrderRef = (await getNextSequentialOrderId()).replace(/(-I|-PB|_PB)$/i, '');
       } catch {
-        baseOrderRef = `SWADCLK-00016`;
+        baseOrderRef = `SWADCLK-00031`;
       }
       const nextOrderId = `${baseOrderRef}-I`;
 
